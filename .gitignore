@@ -3,6 +3,7 @@ dist/
 dist-mv2/
 dist-firefox/
 dist-mv3/
+dist-test-pkg/
 helper/target/
 dist-helper/
 .DS_Store

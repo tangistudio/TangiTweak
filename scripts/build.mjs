@@ -252,10 +252,105 @@ async function copyStatic(dist, mv3) {
     // typings of the built-in modules (src/shared/builtins.ts), which the Editor loads when a script imports one
     await writeFile(path.join(dist, "lib/builtin-types.json"), JSON.stringify(await builtinTypes()));
 
+    // standalone @tangitweak/test package synced into .tangitweak/test/ by Folder Sync
+    await writeFile(path.join(dist, "lib/tangitweak-test.json"), await getTestPkgJson());
+
     console.log("static assets copied →", path.relative(root, dist));
 }
 
+let cachedTestPkgJson = null;
+
+/** Bundle `@tangitweak/test` into `dist-test-pkg/` (for release `.tgz`) and return its JSON map for `lib/tangitweak-test.json`. */
+async function buildTestPackage() {
+    const outDir = path.join(root, "dist-test-pkg");
+    await rm(outDir, { recursive: true, force: true });
+    await mkdir(outDir, { recursive: true });
+
+    const manifest = JSON.parse(await readFile(path.join(root, "manifest.json"), "utf8"));
+    const version = manifest.version_name || manifest.version;
+    const pkgJson =
+        JSON.stringify(
+            {
+                name: "@tangitweak/test",
+                version,
+                description: "Local and CI test harness for TangiTweak scripts and bundles",
+                type: "module",
+                main: "./index.mjs",
+                types: "./index.d.ts",
+                exports: {
+                    ".": {
+                        types: "./index.d.ts",
+                        default: "./index.mjs",
+                    },
+                },
+                engines: {
+                    node: ">=23.8.0",
+                },
+            },
+            null,
+            2
+        ) + "\n";
+
+    const mjsFile = path.join(outDir, "index.mjs");
+    const bundle = await rolldown({
+        input: path.join(root, "src/testing/index.ts"),
+        platform: "node",
+        external: [/^node:/],
+        plugins: [
+            {
+                // React 19's act() hides `require("timers").setImmediate` behind a runtime string,
+                // which fails in ESM bundles and falls back to an unclosed MessageChannel that keeps Node alive.
+                name: "react-act-setimmediate",
+                transform(code, id) {
+                    if (!id.includes("react.development.js")) return null;
+                    return code.replace(
+                        /enqueueTaskImpl\s*=\s*\(module\s*&&\s*module\[requireString\]\)\.call\(\s*module,\s*["']timers["']\s*\)\.setImmediate;/,
+                        "if (typeof globalThis.setImmediate !== 'function') throw 0; enqueueTaskImpl = globalThis.setImmediate;"
+                    );
+                },
+            },
+        ],
+        transform: {
+            define: {
+                __MV3__: "false",
+                __NO_EVAL__: "false",
+                __COMMIT__: JSON.stringify(gitCommit()),
+                __HOOK_SRC__: JSON.stringify(""),
+                __BUILD_TIME__: JSON.stringify(new Date().toISOString()),
+                "process.env.NODE_ENV": JSON.stringify("development"),
+            },
+            jsx: { runtime: "automatic", importSource: "react" },
+        },
+    });
+    await bundle.write({ file: mjsFile, format: "esm", minify: true });
+    await bundle.close();
+
+    const dtsText = await readFile(path.join(root, "src/testing/index.d.ts"), "utf8");
+    const mjsText = await readFile(mjsFile, "utf8");
+    await writeFile(path.join(outDir, "package.json"), pkgJson);
+    await writeFile(path.join(outDir, "index.d.ts"), dtsText);
+
+    const jsonText = JSON.stringify({
+        "package.json": pkgJson,
+        "index.mjs": mjsText,
+        "index.d.ts": dtsText,
+    });
+    const bytes = Buffer.byteLength(jsonText);
+    if (bytes > 5 * 1024 * 1024) {
+        throw new Error(`tangitweak-test.json exceeds AMO 5 MB per-file limit (${bytes} bytes)`);
+    }
+    console.log(`built dist-test-pkg/ + tangitweak-test.json (${(bytes / 1024).toFixed(0)} KB)`);
+    cachedTestPkgJson = jsonText;
+    return jsonText;
+}
+
+async function getTestPkgJson() {
+    return cachedTestPkgJson ?? buildTestPackage();
+}
+
 async function buildAll() {
+    cachedTestPkgJson = null;
+    await buildTestPackage();
     // MV2: dist/ (existing output, unchanged behavior) + dist-mv2/ copy
     await rm(path.join(root, "dist"), { recursive: true, force: true });
     await mkdir(path.join(root, "dist"), { recursive: true });

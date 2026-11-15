@@ -7,6 +7,17 @@ its section below.
 
 ## [Unreleased]
 
+## [0.37.0-alpha] - 2026-11-15
+
+### Added
+
+- **`@tangitweak/test` (`#tangitweak/test`) automated script testing** for Folder Sync and CI: `loadTweak()` runs TangiTweak's real compiler, module/JSON/SVG resolver, `strategy: "rules"` DNR probe, `simulate()` HTTP pipeline, and `openPage()` DOM lifecycle (React 19 closed shadow roots via `page.mountFor()`, `onOverlay`, `onSite` RPC, `tt.globalStore` / `tt.tabStore` / `tt.pageStore` / `tt.siteStore`, keyboard shortcuts, SPA navigation, and hot-reload cleanup). See [docs/testing.md](docs/testing.md).
+- Folder Sync now writes the standalone harness to `.tangitweak/test/`, merges `package.json` non-destructively (`#tangitweak/test` subpath import for zero-install `node --test` and `@tangitweak/test` for Vitest), configures `tsconfig.json` paths, and attaches `tangitweak-test.tgz` (`tangitweak-test-v<version>.tgz`) to every GitHub Release for CI.
+
+### Changed
+
+- Test and test-runner files (`*.test.ts(x)`, `*.spec.ts(x)`, `__tests__/`, and `vitest` / `vite` / `jest` / `playwright` config files) in synced folders and repositories are now ignored by Folder Sync, package discovery, **Make Package**, and **Export Zip**.
+
 ## [0.36.1-alpha] - 2026-11-13
 
 ### Changed
@@ -1086,7 +1097,8 @@ Before `0.0.1-alpha` was tagged, the extension grew from an initial TypeScript p
 - Built the initial TypeScript script engine (in-browser Sucrase transpilation, `res.onRequest` / `res.onDom` / `res.log`, script `console.*` capture), embedded Monaco editor with bundled API typings, movable log panel, popup with per-tab active-script badge, sample scripts, and bundle import/export.
 - Implemented three initial interception tiers (`MAIN`-world `fetch`/XHR hook, MV2 blocking `webRequest`, and `chrome.debugger` `Fetch` for main-frame HTML and subresources with adaptive idle detach), two-way local folder sync via the File System Access API, and the headless Chromium E2E suite.
 
-[Unreleased]: https://github.com/tangistudio/TangiTweak/compare/v0.36.1-alpha...HEAD
+[Unreleased]: https://github.com/tangistudio/TangiTweak/compare/v0.37.0-alpha...HEAD
+[0.37.0-alpha]: https://github.com/tangistudio/TangiTweak/compare/v0.36.1-alpha...v0.37.0-alpha
 [0.36.1-alpha]: https://github.com/tangistudio/TangiTweak/compare/v0.36.0-alpha...v0.36.1-alpha
 [0.36.0-alpha]: https://github.com/tangistudio/TangiTweak/compare/v0.35.0-alpha...v0.36.0-alpha
 [0.35.0-alpha]: https://github.com/tangistudio/TangiTweak/compare/v0.34.0-alpha...v0.35.0-alpha

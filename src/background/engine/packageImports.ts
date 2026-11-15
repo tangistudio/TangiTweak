@@ -96,18 +96,20 @@ function rebuildSnapshot(): void {
 }
 
 function storageGet(keys: string[]): Promise<Record<string, any>> {
+    if (typeof chrome === "undefined" || !chrome?.storage?.local) return Promise.resolve({});
     return new Promise((resolve) =>
         chrome.storage.local.get(keys, (d) => {
-            void chrome.runtime.lastError;
+            void chrome.runtime?.lastError;
             resolve(d || {});
         })
     );
 }
 
 function storageSet(items: Record<string, any>): Promise<void> {
+    if (typeof chrome === "undefined" || !chrome?.storage?.local) return Promise.resolve();
     return new Promise((resolve) =>
         chrome.storage.local.set(items, () => {
-            const err = chrome.runtime.lastError;
+            const err = chrome.runtime?.lastError;
             if (err) dlogLevel("packages", "error", `storing package imports failed: ${err.message}`);
             resolve();
         })

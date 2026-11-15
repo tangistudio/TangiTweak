@@ -400,9 +400,11 @@ and **Disconnect** stops syncing; the folder's files stay. Its subfolders mirror
 `.ts` and `.tsx` files are scripts and `.json`, `.md`, `.svg` and image files are
 [data files](scripting.md#imports-folders-and-data-files), at their relative
 paths. Dot entries (`.git`, `.vscode`, `.tangitweak-backup`, …),
-`node_modules`, `.d.ts` files and config JSON (`package.json`,
-`package-lock.json`, `tsconfig*.json`, `jsconfig.json`, the root
-`settings.schema.json`) are left alone. Connecting runs a two-way initial
+`node_modules`, test files (`*.test.ts`, `*.test.tsx`, `*.spec.ts`,
+`*.spec.tsx`, `__tests__/`), test runner configs (`vitest.config.ts`,
+`vite.config.ts`, `jest.config.ts`, `playwright.config.ts`), `.d.ts` files and
+config JSON (`package.json`, `package-lock.json`, `tsconfig*.json`,
+`jsconfig.json`, the root `settings.schema.json`) are left alone. Connecting runs a two-way initial
 sync: files without a script or data file are imported, scripts and data
 files without a file are written out, and where both exist but differ the
 newer one wins (file modified time vs. the last save) and the other copy is
@@ -418,11 +420,13 @@ TypeScript completions; saves hot apply instantly. The typings of
 [package imports](scripting.md#packages-from-unpkg) go to
 `.tangitweak/types/`, which TangiTweak owns: it rewrites and prunes them as
 scripts change. The built-ins' (`valtio`, `react`, `react-dom`) go to
-`.tangitweak/types/builtin/`, so their imports resolve there too.
+`.tangitweak/types/builtin/`, so their imports resolve there too, and the
+[script test harness](testing.md) (`@tangitweak/test`) goes to
+`.tangitweak/test/`.
 
-Those four are managed files: they're refreshed on every browser start
-and extension update, so new APIs and settings reach an already-synced folder.
-Don't edit them; changing them has no effect on TangiTweak and your changes are overwritten. `settings.json` is yours: an
+Those support files are refreshed on every browser start
+and extension update, so new APIs, settings and test helpers reach an already-synced folder.
+`tt-api.d.ts`, `tsconfig.json` and `settings.schema.json` are owned by TangiTweak (edits there are overwritten); `package.json` keeps your own `scripts`, `dependencies` and `devDependencies` while maintaining `"type": "module"` and the `@tangitweak/test` / `#tangitweak/test` mappings. `settings.json` is yours: an
 update only adds documentation for settings it doesn't mention yet.
 
 Sync is two-way and watches the folder for **creates, renames/moves and

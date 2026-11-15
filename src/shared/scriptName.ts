@@ -139,3 +139,23 @@ export function uniqueScriptName(base: string, taken: string[]): string {
 export function scriptNameFromFile(fileName: string): string {
     return fileName.replace(/\.ts$/, "") || "Imported script";
 }
+
+/**
+ * Test and test-runner config TypeScript files in a synced folder or repo:
+ * `*.d.ts`, `*.test.ts(x)`, `*.spec.ts(x)`, `__tests__/**`, and common
+ * runner configs (`vitest.config.*`, `vite.config.*`, `jest.config.*`,
+ * `playwright.config.*`). Never treated as TangiTweak scripts.
+ */
+export function isTestOrToolingTsPath(path: string): boolean {
+    return (
+        /\.d\.ts$/i.test(path) ||
+        /\.(?:test|spec)\.tsx?$/i.test(path) ||
+        /(?:^|\/)__tests__\//.test(path) ||
+        /(?:^|\/)(?:vitest|vite|jest|playwright)\.config\.[cm]?tsx?$/i.test(path)
+    );
+}
+
+/** Is `path` a candidate TangiTweak script file (`.ts` / `.tsx`, excluding `.d.ts`, tests and runner configs)? */
+export function isScriptFilePath(path: string): boolean {
+    return /\.tsx?$/i.test(path) && !isTestOrToolingTsPath(path);
+}

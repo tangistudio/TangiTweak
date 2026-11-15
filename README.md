@@ -95,6 +95,7 @@ running (later: **?** → **Welcome** or **?** → **Samples**).
 |---|---|
 | [Installing](docs/install.md) | release zips, signed crx, building from source |
 | [Writing scripts](docs/scripting.md) | the `tt` API, routes, parameters, libraries, imports and data files, `tt.globalStore`/`tt.pageStore`/`tt.siteStore`/`tt.fetch`, page code (`tt.onSite`, `tt.onPage`, `tt.onOverlay`), handles, hot reload, overlays, stacking, async handlers |
+| [Testing scripts](docs/testing.md) | local unit & React/DOM tests via Folder Sync (`@tangitweak/test`) and CI runs via `tangitweak-test.tgz` |
 | [Installing and sharing scripts](docs/packages.md) | install from a URL, GitHub, a gist, a folder or a zip; the header; where files go; updates and rollback |
 | [Interception strategies](docs/strategies.md) | `page` / `debugger` / `extension` / `helper` / `rules`, the default and per-handler choice, [which strategies keep the URL when replacing a response](docs/strategies.md#how-each-strategy-serves-a-replacement), the Missed warning, browser compatibility |
 | [Local helper](docs/local-helper.md) | the `helper` strategy: install, how it works, security notes |
