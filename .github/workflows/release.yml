@@ -159,12 +159,8 @@ jobs:
           VERSION=$(node -p "const m = require('./dist/manifest.json'); m.version_name || m.version")
           zip -qr "tangitweak-mv2-v${VERSION}.zip" dist
           (cd dist-mv3 && zip -qr "../tangitweak-mv3-v${VERSION}.zip" .)
-          TGZ=$(npm pack ./dist-test-pkg --quiet)
-          mv "$TGZ" "tangitweak-test-v${VERSION}.tgz"
-          cp "tangitweak-test-v${VERSION}.tgz" "tangitweak-test.tgz"
           echo "ZIP_NAME=tangitweak-mv2-v${VERSION}.zip" >> "$GITHUB_ENV"
           echo "ZIP_MV3_NAME=tangitweak-mv3-v${VERSION}.zip" >> "$GITHUB_ENV"
-          echo "TEST_TGZ_VERSIONED=tangitweak-test-v${VERSION}.tgz" >> "$GITHUB_ENV"
           echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
 
       - name: Package crx (signed with CRX_PRIVATE_KEY → stable extension id)
@@ -221,8 +217,6 @@ jobs:
           files: |
             ${{ env.ZIP_NAME }}
             ${{ env.ZIP_MV3_NAME }}
-            ${{ env.TEST_TGZ_VERSIONED }}
-            tangitweak-test.tgz
             tangitweak-*.crx
             helper-dist/*
           body_path: release-notes.md

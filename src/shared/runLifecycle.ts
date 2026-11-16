@@ -249,11 +249,6 @@ export class ScriptLife {
         return r && { signal: r.ctl.signal };
     }
 
-    /** live `ctx.mount` slots — gives tests access to containers inside closed shadow roots */
-    mountSlots(): { anchor: Element | null; host: Element; container: Element }[] {
-        return [...this.slots].map(({ anchor, host, container }) => ({ anchor, host, container }));
-    }
-
     private end(run: Run, why: string): void {
         if (!run.ctl.signal.aborted) run.ctl.abort(new AbortError(why));
         this.sweep();

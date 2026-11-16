@@ -18,7 +18,7 @@ import { SETTINGS_FILE, SCHEMA_FILE, parseSettings, serializeSettingsDoc, type S
 import { API_DTS_FILE, PACKAGE_JSON_FILE, TSCONFIG_FILE } from "./generatedFiles";
 import { bytesToImageDataUrl, imageDataUrlToBytes, isImageDataPath } from "./scriptImports";
 import { badValue, isPlainObject } from "./storeOps";
-import { dataFilePathProblem, folderPathProblem, isScriptFilePath, scriptFileName, scriptNameFromFile, scriptNameProblem, scriptPathKey } from "./scriptName";
+import { dataFilePathProblem, folderPathProblem, scriptFileName, scriptNameFromFile, scriptNameProblem, scriptPathKey } from "./scriptName";
 import { isInFolder } from "./folders";
 
 export const EXPORT_ZIP_NAME = "tangitweak-export.zip";
@@ -64,7 +64,7 @@ export interface ExportContents {
 }
 
 const GENERATED = new Set([API_DTS_FILE, TSCONFIG_FILE, PACKAGE_JSON_FILE, SCHEMA_FILE]);
-const isScriptFile = isScriptFilePath;
+const isScriptFile = (p: string) => (/\.ts$/.test(p) && !/\.d\.ts$/.test(p)) || /\.tsx$/.test(p);
 
 /** the folders with nothing in them: no path and no other folder inside */
 export function emptyFolders(folders: string[], paths: string[]): string[] {
@@ -124,7 +124,7 @@ export function parseExportedStores(text: string): Record<string, Record<string,
 
 /** what an export zip (or a zipped scripts folder) holds */
 export async function readExportZip(buf: ArrayBuffer): Promise<ExportContents> {
-    const skip = (p: string) => p.split("/").some((s) => s.startsWith(".") || s === "__MACOSX" || s === "node_modules" || s === "__tests__");
+    const skip = (p: string) => p.split("/").some((s) => s.startsWith(".") || s === "__MACOSX" || s === "node_modules");
     const raw = await readZipEntries(buf, (p) => !skip(p));
     let files = raw.files;
     let dirs = raw.folders;

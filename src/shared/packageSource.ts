@@ -22,7 +22,6 @@ import { builtinSpec } from "./builtinSpecs";
 import { isManifestPath, MANIFEST_FILE, parseManifest, type Manifest } from "./packageMetadata";
 import { isUrlSpec } from "./packageImports";
 import { bytesToImageDataUrl, importPath, importSpecs, isDataSpec, isImageDataPath, isRelativeIconSpec, metadataIconSpec } from "./scriptImports";
-import { isScriptFilePath, isTestOrToolingTsPath } from "./scriptName";
 import { readZipEntries } from "./zip";
 
 export type PackageSource =
@@ -179,7 +178,7 @@ export interface Net {
 }
 
 /** the files a package can use */
-export const isPackageFile = (path: string): boolean => /\.(tsx?|json|svg|md|png|jpe?g|gif|webp|ico|avif)$/i.test(path) && !/(^|\/)(node_modules|\.git|__tests__)\//.test(path) && !isTestOrToolingTsPath(path);
+export const isPackageFile = (path: string): boolean => /\.(tsx?|json|svg|md|png|jpe?g|gif|webp|ico|avif)$/i.test(path) && !/(^|\/)(node_modules|\.git)\//.test(path);
 
 /** read a browser `File` as package content (raster images become `data:image/...;base64,...`) */
 export async function readPackageBrowserFile(path: string, file: File): Promise<string> {
@@ -471,9 +470,9 @@ export async function openSource(src: PackageSource, net: Net, onProgress?: (p: 
 export function pickStart(paths: string[], where: string, hint: string): string {
     const manifest = paths.find(isManifestPath);
     if (manifest) return manifest;
-    const marked = paths.filter((p) => ENTRY_FILE_RE.test(p) && !isTestOrToolingTsPath(p));
+    const marked = paths.filter((p) => ENTRY_FILE_RE.test(p));
     if (marked.length === 1) return marked[0];
-    const scripts = marked.length ? marked : paths.filter(isScriptFilePath);
+    const scripts = marked.length ? marked : paths.filter((p) => SCRIPT_FILE_RE.test(p) && !/\.d\.ts$/i.test(p));
     if (scripts.length === 1) return scripts[0];
     throw new Error(scripts.length ? `${where} holds ${scripts.length} scripts (${scripts.join(", ")}) — ${hint}` : `no script or metadata.json in ${where}`);
 }

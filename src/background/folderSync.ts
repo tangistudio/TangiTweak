@@ -35,10 +35,10 @@ import { getStoresText, applyStoresText, storesTextParses, STORES_FILE } from ".
 import { storeOwner } from "./engine/stores";
 import { SETTINGS_FILE, SCHEMA_FILE } from "../shared/settingsJson";
 import { settingsSchemaJson } from "../shared/settingsSchema";
-import { API_DTS_FILE, BUILTIN_TYPINGS_ROOT, PACKAGE_JSON_FILE, TEST_PKG_ROOT, TSCONFIG_FILE, apiDtsText, packageJsonText, tsconfigText } from "../shared/generatedFiles";
+import { API_DTS_FILE, BUILTIN_TYPINGS_ROOT, PACKAGE_JSON_FILE, TSCONFIG_FILE, apiDtsText, packageJsonText, tsconfigText } from "../shared/generatedFiles";
 import { broadcastToUi } from "./engine/logs";
 import { dlogLevel } from "../shared/debugLog";
-import { folderPathProblem, isConfigJsonPath, isScriptFilePath, scriptFileName, scriptNameFromFile } from "../shared/scriptName";
+import { folderPathProblem, isConfigJsonPath, scriptFileName, scriptNameFromFile } from "../shared/scriptName";
 import { bytesToImageDataUrl, imageDataUrlToBytes, isDataSpec, isImageDataPath } from "../shared/scriptImports";
 import { ancestorFolders, isInFolder } from "../shared/folders";
 import { PACKAGE_TYPINGS_KEY, TYPINGS_ROOT, type StoredTypings } from "../shared/packageImports";
@@ -50,7 +50,7 @@ function canonicalFileName(name: string): string {
     return scriptFileName(name);
 }
 
-const isScriptFile = isScriptFilePath;
+const isScriptFile = (name: string) => (name.endsWith(".ts") && !name.endsWith(".d.ts")) || name.endsWith(".tsx");
 const isDataFile = (path: string) => isDataSpec(path) && !isConfigJsonPath(path) && !baseName(path).startsWith(".");
 const isSyncedFile = (path: string) => isScriptFile(path) || isDataFile(path);
 const baseName = (path: string) => path.slice(path.lastIndexOf("/") + 1);
@@ -185,7 +185,7 @@ async function scanFolder(handle: any = dirHandle, prefix = "", seen = new Map<s
     for await (const entry of handle.values()) {
         const path = prefix + entry.name;
         if (entry.kind === "directory") {
-            if (entry.name.startsWith(".") || entry.name === "node_modules" || entry.name === "__tests__" || folderPathProblem(path)) continue;
+            if (entry.name.startsWith(".") || entry.name === "node_modules" || folderPathProblem(path)) continue;
             seen.set(path + "/", FOLDER_SIG);
             await scanFolder(entry, path + "/", seen);
             continue;
@@ -1098,56 +1098,9 @@ async function ensureSchemaFile(): Promise<void> {
     await ensureFile(SCHEMA_FILE, settingsSchemaJson((await currentSettingsState()).scripts));
 }
 
-async function ensurePackageJsonFile(): Promise<void> {
-    if (!dirHandle) return;
-    const raw = await readTextOrNull(PACKAGE_JSON_FILE);
-    let existing: Record<string, any> | undefined;
-    if (raw && raw.trim()) {
-        try {
-            const parsed = JSON.parse(raw);
-            if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-                dlogLevel("sync", "warn", `Folder sync: ${PACKAGE_JSON_FILE} on disk is not a JSON object — leaving it untouched`);
-                return;
-            }
-            existing = parsed;
-        } catch {
-            dlogLevel("sync", "warn", `Folder sync: ${PACKAGE_JSON_FILE} on disk has a JSON error — leaving it untouched until fixed`);
-            return;
-        }
-    }
-    const next = packageJsonText(existing);
-    if (raw !== next) await writeFile(PACKAGE_JSON_FILE, next);
-}
-
-/** the bundled local test harness (lib/tangitweak-test.json), read once */
-let testPkgBundle: Promise<Record<string, string>> | null = null;
-function testPkgFiles(): Promise<Record<string, string>> {
-    if (typeof chrome === "undefined" || !chrome.runtime?.getURL) return Promise.resolve({});
-    testPkgBundle ??= Promise.resolve()
-        .then(() => fetch(chrome.runtime.getURL("lib/tangitweak-test.json")))
-        .then((r) => {
-            if (!r.ok) throw new Error(`HTTP ${r.status}`);
-            return r.json();
-        })
-        .catch((e: any) => {
-            testPkgBundle = null;
-            dlogLevel("sync", "warn", `Folder sync: could not read local test harness files: ${e?.message || e}`);
-            return {};
-        });
-    return testPkgBundle;
-}
-
-async function ensureTestPackageFiles(): Promise<void> {
-    if (!dirHandle) return;
-    for (const [p, text] of Object.entries(await testPkgFiles())) {
-        const path = `${TEST_PKG_ROOT}/${p}`;
-        if ((await readTextOrNull(path)) !== text) await writeFile(path, text);
-    }
-}
-
 /**
- * Typings + tsconfig + local test harness for VS Code, refreshed on every
- * start — so an extension update (new APIs) reaches an already-synced folder.
+ * Typings + tsconfig for VS Code, refreshed on every start — so an
+ * extension update (new APIs) reaches an already-synced folder.
  */
 async function ensureSupportFiles(): Promise<void> {
     try {
@@ -1160,9 +1113,8 @@ async function ensureSupportFiles(): Promise<void> {
         dlogLevel("sync", "warn", `Folder sync: could not refresh ${API_DTS_FILE}: ${e?.message || e}`);
     }
     await ensureFile(TSCONFIG_FILE, tsconfigText());
-    await ensurePackageJsonFile();
+    await ensureFile(PACKAGE_JSON_FILE, packageJsonText());
     await ensureSchemaFile();
-    await ensureTestPackageFiles();
     await ensurePackageTypingsFiles();
 }
 
@@ -1454,9 +1406,8 @@ async function start(opts: { fresh?: boolean }): Promise<boolean> {
     return true;
 }
 
-/** Stop timers and detach handle, keeping persisted state — as when the worker dies (test seam). */
+/** Stop timers only, keeping persisted state — as when the worker dies (test seam). */
 export function halt(): void {
-    dirHandle = null;
     if (timer) clearInterval(timer);
     timer = null;
     if (reconcileTimer) clearTimeout(reconcileTimer);

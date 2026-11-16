@@ -13,8 +13,7 @@ import { builtinSpec } from "./builtinSpecs";
 import { MANIFEST_FILE } from "./packageMetadata";
 import { entryStem } from "./packageModel";
 import { isUrlSpec } from "./packageImports";
-import { candidates } from "./packageSource";
-import { isScriptFilePath } from "./scriptName";
+import { candidates, SCRIPT_FILE_RE } from "./packageSource";
 import { folderOf, importPath, importSpecs, isDataSpec, metadataIconSpec, rewriteImports } from "./scriptImports";
 
 export interface PackagePlan {
@@ -262,7 +261,7 @@ export function makeFolderPackagePlan(folder: string, files: Record<string, stri
             else if (hit !== from) imported.add(hit);
         }
     }
-    const scripts = inside.filter((p) => isScriptFilePath(p) && !imported.has(p));
+    const scripts = inside.filter((p) => SCRIPT_FILE_RE.test(p) && !imported.has(p));
     const connect = fetchHosts(inside.filter((p) => !isDataSpec(p)).map((p) => files[p]));
     const name = base(folder) || "package";
     return { manifest: { path: join(folder, MANIFEST_FILE), text: manifestText(name, scripts.map((p) => p.slice(folder.length + 1)), connect) }, scripts, outside, bare, missing };
