@@ -37,6 +37,8 @@ export interface LifeOptions {
     shadow?: boolean;
     /** a teardown, or a ctx.mount that followed the page (a new match, autoRestore), failed */
     onError?: (e: unknown) => void;
+    /** offer `ctx.iframes` (default true; the overlay has no page iframes to follow) */
+    iframes?: boolean;
 }
 
 /** what a run adds to its handler's ctx */
@@ -47,6 +49,14 @@ export interface RunCtx {
     style(css: string): void;
     mount?: (a: unknown, b?: unknown, c?: unknown) => () => void;
     each<A extends any[], T>(fn: (...args: A) => Promise<T>, ...args: A): AsyncIterableIterator<T>;
+    iframes?: (a: unknown, b?: unknown) => () => void;
+}
+
+/** what `ctx.iframes` passes its `fn` for one iframe: a run in the iframe's document */
+export interface IframeCtx extends RunCtx {
+    iframe: HTMLIFrameElement;
+    document: Document;
+    window: Window;
 }
 
 export interface Generation {
@@ -72,6 +82,8 @@ interface Run {
     settle?: () => void;
     /** ctx.each was called before the handler returned */
     looping?: boolean;
+    /** reports the run's async errors (ctx.iframes runs its fn later, for new iframes) */
+    report: (e: unknown) => void;
 }
 
 interface Owner {
@@ -119,6 +131,25 @@ interface MountOwner extends Owner {
     /** autoRestore re-insertions in the last second (a page fighting back) */
     restores: number[];
     restoreOff?: boolean;
+}
+
+/** one iframe a ctx.iframes runs in: its document gets its own runs and claims */
+interface FrameSlot {
+    el: HTMLIFrameElement;
+    life: ScriptLife | null;
+    doc: Document | null;
+    /** the root fn ran under: a document.open() swaps it (same document, wiped page) */
+    root: Element | null;
+    onLoad: () => void;
+}
+
+/** a ctx.iframes key's owner: its fn in every matching same-origin iframe */
+interface IframesOwner extends Owner {
+    selector: string;
+    fn: (f: IframeCtx) => unknown;
+    report: (e: unknown) => void;
+    frames: Map<Element, FrameSlot>;
+    mo: MutationObserver;
 }
 
 /** marks a mount's host: page changes there are ours, and anchors inside aren't matches */
@@ -187,11 +218,11 @@ export class ScriptLife {
         // a handler scheduled by a generation that was replaced since
         if (g.ended || g !== this.latest) return;
         g.tried.add(h);
-        const run: Run = { h, gen: g, ctl: new AbortController(), claims: new Set(), released: false };
-        g.runs.add(run);
         const quiet = (e: unknown) => {
             if (!(run.ctl.signal.aborted && isAbort(e))) report(e);
         };
+        const run: Run = { h, gen: g, ctl: new AbortController(), claims: new Set(), released: false, report: quiet };
+        g.runs.add(run);
         let out: unknown;
         try {
             out = body(this.ctxFor(run), quiet);
@@ -322,6 +353,7 @@ export class ScriptLife {
                 return each(run.ctl.signal, fn, args);
             },
         };
+        if (this.o.iframes !== false) ctx.iframes = (a, b) => (b === undefined ? this.iframes(run, undefined, a) : this.iframes(run, a, b));
         if (this.o.react) ctx.mount = (...args: unknown[]) => (args.length < 2 ? this.mount(run, undefined, args[0], undefined) : this.mount(run, args[0], args[1], args[2]));
         return ctx;
     }
@@ -481,6 +513,109 @@ export class ScriptLife {
         owner.restoreOff = false;
         this.syncMount(owner, true);
         return () => this.unclaim(run, key);
+    }
+
+    private iframes(run: Run, selector: unknown, fn: unknown): () => void {
+        if (selector !== undefined && typeof selector !== "string") throw new TypeError("ctx.iframes: the selector must be a string");
+        if (typeof fn !== "function") throw new TypeError("ctx.iframes: the last argument must be a function");
+        const sel = selector ?? "iframe";
+        try {
+            this.o.doc.querySelectorAll(sel);
+        } catch {
+            throw new SyntaxError(`ctx.iframes: "${sel}" isn't a valid selector`);
+        }
+        const key = "iframes:" + run.h + ":" + (selector ?? "");
+        let fresh = false;
+        const owner = this.claim(run, key, (): IframesOwner => {
+            fresh = true;
+            const m: IframesOwner = {
+                claimers: new Set<Run>(),
+                selector: sel,
+                fn: fn as IframesOwner["fn"],
+                report: run.report,
+                frames: new Map(),
+                mo: new MutationObserver((records) => {
+                    if (records.every((r) => isOurs(r.target) || ([...r.addedNodes, ...r.removedNodes] as Node[]).every(isOurs))) return;
+                    try {
+                        this.syncFrames(m, false);
+                    } catch (e) {
+                        this.o.onError?.(e);
+                    }
+                }),
+                teardown: () => {
+                    m.mo.disconnect();
+                    for (const s of [...m.frames.values()]) this.dropFrame(m, s);
+                },
+            };
+            m.mo.observe(this.o.doc, { childList: true, subtree: true });
+            return m;
+        });
+        owner.fn = fn as IframesOwner["fn"];
+        owner.report = run.report;
+        // a later run (a save) runs the new fn in every iframe; the iframes' mounts and claims carry over
+        this.syncFrames(owner, !fresh);
+        return () => this.unclaim(run, key);
+    }
+
+    /** start following new matching iframes, drop gone ones; `rerun`: run fn again in the followed ones */
+    private syncFrames(m: IframesOwner, rerun: boolean): void {
+        const want = new Set([...this.o.doc.querySelectorAll(m.selector)].filter((el) => el.localName === "iframe" && !inHost(el)));
+        for (const [el, s] of [...m.frames]) if (!want.has(el) || !el.isConnected) this.dropFrame(m, s);
+        for (const el of want) {
+            const known = m.frames.get(el);
+            if (known) {
+                if (rerun && known.life) this.runFrame(m, known);
+                continue;
+            }
+            const s: FrameSlot = { el: el as HTMLIFrameElement, life: null, doc: null, root: null, onLoad: () => this.loadFrame(m, s, true) };
+            m.frames.set(el, s);
+            el.addEventListener("load", s.onLoad);
+            this.loadFrame(m, s, false);
+        }
+    }
+
+    /** the iframe's document is ready (or replaced): a fresh child life runs fn in it */
+    private loadFrame(m: IframesOwner, s: FrameSlot, onLoad: boolean): void {
+        let doc: Document | null = null;
+        try {
+            doc = s.el.contentDocument;
+        } catch {}
+        // the empty document an iframe starts with while its real one loads isn't the one the script wants
+        if (doc && !onLoad && (doc.readyState === "loading" || (doc.URL === "about:blank" && loadsOther(s.el)))) doc = null;
+        // the load of the document fn already runs in (a document.open() replaced its root: run again)
+        if (doc && doc === s.doc && doc.documentElement === s.root && s.life) return;
+        s.life?.stop("the iframe navigated");
+        s.life = null;
+        s.doc = doc;
+        s.root = doc?.documentElement ?? null;
+        // cross-origin (contentDocument is null) or still loading: wait for a load
+        if (!doc || !doc.defaultView) return;
+        s.life = new ScriptLife({ doc, react: this.o.react, shadow: this.o.shadow, onError: this.o.onError });
+        this.runFrame(m, s);
+    }
+
+    private runFrame(m: IframesOwner, s: FrameSlot): void {
+        const life = s.life!;
+        const doc = s.doc!;
+        const gen = life.begin();
+        try {
+            life.fire(gen, "iframes", m.report, (ctx, report) => {
+                const out = m.fn({ ...ctx, iframe: s.el, document: doc, window: doc.defaultView! });
+                if (out && typeof (out as any).then === "function") (out as Promise<unknown>).then(undefined, report);
+                return out;
+            });
+        } catch (e) {
+            // one iframe failing doesn't stop the others (its previous run is kept)
+            m.report(e);
+        }
+        life.commit(gen);
+    }
+
+    private dropFrame(m: IframesOwner, s: FrameSlot): void {
+        m.frames.delete(s.el);
+        s.el.removeEventListener("load", s.onLoad);
+        s.life?.stop("the iframe was removed");
+        s.life = null;
     }
 
     /** the anchors `m` goes on now */
@@ -655,6 +790,13 @@ export class ScriptLife {
         if (id === undefined) this.targetIds.set(el, (id = this.nextTargetId++));
         return id;
     }
+}
+
+/** the iframe has a document of its own coming (srcdoc, or a src that isn't about:blank) */
+function loadsOther(el: HTMLIFrameElement): boolean {
+    if (el.hasAttribute("srcdoc")) return true;
+    const src = (el.getAttribute("src") ?? "").trim();
+    return src !== "" && !/^about:blank$/i.test(src);
 }
 
 function isTarget(v: unknown): v is Element {

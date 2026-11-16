@@ -88,7 +88,7 @@ import { FrameShortcuts } from "../shared/shortcut";
     let reactDom: () => ReactDomClient = () => {
         throw new Error("no React");
     };
-    const life = new ScriptLife({ doc: document, react: () => reactDom() });
+    const life = new ScriptLife({ doc: document, react: () => reactDom(), onError: (e) => log("error", formatScriptError(scriptName, e, "onPage")) });
     /** ctx.shortcut: keys pressed in this frame (listening from the start, before the page) */
     const keys = new FrameShortcuts(window, {
         name: () => scriptName,

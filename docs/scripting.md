@@ -1239,6 +1239,7 @@ starting timers — isn't undone, and the new run does it again: an
 | `style(css)` | ✓ | ✓ | ✓ | add CSS to the page (and to each `ctx.mount`) |
 | `mount(ui)`, `mount(target, ui, opts?)` | — | ✓ | ✓ | render React UI (JSX) on every match; a save re-renders it, state kept |
 | `each(fn, ...args)` | — | ✓ | ✓ | [loop over a handle function's answers](#waiting-for-events--ctxeach) |
+| `iframes(selector?, fn)` | ✓ | ✓ | — | run `fn` in each same-origin iframe, now and later |
 | `onNavigate(fn)` | — | — | ✓ | [in-place navigations](#overlays--wtonoverlay) |
 | `shortcut(keys, fn, opts)` | — | ✓ | ✓ | [keyboard shortcuts](#keyboard-shortcuts) |
 
@@ -1322,6 +1323,35 @@ tt.onPage("*://app.example.com/*", (ctx) => {
       ctx.mount('[data-testid="version"]', <Label />, { position: "after" });
       // a badge over the avatar, put back when the app re-renders the header
       ctx.mount("#avatar", (el) => <Badge user={el.title} />, { position: "overlay", autoRestore: true });
+  });
+  ```
+- **`ctx.iframes(fn)` / `ctx.iframes(selector, fn)`** runs `fn` in every
+  same-origin iframe of the document (or only those `selector` matches),
+  now and as they're added. It also reaches iframes your script may not
+  run in itself, such as the `about:blank` and `srcdoc` frames that
+  rich-text editors and mail compose windows use. It returns a function
+  that stops it early.
+  - **`f`**, what `fn` gets, is a run of its own in the iframe:
+    `f.iframe` (the element), `f.document`, `f.window`, and the same
+    `signal`, `once`, `patch`, `style` (and in `onPage`, `mount` and
+    `each`) as `ctx`, aimed at the iframe's document. `f.iframes` reaches
+    nested iframes.
+  - `fn` runs again when the iframe loads a new document (the previous
+    `f.signal` aborts first) and on each save, keeping its mounts' state.
+    Its run ends when the iframe goes away or the handler's run ends.
+  - Cross-origin iframes are skipped: their document is out of reach. If
+    one later loads a same-origin page, `fn` runs then.
+  - Inside `fn`, the global `document` is still the parent page's: use
+    `f.document`. The iframe's elements aren't `instanceof` the parent's
+    classes (`HTMLElement` and the like): use `f.window.HTMLElement`, or
+    check `tagName`.
+
+  ```ts
+  tt.onPage("*://mail.example.com/*", (ctx) => {
+      ctx.iframes("iframe.editor", (f) => {
+          f.style("body { font-size: 16px }");
+          f.document.addEventListener("keydown", (e) => console.log(e.key), { signal: f.signal });
+      });
   });
   ```
 

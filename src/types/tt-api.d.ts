@@ -400,10 +400,61 @@ declare namespace TangiTweak {
     }
 
     /** The context an `onSite` handler gets (`url` is the frame's URL). No `mount`: React isn't in the site's world. */
-    interface SiteCtx extends RequestCtx, RunCtx {}
+    interface SiteCtx extends RequestCtx, RunCtx, IframesCtx<SiteIframeCtx> {}
+
+    /** What `ctx.iframes` adds for the iframe its `fn` runs in. */
+    interface IframeInfo {
+        /** The `<iframe>` element, in the parent page. */
+        readonly iframe: HTMLIFrameElement;
+        /** The iframe's document. The global `document` is still the parent page's. */
+        readonly document: Document;
+        /** The iframe's window. */
+        readonly window: Window;
+    }
+
+    /** What an `onSite` handler's `ctx.iframes` passes `fn`: a run in one iframe. */
+    interface SiteIframeCtx extends RunCtx, IframeInfo, IframesCtx<SiteIframeCtx> {}
+
+    /** What an `onPage` handler's `ctx.iframes` passes `fn`: a run in one iframe. */
+    interface PageIframeCtx extends TrustedRunCtx, IframeInfo, IframesCtx<PageIframeCtx> {}
+
+    interface IframesCtx<F> {
+        /**
+         * Run `fn` in every same-origin iframe of this document (or only
+         * those `selector` matches), now and as they're added. `fn` gets a
+         * run of its own in the iframe: `f.document`, `f.window`,
+         * `f.iframe`, and `signal`, `style`, `patch`, `mount` and the rest,
+         * all aimed at the iframe's document.
+         *
+         * It also reaches iframes the script may not run in itself, such as
+         * the `about:blank` and `srcdoc` frames rich-text editors and mail
+         * compose windows use.
+         *
+         * `fn` runs again when the iframe loads a new document (the
+         * previous `f.signal` aborts) and on each save. Its run ends when
+         * the iframe goes away or this run ends. Cross-origin iframes are
+         * skipped: their document is out of reach.
+         *
+         * Use `f.document`, not `document`, inside `fn`. Elements of the
+         * iframe aren't `instanceof` the parent's classes (`HTMLElement`
+         * and the like): use `f.window.HTMLElement` or check `tagName`.
+         *
+         * Returns a function that stops it early.
+         *
+         * @example
+         * tt.onPage("*://mail.example.com/*", (ctx) => {
+         *     ctx.iframes("iframe.editor", (f) => {
+         *         f.style("body { font-size: 16px }");
+         *         f.document.addEventListener("keydown", onKey, { signal: f.signal });
+         *     });
+         * });
+         */
+        iframes(fn: (f: F) => unknown): () => void;
+        iframes(selector: string, fn: (f: F) => unknown): () => void;
+    }
 
     /** The context an `onPage` handler gets (`url` is the frame's URL). */
-    interface PageCtx extends RequestCtx, TrustedRunCtx {
+    interface PageCtx extends RequestCtx, TrustedRunCtx, IframesCtx<PageIframeCtx> {
         /**
          * Run `fn` when the user presses `keys` on the page: "Alt+Shift+M",
          * "Mod+K" (Mod = Cmd on macOS, Ctrl elsewhere), "Shift+F2", "Esc".

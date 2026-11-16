@@ -164,7 +164,7 @@ export async function startOverlay(ep: Endpoint, init: OverlayInit, env: Overlay
     let reactDom: () => ReactDomClient = () => {
         throw new Error("no React");
     };
-    const life = new ScriptLife({ doc, shadow: false, react: () => reactDom(), onError: (e) => log("error", errorLine(e, "teardown")) });
+    const life = new ScriptLife({ doc, shadow: false, iframes: false, react: () => reactDom(), onError: (e) => log("error", errorLine(e, "teardown")) });
     let gen: Generation | null = null;
     let handlers: PageDocumentHandler[] = [];
     /** CSS imported by the script's libraries, added once */

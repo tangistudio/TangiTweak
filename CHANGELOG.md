@@ -7,6 +7,10 @@ its section below.
 
 ## [Unreleased]
 
+### Added
+
+- **`ctx.iframes(selector?, fn)`** in `onPage` and `onSite` handlers runs `fn` in each same-origin iframe, now and as they're added, with its own `signal`, `style`, `patch`, `mount` and more aimed at the iframe's document. It reaches `about:blank` and `srcdoc` editor frames, re-runs when an iframe loads a new document, and keeps state across saves.
+
 ## [0.36.1-alpha] - 2026-11-13
 
 ### Changed

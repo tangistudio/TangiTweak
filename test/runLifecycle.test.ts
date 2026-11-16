@@ -488,6 +488,125 @@ describe("ScriptLife", () => {
         });
         await expect(it.next()).rejects.toThrow("nope");
     });
+
+    describe("ctx.iframes", () => {
+        const tick = () => new Promise((r) => setTimeout(r, 30));
+        const frame = (html: string, cls = "") => {
+            const el = document.createElement("iframe");
+            el.srcdoc = html;
+            if (cls) el.className = cls;
+            document.body.append(el);
+            return el;
+        };
+
+        it("runs fn in each iframe's document, now and for iframes added later", async () => {
+            frame("<p>a</p>");
+            await tick();
+            const seen: string[] = [];
+            reload((ctx) => ctx.iframes!((f: any) => void seen.push(f.document.body.textContent!)));
+            expect(seen).toEqual(["a"]);
+            frame("<p>b</p>");
+            await tick();
+            expect(seen).toEqual(["a", "b"]);
+        });
+
+        it("f is a run in the iframe: style goes into its document, f.iframe is the element", async () => {
+            const el = frame("<p>a</p>");
+            await tick();
+            let got: any;
+            reload((ctx) =>
+                ctx.iframes!((f: any) => {
+                    got = f;
+                    f.style("p { color: red }");
+                })
+            );
+            expect(got.iframe).toBe(el);
+            expect(got.window).toBe(el.contentWindow);
+            expect(el.contentDocument!.querySelector("style")?.textContent).toBe("p { color: red }");
+            expect(document.querySelector("style")).toBeNull();
+        });
+
+        it("a selector picks which iframes", async () => {
+            frame("<p>a</p>", "editor");
+            frame("<p>b</p>");
+            await tick();
+            const seen: string[] = [];
+            reload((ctx) => ctx.iframes!("iframe.editor", (f: any) => void seen.push(f.document.body.textContent)));
+            expect(seen).toEqual(["a"]);
+        });
+
+        it("a removed iframe's run ends; a new document gets a fresh run", async () => {
+            const el = frame("<p>a</p>");
+            await tick();
+            const runs: { text: string; signal: AbortSignal }[] = [];
+            reload((ctx) => ctx.iframes!((f: any) => void runs.push({ text: f.document.body.textContent, signal: f.signal })));
+            el.srcdoc = "<p>b</p>";
+            await tick();
+            expect(runs.map((r) => r.text)).toEqual(["a", "b"]);
+            expect(runs[0].signal.aborted).toBe(true);
+            el.remove();
+            await tick();
+            expect(runs[1].signal.aborted).toBe(true);
+        });
+
+        it("a save runs the new fn in the same iframes; stopping ends them", async () => {
+            frame("<p>a</p>");
+            await tick();
+            const sigs: AbortSignal[] = [];
+            const seen: string[] = [];
+            reload((ctx) => ctx.iframes!((f: any) => void (seen.push("v1"), sigs.push(f.signal))));
+            reload((ctx) => ctx.iframes!((f: any) => void (seen.push("v2"), sigs.push(f.signal))));
+            expect(seen).toEqual(["v1", "v2"]);
+            expect(sigs[0].aborted).toBe(true);
+            expect(sigs[1].aborted).toBe(false);
+            life.stop();
+            expect(sigs[1].aborted).toBe(true);
+            frame("<p>b</p>");
+            await tick();
+            expect(seen).toEqual(["v1", "v2"]);
+        });
+
+        it("a handler that stops calling ctx.iframes stops following iframes", async () => {
+            frame("<p>a</p>");
+            await tick();
+            let sig!: AbortSignal;
+            reload((ctx) => ctx.iframes!((f: any) => void (sig = f.signal)));
+            reload(() => {});
+            expect(sig.aborted).toBe(true);
+        });
+
+        it("one iframe's error is reported and the others still run", async () => {
+            frame("<p>a</p>");
+            frame("<p>b</p>");
+            await tick();
+            const seen: string[] = [];
+            const reported: unknown[] = [];
+            const gen = life.begin();
+            life.fire(gen, "onPage:0", (e) => reported.push(e), (ctx) =>
+                ctx.iframes!((f: any) => {
+                    if (f.document.body.textContent === "a") throw new Error("boom");
+                    seen.push(f.document.body.textContent);
+                })
+            );
+            life.commit(gen);
+            expect(seen).toEqual(["b"]);
+            expect(reported.map((e: any) => e.message)).toEqual(["boom"]);
+        });
+
+        it("checks its arguments", () => {
+            reload((ctx) => {
+                expect(() => ctx.iframes!("iframe")).toThrow(TypeError);
+                expect(() => ctx.iframes!("[[", () => {})).toThrow(SyntaxError);
+            });
+        });
+
+        it("isn't offered when turned off (the overlay)", () => {
+            const off = new ScriptLife({ doc: document, iframes: false });
+            const gen = off.begin();
+            off.fire(gen, "h", noReport, (ctx) => expect(ctx.iframes).toBeUndefined());
+            off.stop();
+        });
+    });
 });
 
 describe("Exposer.revert (a failed reload keeps the old run answering)", () => {
