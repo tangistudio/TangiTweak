@@ -23,6 +23,7 @@
  * overlay, for whichever script the Editor names, at a URL it picks.
  */
 import { onBridgeConnect, type BridgeLink } from "./bridgePorts";
+import { serveFrameKeyClaims, serveFrameKeyOffers } from "./frameKeys";
 import { endpointPair, portEndpoint, ISO_STORE_TAG, type Endpoint, type IsoInit, type OverlayInit, type WireOps } from "../../shared/wire";
 import { isRpcCall, isRpcResult, NOT_RUNNING, type RpcCall, type RpcResult } from "../../shared/rpc";
 import { USER_SCRIPTS_OFF } from "../../shared/userScriptsStatus";
@@ -248,6 +249,8 @@ export async function revalidateOverlayLinks(): Promise<void> {
 export function serveLink(link: BridgeLink): void {
     const mine = new Map<string, Grant>();
     grants.set(link, mine);
+    serveFrameKeyOffers(link.ep, link.tabId, link.frameId);
+    serveFrameKeyClaims(link);
     link.ep.onClose(() => {
         for (const g of mine.values()) g.store?.close("the bridge went away");
         mine.clear();
@@ -411,6 +414,7 @@ export function addUserScriptPort(port: chrome.runtime.Port): boolean {
 export function serveIsoLink(link: IsoLink): void {
     const { tabId, frameId, ep } = link;
     const bound = (s: string | undefined): s is string => s !== undefined && s === link.s;
+    serveFrameKeyOffers(ep, tabId, frameId);
     ep.onClose(() => {
         link.store?.close("the isolated-world code went away");
         if (link.s !== null && isoLinks.get(isoKey(tabId, frameId, link.s)) === link) isoLinks.delete(isoKey(tabId, frameId, link.s));

@@ -35,6 +35,7 @@ import { tabScopeOfPage } from "../shared/storeOps";
 import { SiteMirrors } from "../shared/siteStoreMirror";
 import { SITE_DOWN_KINDS } from "../shared/siteStoreHost";
 import { FrameShortcuts } from "../shared/shortcut";
+import { FrameKeyOffers } from "../shared/frameKeys";
 
 (() => {
     const me = ((globalThis as any).__ttIsoQ as { s: string; routes: RouteMeta[] }[] | undefined)?.shift();
@@ -95,11 +96,16 @@ import { FrameShortcuts } from "../shared/shortcut";
         // f.shortcut: keys pressed in that iframe
         frameCtx: (doc, signal) => ({ shortcut: (combo: string, fn: () => unknown, opts?: any) => keys.add(s, combo, fn, opts, signal, doc.defaultView!) }),
     });
+    /** ctx.shortcut in cross-origin iframes: keep the link up while there are any */
+    let keyHold = false;
+    let linked = 0;
+    const offers = new FrameKeyOffers(linkUp, undefined, (on) => (keyHold = on));
     /** ctx.shortcut: keys pressed in this frame (listening from the start, before the page) */
     const keys = new FrameShortcuts(window, {
         name: () => scriptName,
         error: (_s, e) => log("error", formatScriptError(scriptName, e, "ctx.shortcut")),
         warn: (_s, msg) => log("warn", msg),
+        offers,
     });
     window.addEventListener("message", (e: MessageEvent) => {
         const d = e.data;
@@ -119,12 +125,13 @@ import { FrameShortcuts } from "../shared/shortcut";
             ep.on("rpc.result", (r) => client.receive(r));
             ep.on("overlay.closed", () => client.disconnect("the overlay closed"));
             ep.on("iso.update", () => void load(ep));
+            ep.on("frameKeys.hit", (a) => offers.hit(a?.token));
             ep.onClose(() => {
                 if (current === ep) current = null;
                 if (link === p) link = null;
                 client.disconnect("the link to the extension closed");
                 // reconnect while the first load is pending, while an overlay may call, and while stores are in use
-                if ((eager || hub || (codeHash === null && ++tries < 10)) && !stopped && !timer)
+                if ((eager || hub || keyHold || (codeHash === null && ++tries < 10)) && !stopped && !timer)
                     timer = setTimeout(() => {
                         timer = null;
                         linkUp().catch(() => {});
@@ -133,6 +140,8 @@ import { FrameShortcuts } from "../shared/shortcut";
             });
             await load(ep);
             current = ep;
+            // a new link: the old one's offers went with it
+            if (linked++) offers.relink();
             // after load: ops need the link bound to the script
             hub?.attach(ep);
             setTimeout(() => {

@@ -8,6 +8,7 @@
 
 import { scriptLogLine } from "./scriptLog";
 import { checkSelector, followIframes } from "./domElements";
+import type { FrameKeyOffers } from "./frameKeys";
 
 export type ShortcutPriority = "before-page" | "after-page";
 
@@ -337,6 +338,8 @@ export class FrameShortcuts {
             rank?: (s: string) => number;
             mac?: boolean;
             trusted?: (e: KeyboardEvent) => boolean;
+            /** cross-origin iframes (`iframes: { crossOrigin: true }`); without it they're skipped */
+            offers?: FrameKeyOffers;
         }
     ) {
         this.reg = new ShortcutRegistry(opts.mac ?? isMacPlatform(), opts.rank);
@@ -363,7 +366,9 @@ export class FrameShortcuts {
         if (r.displaced) lost(r.displaced);
         const onError = (e: unknown) => this.opts.error(s, e);
         const uncover = win === this.win ? () => {} : this.frames.cover(win, s, id);
-        const unfollow = frames ? this.frames.follow(win.document, s, id, frames, onError) : () => {};
+        const offers = this.opts.offers;
+        const remote = offers && ((el: HTMLIFrameElement) => offers.watch(el, keys, priority, () => void this.fire(r.entry)));
+        const unfollow = frames ? this.frames.follow(win.document, s, id, frames, onError, remote) : () => {};
         const unframe = () => {
             unfollow();
             uncover();
@@ -412,20 +417,25 @@ export class ShortcutWindows {
         private readonly trusted?: (e: KeyboardEvent) => boolean
     ) {}
 
-    /** listen for script `s`'s shortcut `id` in the iframes of `doc` (and theirs) */
-    follow(doc: Document, s: string, id: string, frames: ShortcutFrames, onError: (e: unknown) => void): () => void {
+    /**
+     * listen for script `s`'s shortcut `id` in the iframes of `doc` (and
+     * theirs); `remote`: also in cross-origin ones (`frames.crossOrigin`),
+     * called for each matched iframe element
+     */
+    follow(doc: Document, s: string, id: string, frames: ShortcutFrames, onError: (e: unknown) => void, remote?: (el: HTMLIFrameElement) => () => void): () => void {
         return followIframes(
             doc,
             frames,
             (f) => {
                 const uncover = this.cover(f.window, s, id);
-                const nested = this.follow(f.document, s, id, frames, onError);
+                const nested = this.follow(f.document, s, id, frames, onError, remote);
                 return () => {
                     nested();
                     uncover();
                 };
             },
-            onError
+            onError,
+            frames.crossOrigin ? remote : undefined
         );
     }
 

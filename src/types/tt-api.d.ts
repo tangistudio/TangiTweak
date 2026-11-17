@@ -533,7 +533,8 @@ declare namespace TangiTweak {
          * replaces with `document.open()` is followed too, though the page
          * can get the first keys before the shortcut listens again.
          * `shadow`: iframes inside shadow roots too. `crossOrigin`: iframes
-         * from other sites too; there `"pass"` doesn't give the key back.
+         * from other sites too (`fn` still runs here); there `"pass"`
+         * doesn't give the key back, and their own iframes aren't followed.
          */
         iframes?: ShortcutIframes;
     }

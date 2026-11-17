@@ -383,6 +383,8 @@ interface Tracked {
     onLoad: () => void;
     /** sees a document.open() wipe and the new page arriving (no load event comes for those) */
     mo?: MutationObserver;
+    /** `each`'s cleanup */
+    untrack?: () => void;
 }
 
 /**
@@ -392,7 +394,17 @@ interface Tracked {
  * it returns runs when that document goes (or the iframe does). A
  * cross-origin iframe is skipped (its document isn't readable here).
  */
-export function followIframes(doc: Document, opts: { selector?: string; shadow?: boolean }, ready: (f: FrameDoc) => ((why: FrameEnd) => void) | void, onError: (e: unknown) => void): () => void {
+/**
+ * `each`: also called for every matched iframe element as it arrives,
+ * cross-origin ones included (whatever it returns runs when it leaves)
+ */
+export function followIframes(
+    doc: Document,
+    opts: { selector?: string; shadow?: boolean },
+    ready: (f: FrameDoc) => ((why: FrameEnd) => void) | void,
+    onError: (e: unknown) => void,
+    each?: (el: HTMLIFrameElement) => () => void
+): () => void {
     const selector = opts.selector ?? "iframe";
     const frames = new Map<Element, Tracked>();
     let stopped = false;
@@ -444,6 +456,11 @@ export function followIframes(doc: Document, opts: { selector?: string; shadow?:
         t.el.removeEventListener("load", t.onLoad);
         t.mo?.disconnect();
         end(t, why);
+        try {
+            t.untrack?.();
+        } catch (e) {
+            onError(e);
+        }
     };
 
     const sync = () => {
@@ -454,6 +471,12 @@ export function followIframes(doc: Document, opts: { selector?: string; shadow?:
             const t: Tracked = { el: el as HTMLIFrameElement, doc: null, root: null, cleanup: null, onLoad: () => load(t, true) };
             frames.set(el, t);
             el.addEventListener("load", t.onLoad);
+            if (each)
+                try {
+                    t.untrack = each(t.el);
+                } catch (e) {
+                    onError(e);
+                }
             load(t, false);
         }
     };

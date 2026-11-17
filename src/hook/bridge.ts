@@ -47,6 +47,7 @@ import type { DocumentWhen, PlaceApi, RouteMeta } from "../shared/route";
 import { clipPathFor, normalizeRects } from "../shared/overlayRects";
 import { fromWireRequest, toWireResponse } from "../shared/ttFetch";
 import { ShortcutRegistry, watchShortcuts, FrameShortcuts, ShortcutWindows, shortcutFrames } from "../shared/shortcut";
+import { FrameKeyOffers, FrameKeyWatch, claimToken } from "../shared/frameKeys";
 import type { RanApi } from "../shared/netTypes";
 
 (() => {
@@ -321,6 +322,24 @@ import type { RanApi } from "../shared/netTypes";
     const fallbackExposers = new Map<string, Exposer>();
     /** MV2 onPage `ctx.shortcut`: keys pressed in this frame (listening from the start, before the page); shared keys go by list order */
     let pageOrder: { id: string; name: string }[] = [];
+    // shortcuts in cross-origin iframes (shared/frameKeys.ts): as the parent (MV2 onPage, overlays) and as the child
+    let keyHold = false;
+    const browserRuntime = (globalThis as any).browser?.runtime;
+    const keyOffers = new FrameKeyOffers(
+        () => l2up("ctx.shortcut"),
+        // Firefox: the browser says which frame the iframe is
+        typeof browserRuntime?.getFrameId === "function" ? (el) => browserRuntime.getFrameId(el) : undefined,
+        (on) => (keyHold = on)
+    );
+    const childKeys = new FrameKeyWatch(window, (token) => l2?.push("frameKeys.hit", { token }));
+    window.addEventListener(
+        "message",
+        (e) => {
+            const token = claimToken(e);
+            if (token) l2up("ctx.shortcut").then((ep) => ep.push("frameKeys.claim", { token }), () => {});
+        },
+        true
+    );
     const pageKeys = new FrameShortcuts(window, {
         rank: (s) => {
             const i = pageOrder.findIndex((x) => x.id === s);
@@ -329,6 +348,7 @@ import type { RanApi } from "../shared/netTypes";
         name: (s) => pageOrder.find((x) => x.id === s)?.name ?? s,
         error: (s, e) => scriptLog(s, "error", formatScriptError(pageOrder.find((x) => x.id === s)?.name ?? s, e, "ctx.shortcut"), "isolated"),
         warn: (s, msg) => scriptLog(s, "warn", msg, "isolated"),
+        offers: keyOffers,
     });
 
     // ---- isolated onPage code's stores (MV2: it runs here) ----
@@ -653,6 +673,13 @@ import type { RanApi } from "../shared/netTypes";
             p.reply(r);
         });
         ep.on("iso.call", (c, s) => guard(() => s !== undefined && isRpcCall(c) && callOverlayFromIso(s, c)));
+        ep.on("frameKeys.hit", (a) => guard(() => keyOffers.hit(a?.token)));
+        ep.on("frameKeys.watch", (a) =>
+            guard(() => {
+                if (typeof a?.token === "string" && typeof a.keys === "string") childKeys.add(a.token, a.keys, a.priority === "after-page" ? "after-page" : "before-page");
+            })
+        );
+        ep.on("frameKeys.unwatch", (a) => guard(() => typeof a?.token === "string" && childKeys.remove(a.token)));
         // a new link (after a drop, or a new service worker): re-grant each
         // overlay (a fresh nonce), then its replicas re-declare and re-subscribe
         if (l2Opened++)
@@ -666,14 +693,17 @@ import type { RanApi } from "../shared/netTypes";
         // isolated code's replicas re-grant (on first use) and re-subscribe
         isoGrants.reset();
         isoHub?.reconnect();
+        if (l2Opened > 1) keyOffers.relink();
         ep.onClose(() => {
             if (l2 === ep) l2 = null;
+            // the background forgot what this frame watched for its parents; they offer again
+            childKeys.clear();
             for (const [cid, p] of [...isoPending])
                 if (p.ep === ep) {
                     isoPending.delete(cid);
                     p.reply({ cid, ok: false, error: { name: "DisconnectedError", message: "the link to the extension dropped" } });
                 }
-            if (dead || (!l2Holders && !isoHub) || l2Timer) return;
+            if (dead || (!l2Holders && !isoHub && !keyHold) || l2Timer) return;
             l2Timer = setTimeout(() => {
                 l2Timer = null;
                 openPort();
@@ -931,7 +961,13 @@ import type { RanApi } from "../shared/netTypes";
                 return;
             }
             unfollowOverlayKey(s, a.id);
-            if (frames && window === top) overlayKeyUnfollow.set(s + "\n" + a.id, overlayKeyFrames.follow(document, s, a.id, frames, (e) => scriptLog(s, "error", formatScriptError(o.info.name, e, "ctx.shortcut"), "isolated")));
+            const entry = r.entry;
+            const remote = (el: HTMLIFrameElement) => keyOffers.watch(el, entry.keys, entry.priority, () => fireOverlayKeys([entry]));
+            if (frames && window === top)
+                overlayKeyUnfollow.set(
+                    s + "\n" + a.id,
+                    overlayKeyFrames.follow(document, s, a.id, frames, (e) => scriptLog(s, "error", formatScriptError(o.info.name, e, "ctx.shortcut"), "isolated"), remote)
+                );
             // the warning goes to the script that lost the keys
             const nameOf = (x: string) => overlays.get(x)?.info.name ?? x;
             if (r.taken) log("warn", scriptLogLine(o.info.name, "overlay", `shortcut ${a.keys}: "${nameOf(r.taken)}" (earlier in the list) uses these keys too and keeps them`));

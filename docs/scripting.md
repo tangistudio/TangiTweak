@@ -1372,7 +1372,8 @@ tt.onPage("*://app.example.com/*", (ctx) => {
     `f.signal` aborts first) and on each save, keeping its mounts' state.
     Its run ends when the iframe goes away or the handler's run ends.
   - Cross-origin iframes are skipped: their document is out of reach. If
-    one later loads a same-origin page, `fn` runs then.
+    one later loads a same-origin page, `fn` runs then. (Shortcuts can
+    still follow them: see `ctx.shortcut`'s `crossOrigin`.)
   - Inside `fn`, the global `document` is still the parent page's: use
     `f.document`. The iframe's elements aren't `instanceof` the parent's
     classes (`HTMLElement` and the like): use `f.window.HTMLElement`, or
@@ -1581,6 +1582,13 @@ tt.onOverlay("*://app.example.com/*", (ctx) => {
   shadow roots. When an iframe wipes its page with `document.open()`, the
   shortcut listens again right after; keys pressed in that moment go to
   the page.
+
+  Iframes from other sites are skipped unless you add `crossOrigin`:
+  `{ iframes: { crossOrigin: true } }`. There TangiTweak watches the keys
+  inside the iframe and runs `fn` in your script, as usual. A few limits
+  apply in those iframes: the key is always kept from the page (`"pass"`
+  can't give it back), iframes nested inside them aren't followed, and a
+  page they wipe with `document.open()` isn't followed either.
 
   ```ts
   tt.onPage("*://docs.google.com/*", (ctx) => {

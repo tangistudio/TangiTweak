@@ -117,6 +117,20 @@ export interface WireOps {
     "shortcut.remove": { push: { id: string } };
     /** L3: a shortcut's keys were pressed in the page */
     "shortcut.fire": { push: { id: string } };
+
+    // ---- shortcuts in cross-origin iframes (shared/frameKeys.ts; L2 bridges and L6 isolated links) ----
+    /** a parent frame: watch `keys` in the child frame that claims `token` (`child`: Firefox, its frameId) */
+    "frameKeys.offer": { req: { token: string; keys: string; priority: "before-page" | "after-page"; child?: number }; res: {} };
+    /** a parent frame: that shortcut or iframe is gone */
+    "frameKeys.withdraw": { push: { token: string } };
+    /** a child frame's bridge: a parent posted me `token` */
+    "frameKeys.claim": { push: { token: string } };
+    /** → the child: watch these keys (claimed and checked) */
+    "frameKeys.watch": { push: { token: string; keys: string; priority: "before-page" | "after-page" } };
+    /** → the child: stop */
+    "frameKeys.unwatch": { push: { token: string } };
+    /** child → background → parent: the keys were pressed */
+    "frameKeys.hit": { push: { token: string } };
     /** L3: the overlay's `tt.siteStore` mirrors → the site's world (the bridge relays them for this script) */
     "site.up": { push: SiteUp };
     /** L3: the site's world's answers to this overlay's subscriptions */
