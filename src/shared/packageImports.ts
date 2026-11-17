@@ -65,8 +65,7 @@ export type PackageStatus =
     | { state: "failed"; reason: string }
     | { state: "untyped"; reason: string };
 
-const NAME = "[a-z0-9~-][a-z0-9._~-]*";
-const SEMVER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+export const NAME = "[a-z0-9~-][a-z0-9._~-]*";
 
 /** is the specifier a URL (any scheme://)? URL specifiers are package imports, never script paths */
 export function isUrlSpec(spec: string): boolean {
@@ -75,15 +74,20 @@ export function isUrlSpec(spec: string): boolean {
 
 /** parse a package URL, or say why it can't be imported (the message starts with `cannot import "<spec>"`) */
 export function parsePackageUrl(spec: string): PackageUrl | string {
+    return packageUrlCore(spec, PACKAGE_ORIGIN, NAME);
+}
+
+/** parsePackageUrl with its constants passed in: self-contained, the ESLint plugin embeds its source (generatedFiles) */
+export function packageUrlCore(spec: string, origin: string, namePattern: string): PackageUrl | string {
     const fail = (why: string) => `cannot import "${spec}": ${why}`;
-    if (!spec.startsWith(PACKAGE_ORIGIN)) return fail(`only pinned ${PACKAGE_ORIGIN}<package>@<version> URLs can be imported`);
+    if (!spec.startsWith(origin)) return fail(`only pinned ${origin}<package>@<version> URLs can be imported`);
     if (/[?#]/.test(spec)) return fail("package URLs can't have a query string or hash");
-    const m = new RegExp(`^((?:@${NAME}/)?${NAME})(?:@([^/]*))?(?:/(.*))?$`, "i").exec(spec.slice(PACKAGE_ORIGIN.length));
-    if (!m) return fail(`not a package URL — expected ${PACKAGE_ORIGIN}<package>@<version>[/<path>]`);
+    const m = new RegExp(`^((?:@${namePattern}/)?${namePattern})(?:@([^/]*))?(?:/(.*))?$`, "i").exec(spec.slice(origin.length));
+    if (!m) return fail(`not a package URL — expected ${origin}<package>@<version>[/<path>]`);
     const [, name, version, sub = ""] = m;
-    if (!version || !SEMVER.test(version)) {
+    if (!version || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/.test(version)) {
         const rest = sub ? `/${sub}` : "";
-        return fail(`pin an exact version, e.g. ${PACKAGE_ORIGIN}${name}@1.2.3${rest} (ranges and tags like "latest" can change under the script)`);
+        return fail(`pin an exact version, e.g. ${origin}${name}@1.2.3${rest} (ranges and tags like "latest" can change under the script)`);
     }
     if (sub && sub.split("/").some((seg) => !seg || seg === "." || seg === "..")) return fail("the path inside the package isn't normalized");
     return { name, version, sub };

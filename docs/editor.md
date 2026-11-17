@@ -413,14 +413,32 @@ since the last sync wins, so a backup is made only when both changed.
 A slow drive (network share, cloud folder) that reports an earlier TangiTweak
 write back late isn't mistaken for an outside edit; the newer text is
 written again.
-`tt-api.d.ts`, `tsconfig.json`, `package.json` and `settings.schema.json` are written alongside. Edit in VS Code (or any editor) with full
+`tt-api.d.ts`, `tsconfig.json`, `package.json`, `eslint.config.mjs` and `settings.schema.json` are written alongside. Edit in VS Code (or any editor) with full
 TypeScript completions; saves hot apply instantly. The typings of
 [package imports](scripting.md#packages-from-unpkg) go to
 `.tangitweak/types/`, which TangiTweak owns: it rewrites and prunes them as
 scripts change. The built-ins' (`valtio`, `react`, `react-dom`) go to
 `.tangitweak/types/builtin/`, so their imports resolve there too.
 
-Those four are managed files: they're refreshed on every browser start
+The Editor's own checks come along as ESLint rules, in
+`.tangitweak/eslint-plugin.mjs`, which `eslint.config.mjs` turns on:
+
+- `tangitweak/no-invalid-world-access`: stores or handles in `onSite`
+  code, `tt.siteStore` in network handlers;
+- `tangitweak/no-rules-side-effects` (a warning): logging, timers or store
+  writes in `strategy: "rules"` handlers;
+- `tangitweak/valid-selectors-and-shortcuts`: bad CSS selectors and
+  shortcut keys;
+- `tangitweak/valid-package-imports`: URL imports that aren't a pinned
+  `https://unpkg.com/<package>@<version>`.
+
+Run `npm install` once in the folder (`package.json` lists ESLint and
+typescript-eslint), then `npx eslint .` or VS Code's ESLint extension
+shows them. `node_modules` and `package-lock.json` aren't synced. One
+difference: the Editor also asks the browser whether a selector is valid,
+so a rare selector mistake can show there and not in ESLint.
+
+Those five are managed files: they're refreshed on every browser start
 and extension update, so new APIs and settings reach an already-synced folder.
 Don't edit them; changing them has no effect on TangiTweak and your changes are overwritten. `settings.json` is yours: an
 update only adds documentation for settings it doesn't mention yet.
@@ -501,8 +519,8 @@ like the [synced folder](#synced-folder): scripts as `.ts`/`.tsx`
 files and data files at their paths, empty folders as folders, and
 `settings.json` at the root with the global settings and the exported
 scripts' `enabled` state and params. **Import…** takes such a zip — or a
-zip of a synced scripts folder (its `tt-api.d.ts`, `tsconfig.json` and
-`settings.schema.json` are skipped).
+zip of a synced scripts folder (its `tt-api.d.ts`, `tsconfig.json`,
+`package.json`, `eslint.config.mjs` and `settings.schema.json` are skipped).
 
 Both open the files as a tree, all ticked: tick or untick files, or a whole
 folder (its box shows when only some of its files are ticked). The filter

@@ -85,18 +85,35 @@ describe("valid-selectors-and-shortcuts", () => {
 describe("ESLint plugin (.tangitweak/eslint-plugin.mjs)", () => {
     it("runs the same rules in ESLint's rule format", () => {
         const plugin = new Function(eslintPluginText().replace(/^export default plugin;$/m, "return plugin;"))();
-        expect(Object.keys(plugin.rules)).toEqual(["no-invalid-world-access", "no-rules-side-effects", "valid-selectors-and-shortcuts"]);
-        const code = `const g = tt.globalStore("g", {});\ntt.onSite("*", () => { g.n = 1; });\ntt.onPage("*", (ctx) => { ctx.shortcut("Hyper+K", () => {}); });`;
+        expect(Object.keys(plugin.rules)).toEqual(["no-invalid-world-access", "no-rules-side-effects", "valid-selectors-and-shortcuts", "valid-package-imports"]);
+        expect(plugin.configs.recommended.rules["tangitweak/no-rules-side-effects"]).toBe("warn");
+        const code = [
+            `const g = tt.globalStore("g", {});`,
+            `tt.onSite("*", () => { g.n = 1; });`,
+            `tt.onPage("*", (ctx) => { ctx.shortcut("Hyper+K", () => {}); });`,
+            `import a from "https://unpkg.com/lodash";`,
+            `import b from "https://esm.sh/valtio@2";`,
+            `import c from "https://unpkg.com/dayjs@1.11.10";`,
+            `const d = import("https://cdn.example.com/x.js");`,
+        ].join("\n");
         const ast = parse(code, { ecmaVersion: "latest", sourceType: "module", locations: true, ranges: true });
         const sourceCode = { ast, scopeManager: analyze(ast as any, { ecmaVersion: 2022, sourceType: "module" }) };
         const reports: [string, number][] = [];
         for (const [name, rule] of Object.entries<any>(plugin.rules)) {
             const context = { sourceCode, report: (r: any) => reports.push([name, r.node?.loc.start.line ?? r.loc.line]) };
-            rule.create(context)["Program:exit"]();
+            const visit = rule.create(context);
+            // the import rule's visitors, by hand (no ESLint traversal here)
+            for (const n of (ast as any).body) {
+                visit[n.type]?.(n);
+                if (n.type === "VariableDeclaration") visit.ImportExpression?.(n.declarations[0].init);
+            }
+            visit["Program:exit"]?.();
         }
         expect(reports).toEqual([
             ["no-invalid-world-access", 2],
             ["valid-selectors-and-shortcuts", 3],
+            ["valid-package-imports", 4],
+            ["valid-package-imports", 7],
         ]);
     });
 });

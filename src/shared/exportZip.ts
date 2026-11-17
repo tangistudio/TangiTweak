@@ -15,7 +15,7 @@
  */
 import { readZipEntries, writeZip } from "./zip";
 import { SETTINGS_FILE, SCHEMA_FILE, parseSettings, serializeSettingsDoc, type SettingsDoc } from "./settingsJson";
-import { API_DTS_FILE, PACKAGE_JSON_FILE, TSCONFIG_FILE } from "./generatedFiles";
+import { API_DTS_FILE, ESLINT_CONFIG_FILE, PACKAGE_JSON_FILE, TSCONFIG_FILE } from "./generatedFiles";
 import { bytesToImageDataUrl, imageDataUrlToBytes, isImageDataPath } from "./scriptImports";
 import { badValue, isPlainObject } from "./storeOps";
 import { dataFilePathProblem, folderPathProblem, scriptFileName, scriptNameFromFile, scriptNameProblem, scriptPathKey } from "./scriptName";
@@ -63,7 +63,7 @@ export interface ExportContents {
     ignored: string[];
 }
 
-const GENERATED = new Set([API_DTS_FILE, TSCONFIG_FILE, PACKAGE_JSON_FILE, SCHEMA_FILE]);
+const GENERATED = new Set([API_DTS_FILE, TSCONFIG_FILE, PACKAGE_JSON_FILE, ESLINT_CONFIG_FILE, SCHEMA_FILE]);
 const isScriptFile = (p: string) => (/\.ts$/.test(p) && !/\.d\.ts$/.test(p)) || /\.tsx$/.test(p);
 
 /** the folders with nothing in them: no path and no other folder inside */

@@ -35,7 +35,7 @@ import { getStoresText, applyStoresText, storesTextParses, STORES_FILE } from ".
 import { storeOwner } from "./engine/stores";
 import { SETTINGS_FILE, SCHEMA_FILE } from "../shared/settingsJson";
 import { settingsSchemaJson } from "../shared/settingsSchema";
-import { API_DTS_FILE, BUILTIN_TYPINGS_ROOT, ESLINT_PLUGIN_FILE, PACKAGE_JSON_FILE, TSCONFIG_FILE, apiDtsText, eslintPluginText, packageJsonText, tsconfigText } from "../shared/generatedFiles";
+import { API_DTS_FILE, BUILTIN_TYPINGS_ROOT, ESLINT_CONFIG_FILE, ESLINT_PLUGIN_FILE, PACKAGE_JSON_FILE, TSCONFIG_FILE, apiDtsText, eslintConfigText, eslintPluginText, packageJsonText, tsconfigText } from "../shared/generatedFiles";
 import { broadcastToUi } from "./engine/logs";
 import { dlogLevel } from "../shared/debugLog";
 import { folderPathProblem, isConfigJsonPath, scriptFileName, scriptNameFromFile } from "../shared/scriptName";
@@ -1114,6 +1114,7 @@ async function ensureSupportFiles(): Promise<void> {
     }
     await ensureFile(TSCONFIG_FILE, tsconfigText());
     await ensureFile(PACKAGE_JSON_FILE, packageJsonText());
+    await ensureFile(ESLINT_CONFIG_FILE, eslintConfigText());
     await ensureEslintPlugin();
     await ensureSchemaFile();
     await ensurePackageTypingsFiles();

@@ -6,7 +6,7 @@
 
 export const REACT_BUILTINS = ["react", "react-dom", "react-dom/client", "react/jsx-runtime", "react/jsx-dev-runtime"] as const;
 export const VALTIO_BUILTINS = ["valtio", "valtio/vanilla", "valtio/utils", "valtio/vanilla/utils", "valtio/react", "valtio/react/utils"] as const;
-const ALL = new Set<string>([...REACT_BUILTINS, ...VALTIO_BUILTINS]);
+export const ALL_BUILTINS: readonly string[] = [...REACT_BUILTINS, ...VALTIO_BUILTINS];
 
 /** where the built-ins' typings (lib/builtin-types.json, keyed like node_modules) go under `root`, by tsconfig `paths` */
 export function builtinPaths(root: string): Record<string, string[]> {
@@ -21,15 +21,18 @@ export function builtinPaths(root: string): Record<string, string[]> {
     };
 }
 
-const ESM_SH = /^https:\/\/esm\.sh\/(?:v\d+\/)?(react|react-dom|valtio)(?:@[^/?#]*)?((?:\/[^?#]*)?)(?:[?#].*)?$/;
-
 /** the built-in a specifier names — bare (`valtio/react`) or an esm.sh URL of any version — or null */
 export function builtinSpec(spec: string): string | null {
-    if (ALL.has(spec)) return spec;
-    const m = ESM_SH.exec(spec);
+    return builtinSpecIn(spec, ALL_BUILTINS);
+}
+
+/** builtinSpec with the list passed in: self-contained, the ESLint plugin embeds its source (generatedFiles) */
+export function builtinSpecIn(spec: string, all: readonly string[]): string | null {
+    if (all.includes(spec)) return spec;
+    const m = /^https:\/\/esm\.sh\/(?:v\d+\/)?(react|react-dom|valtio)(?:@[^/?#]*)?((?:\/[^?#]*)?)(?:[?#].*)?$/.exec(spec);
     if (!m) return null;
     const name = m[1] + (m[2] || "").replace(/\/$/, "");
-    return ALL.has(name) ? name : null;
+    return all.includes(name) ? name : null;
 }
 
 /** does the built-in need React (rather than only valtio's vanilla parts)? */
