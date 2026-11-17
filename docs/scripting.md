@@ -1392,6 +1392,20 @@ tt.onPage("*://app.example.com/*", (ctx) => {
   });
   ```
 
+### Limits — shadow roots and iframes
+
+What `ctx.elements`, `ctx.mount`, `ctx.iframes` and `ctx.shortcut` can't
+reach yet:
+
+| Limit | Where | What to do |
+|---|---|---|
+| Closed shadow roots aren't found with `shadow: true`, only open ones | `onPage` in MV3 (Chrome) | Use `onSite`, which finds both |
+| `:focus`, `:hover`, `:checked` and values set by code aren't noticed by `ctx.elements(selector, fn)` | everywhere | Listen for events: `focusin`, `mouseover`, `change` |
+| Cross-origin iframes are skipped; `crossOrigin: true` throws | `ctx.iframes` | Only `ctx.shortcut` follows them for now |
+| Keys pressed right after an iframe's `document.open()` go to the page | `ctx.shortcut` with `iframes` | The shortcut listens again a moment later |
+| In a cross-origin iframe the key is always kept from the page (`"pass"` can't give it back) | `ctx.shortcut` with `crossOrigin: true` | Pick keys the iframe doesn't need |
+| Iframes inside a cross-origin iframe aren't followed, nor a page it wipes with `document.open()` | `ctx.shortcut` with `crossOrigin: true` | — |
+
 ### Component state across saves
 
 A save keeps the state of your components, nested ones too: a counter

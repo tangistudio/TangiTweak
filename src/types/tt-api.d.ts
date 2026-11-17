@@ -490,7 +490,9 @@ declare namespace TangiTweak {
          * `fn` runs again when the iframe loads a new document (the
          * previous `f.signal` aborts) and on each save. Its run ends when
          * the iframe goes away or this run ends. Cross-origin iframes are
-         * skipped: their document is out of reach.
+         * skipped: their document is out of reach. There's no
+         * `crossOrigin` option here yet (passing one throws); only
+         * `ctx.shortcut` follows them.
          *
          * Use `f.document`, not `document`, inside `fn`. Elements of the
          * iframe aren't `instanceof` the parent's classes (`HTMLElement`
@@ -532,9 +534,11 @@ declare namespace TangiTweak {
          * Google Docs take typing in a hidden iframe. A page the iframe
          * replaces with `document.open()` is followed too, though the page
          * can get the first keys before the shortcut listens again.
-         * `shadow`: iframes inside shadow roots too. `crossOrigin`: iframes
+         * `shadow`: iframes inside shadow roots too (closed ones not in
+         * MV3 `onPage`, see `ElementsOptions.shadow`). `crossOrigin`: iframes
          * from other sites too (`fn` still runs here); there `"pass"`
-         * doesn't give the key back, and their own iframes aren't followed.
+         * doesn't give the key back, and their own iframes and
+         * `document.open()` pages aren't followed.
          */
         iframes?: ShortcutIframes;
     }
