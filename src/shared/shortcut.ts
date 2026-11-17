@@ -7,6 +7,7 @@
  */
 
 import { scriptLogLine } from "./scriptLog";
+import { checkSelector, followIframes } from "./domElements";
 
 export type ShortcutPriority = "before-page" | "after-page";
 
@@ -224,9 +225,9 @@ export class ShortcutRegistry {
         return this.list.length;
     }
 
-    /** the entries `e` triggers: those of the script that owns these keys */
-    find(e: KeyLike): ShortcutEntry[] {
-        const hits = this.list.filter((x) => matchesCombo(x.combo, e));
+    /** the entries `e` triggers: those of the script that owns these keys (among those `only` keeps) */
+    find(e: KeyLike, only?: (x: ShortcutEntry) => boolean): ShortcutEntry[] {
+        const hits = this.list.filter((x) => matchesCombo(x.combo, e) && (!only || only(x)));
         const s = this.owner(hits);
         return hits.filter((x) => x.s === s);
     }
@@ -278,12 +279,40 @@ export function watchShortcuts(win: Window, find: (e: KeyboardEvent) => Shortcut
     };
 }
 
+/** `ctx.shortcut`'s `iframes` option */
+export type ShortcutIframes = boolean | string | { selector?: string; crossOrigin?: boolean; shadow?: boolean };
+
+export interface ShortcutOptions {
+    priority?: ShortcutPriority;
+    iframes?: ShortcutIframes;
+}
+
+/** which child iframes a shortcut also listens in (null: none) */
+export interface ShortcutFrames {
+    selector?: string;
+    shadow: boolean;
+    crossOrigin: boolean;
+}
+
 /** check `ctx.shortcut`'s function and options; returns the priority */
 export function shortcutPriority(fn: unknown, opts?: { priority?: ShortcutPriority }): ShortcutPriority {
     if (typeof fn !== "function") throw new TypeError("ctx.shortcut: the second argument must be a function");
+    if (opts !== undefined && (opts === null || typeof opts !== "object")) throw new TypeError("ctx.shortcut: the options must be an object");
     const priority = opts?.priority ?? "before-page";
     if (priority !== "before-page" && priority !== "after-page") throw new TypeError(`ctx.shortcut: priority must be "before-page" or "after-page"`);
     return priority;
+}
+
+/** check `ctx.shortcut`'s `iframes` option (`doc`: checks the selector) */
+export function shortcutFrames(opts: ShortcutOptions | undefined, doc?: Document): ShortcutFrames | null {
+    const v = opts?.iframes;
+    if (v === undefined || v === false) return null;
+    if (v === true) return { shadow: false, crossOrigin: false };
+    const o = typeof v === "string" ? { selector: v } : v;
+    if (!o || typeof o !== "object") throw new TypeError("ctx.shortcut: iframes must be true, a selector or { selector, crossOrigin, shadow }");
+    if (o.selector !== undefined && typeof o.selector !== "string") throw new TypeError("ctx.shortcut: iframes.selector must be a string");
+    if (o.selector !== undefined && doc) checkSelector(doc, o.selector, "ctx.shortcut");
+    return { selector: o.selector, shadow: !!o.shadow, crossOrigin: !!o.crossOrigin };
 }
 
 /**
@@ -297,9 +326,10 @@ export class FrameShortcuts {
     private readonly fns = new Map<string, () => unknown>();
     private ids = 0;
     private unwatch: (() => void) | null;
+    private readonly frames: ShortcutWindows;
 
     constructor(
-        win: Window,
+        private readonly win: Window,
         private readonly opts: {
             name: (s: string) => string;
             error: (s: string, e: unknown) => void;
@@ -310,12 +340,19 @@ export class FrameShortcuts {
         }
     ) {
         this.reg = new ShortcutRegistry(opts.mac ?? isMacPlatform(), opts.rank);
-        this.unwatch = watchShortcuts(win, (e) => (this.reg.size ? this.reg.find(e) : []), (hits) => hits.map((h) => this.fire(h)).includes(true), { trusted: opts.trusted });
+        this.unwatch = watchShortcuts(win, (e) => (this.reg.size ? this.reg.find(e) : []), (hits) => this.fireAll(hits), { trusted: opts.trusted });
+        this.frames = new ShortcutWindows((e, only) => this.reg.find(e, only), (hits) => this.fireAll(hits), opts.trusted);
     }
 
-    /** register for script `s` until the returned function runs or `signal` aborts */
-    add(s: string, keys: string, fn: () => unknown, opts: { priority?: ShortcutPriority } | undefined, signal: AbortSignal): () => void {
+    /**
+     * register for script `s` until the returned function runs or `signal`
+     * aborts; `opts.iframes`: keys pressed in (same-origin) child iframes
+     * count too, nested ones and pages a document.open() put in included;
+     * `win`: a same-origin child window to listen in instead (`f.shortcut`)
+     */
+    add(s: string, keys: string, fn: () => unknown, opts: ShortcutOptions | undefined, signal: AbortSignal, win: Window = this.win): () => void {
         const priority = shortcutPriority(fn, opts);
+        const frames = shortcutFrames(opts, win.document);
         // a shortcut param the user cleared
         if (keys === "" || signal.aborted) return () => {};
         const id = String(++this.ids);
@@ -324,10 +361,18 @@ export class FrameShortcuts {
         const lost = (x: string) => this.opts.warn(x, scriptLogLine(this.opts.name(x), "onPage", `shortcut ${keys}: "${this.opts.name(r.taken ?? s)}" (earlier in the list) uses these keys too and keeps them`));
         if (r.taken) lost(s);
         if (r.displaced) lost(r.displaced);
+        const onError = (e: unknown) => this.opts.error(s, e);
+        const uncover = win === this.win ? () => {} : this.frames.cover(win, s, id);
+        const unfollow = frames ? this.frames.follow(win.document, s, id, frames, onError) : () => {};
+        const unframe = () => {
+            unfollow();
+            uncover();
+        };
         const off = () => {
             signal.removeEventListener("abort", off);
             if (!this.fns.delete(id)) return;
             this.reg.remove(s, id);
+            unframe();
         };
         signal.addEventListener("abort", off, { once: true });
         return off;
@@ -340,11 +385,79 @@ export class FrameShortcuts {
     stop(): void {
         this.unwatch?.();
         this.unwatch = null;
+        this.frames.stop();
+    }
+
+    private fireAll(hits: ShortcutEntry[]): boolean {
+        return hits.map((h) => this.fire(h)).includes(true);
     }
 
     /** false: the function returned "pass" */
     private fire(h: ShortcutEntry): boolean {
         const fn = this.fns.get(h.id);
         return fn ? runShortcut(fn, (e) => this.opts.error(h.s, e)) : false;
+    }
+}
+
+/**
+ * Child windows shortcuts also listen in (`iframes`, `f.shortcut`): each
+ * window gets its own listeners, matching only the shortcuts that cover it.
+ */
+export class ShortcutWindows {
+    private readonly covered = new Map<Window, { ids: Map<string, number>; root: Element | null; off: () => void }>();
+
+    constructor(
+        private readonly find: (e: KeyboardEvent, only: (x: ShortcutEntry) => boolean) => ShortcutEntry[],
+        private readonly fire: (hits: ShortcutEntry[], e: KeyboardEvent) => boolean | void,
+        private readonly trusted?: (e: KeyboardEvent) => boolean
+    ) {}
+
+    /** listen for script `s`'s shortcut `id` in the iframes of `doc` (and theirs) */
+    follow(doc: Document, s: string, id: string, frames: ShortcutFrames, onError: (e: unknown) => void): () => void {
+        return followIframes(
+            doc,
+            frames,
+            (f) => {
+                const uncover = this.cover(f.window, s, id);
+                const nested = this.follow(f.document, s, id, frames, onError);
+                return () => {
+                    nested();
+                    uncover();
+                };
+            },
+            onError
+        );
+    }
+
+    /** listen for script `s`'s shortcut `id` in `w` */
+    cover(w: Window, s: string, entry: string): () => void {
+        const id = s + "\n" + entry;
+        let c = this.covered.get(w);
+        if (!c) this.covered.set(w, (c = { ids: new Map(), root: null, off: () => {} }));
+        const cv = c;
+        cv.ids.set(id, (cv.ids.get(id) ?? 0) + 1);
+        // a new page (or a document.open()) dropped our listeners
+        const root = w.document.documentElement;
+        if (cv.root !== root) {
+            cv.off();
+            cv.root = root;
+            cv.off = watchShortcuts(w, (e) => this.find(e, (x) => cv.ids.has(x.s + "\n" + x.id)), this.fire, { trusted: this.trusted });
+        }
+        let done = false;
+        return () => {
+            if (done) return;
+            done = true;
+            const n = (cv.ids.get(id) ?? 1) - 1;
+            if (n) cv.ids.set(id, n);
+            else cv.ids.delete(id);
+            if (cv.ids.size || this.covered.get(w) !== cv) return;
+            cv.off();
+            this.covered.delete(w);
+        };
+    }
+
+    stop(): void {
+        for (const c of this.covered.values()) c.off();
+        this.covered.clear();
     }
 }

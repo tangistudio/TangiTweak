@@ -22,7 +22,8 @@ import { builtinSpec } from "./builtinSpecs";
 import { proxy } from "valtio/vanilla";
 import { ReplicaHub } from "./storeReplica";
 import { claimStoreName, storePersist } from "./storeOps";
-import { closeOf, codeOnly } from "./codeScan";
+import { codeOnly } from "./codeScan";
+import { analyzeScript, lintLineWarning, rulesMessage, type LintAnalysis, type NetAnalysis } from "./scriptLint";
 import type { StorePersist, WireRequest, WireResponse } from "./wire";
 import { fromWireResponse, splitFetchInit, toWireRequest, type WtFetchInit } from "./ttFetch";
 
@@ -862,138 +863,86 @@ export interface SiteUse {
 
 /**
  * Per `tt.onSite(` call, the stores (`tt.pageStore` / `tt.tabStore` / `tt.globalStore`)
- * and handles its arguments use — by the top-level variables they're
- * bound to, or the calls themselves. Only calls that use any. A
- * lightweight scan, not a parser: a local that shadows a name counts too.
+ * and handles its handler uses — by the variables they're bound to, or the
+ * calls themselves — including in the outside functions it calls or
+ * passes (scriptLint: scopes resolved, so a local of the same name doesn't
+ * count). Only calls that use any.
  */
 export function onSiteUses(code: string): SiteUse[] {
-    const src = codeOnly(code);
-    const bound = new Map<string, "pageStore" | "tabStore" | "globalStore" | "handles">();
-    for (const m of src.matchAll(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=;]+)?=\s*tt\s*\.\s*(pageStore|tabStore|globalStore|onSite|onPage|onOverlay)\b/g))
-        bound.set(m[1], m[2] === "pageStore" || m[2] === "tabStore" || m[2] === "globalStore" ? m[2] : "handles");
+    const a = analyzeScript(code);
+    if (!a) return [];
     const out: SiteUse[] = [];
-    let nth = 0;
-    for (const m of src.matchAll(/(?<![\w$.])tt\s*\.\s*onSite\s*(?:<[^()]*>\s*)?\(/g)) {
-        const from = m.index! + m[0].length;
-        const args = src.slice(from, closeOf(src, from) - 1);
-        const tabStore: string[] = [];
-        const use: SiteUse = { nth: nth++, pageStore: [], globalStore: [], handles: [] };
-        for (const [name, kind] of bound) {
-            if (!new RegExp(`(?<![\\w$.])${name.replace(/\$/g, "\\$")}(?![\\w$]|\\s*:(?!:))`).test(args)) continue;
-            if (kind === "tabStore") tabStore.push(name);
-            else use[kind].push(name);
-        }
-        for (const d of args.matchAll(/(?<![\w$.])tt\s*\.\s*(pageStore|tabStore|globalStore)\b/g)) {
-            const kind = d[1] as "pageStore" | "tabStore" | "globalStore";
-            const list = kind === "tabStore" ? tabStore : use[kind];
-            if (!list.includes(`tt.${kind}`)) list.push(`tt.${kind}`);
-        }
-        if (tabStore.length) use.tabStore = tabStore;
-        if (use.pageStore.length || tabStore.length || use.globalStore.length || use.handles.length) out.push(use);
+    const names = (u: { name: string }[]) => u.map((x) => x.name);
+    for (const s of a.sites) {
+        const use: SiteUse = { nth: s.nth, pageStore: names(s.pageStore), globalStore: names(s.globalStore), handles: names(s.handles) };
+        if (s.tabStore.length) use.tabStore = names(s.tabStore);
+        if (use.pageStore.length || s.tabStore.length || use.globalStore.length || use.handles.length) out.push(use);
     }
     return out;
 }
 
-
-/** what a `rules` handler might do per request, and what it's for (rulesProblems) */
-const RULES_SIDE_EFFECTS: { re: RegExp; does: string }[] = [
-    { re: /(?<![\w$.])console\s*\.\s*(?:log|info|warn|error|debug|trace|table|dir)\b(?=\s*\()/g, does: "log each request" },
-    { re: /(?<![\w$.])tt\s*\.\s*log\b(?=\s*\()/g, does: "log each request" },
-    { re: /(?<![\w$.])(?:tt\s*\.\s*)?fetch\b(?=\s*\()/g, does: "fetch for each request" },
-    { re: /(?<![\w$.])(?:setTimeout|setInterval)\b(?=\s*\()/g, does: "run code for each request" },
-];
+/** each net route's registration call in the analysis: the first `tt.<api>(` on its line, once per call (a loop registering several routes from one call: warn once) */
+function netCalls(a: LintAnalysis, routes: RouteMeta[], keep: (r: RouteMeta) => boolean): { r: RouteMeta; call: NetAnalysis }[] {
+    const out: { r: RouteMeta; call: NetAnalysis }[] = [];
+    const seen = new Set<NetAnalysis>();
+    for (const r of routes) {
+        if (!keep(r) || !r.line) continue;
+        const call = a.nets.find((n) => n.api === (r.api || r.kind) && n.line === r.line);
+        if (!call || seen.has(call)) continue;
+        seen.add(call);
+        out.push({ r, call });
+    }
+    return out;
+}
 
 /**
  * Warnings ("onRequest #N: …", Problems view) for code in `rules` handlers
  * that looks meant to run per request — logging, fetching, timers, store
- * writes. A rules handler runs once, when scripts load, to compute a
- * fixed browser rule; the browser applies the rule itself, so that code
- * never runs for a request. Handlers written inline in the registration
- * only (a lightweight scan, not a parser).
+ * writes (scriptLint's no-rules-side-effects, the outside functions a
+ * handler calls included). A rules handler runs once, when scripts load,
+ * to compute a fixed browser rule; the browser applies the rule itself, so
+ * that code never runs for a request.
  */
 export function rulesProblems(code: string, routes: RouteMeta[]): string[] {
-    const rules = routes.filter((r) => r.strategy === "rules" && r.line);
-    if (!rules.length) return [];
-    const src = codeOnly(code);
-    const starts = [0];
-    for (let i = 0; i < src.length; i++) if (src[i] === "\n") starts.push(i + 1);
-    const stores = new Set<string>();
-    for (const m of src.matchAll(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=;]+)?=\s*tt\s*\.\s*(?:pageStore|tabStore|globalStore)\b/g)) stores.add(m[1]);
+    if (!routes.some((r) => r.strategy === "rules" && r.line)) return [];
+    const a = analyzeScript(code);
+    if (!a) return [];
     const out: string[] = [];
-    const seen = new Set<string>();
-    for (const r of rules) {
-        const lineAt = starts[r.line! - 1];
-        if (lineAt === undefined) continue;
-        const call = new RegExp(`(?<![\\w$.])tt\\s*\\.\\s*${r.kind}\\s*(?:<[^()]*>\\s*)?\\(`, "g");
-        call.lastIndex = lineAt;
-        const m = call.exec(src);
-        if (!m || m.index >= (starts[r.line!] ?? src.length)) continue;
-        // a loop registering several routes from one call: warn once
-        const key = `${m.index}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        const from = m.index + m[0].length;
-        const args = src.slice(from, closeOf(src, from) - 1);
-        const found: { at: number; text: string; does: string }[] = [];
-        for (const { re, does } of RULES_SIDE_EFFECTS) for (const e of args.matchAll(re)) found.push({ at: e.index!, text: e[0].replace(/\s+/g, ""), does });
-        for (const name of stores) {
-            const esc = name.replace(/\$/g, "\\$");
-            const write = new RegExp(`(?<![\\w$.])${esc}\\s*(?:\\.\\s*[A-Za-z_$][\\w$]*|\\[[^\\]]*\\])\\s*(?:[-+*/%&|^]|\\?\\?|&&|\\|\\||<<|>>>?|\\*\\*)?=(?!=)|(?:\\+\\+|--)\\s*${esc}\\b|(?<![\\w$.])${esc}\\s*\\.\\s*[A-Za-z_$][\\w$]*\\s*(?:\\+\\+|--)`, "g");
-            for (const e of args.matchAll(write)) found.push({ at: e.index!, text: name, does: "update the store for each request" });
-        }
-        for (const f of found.sort((a, b) => a.at - b.at))
-            out.push(
-                `${routeLabel(r)}: \`${f.text}\` runs once, when scripts load — not for each request: on strategy "rules" the handler only computes a fixed rule that the browser then applies by itself. To ${f.does}, use a per-request strategy ("extension", "debugger" or "helper")`
-            );
-    }
+    for (const { r, call } of netCalls(a, routes, (r) => r.strategy === "rules")) for (const e of call.effects) out.push(rulesMessage(routeLabel(r), e.text, e.does));
     return out;
 }
 
 /**
  * Network handlers (by their registration line, as rulesProblems) that use
- * `tt.siteStore` — directly or through a top-level variable bound to it:
+ * `tt.siteStore` — directly or through a variable bound to it:
  * "onRequest #N: uses `x` — …" (an error in the Problems view). They have
  * no page, so it throws there.
  */
-function netSiteStoreProblems(src: string, routes: RouteMeta[]): string[] {
-    const bound: string[] = [];
-    for (const m of src.matchAll(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=;]+)?=\s*tt\s*\.\s*siteStore\b/g)) bound.push(m[1]);
-    const starts = [0];
-    for (let i = 0; i < src.length; i++) if (src[i] === "\n") starts.push(i + 1);
+function netSiteStoreProblems(a: LintAnalysis, routes: RouteMeta[]): string[] {
     const out: string[] = [];
-    const seen = new Set<number>();
-    for (const r of routes) {
-        if (!isNetKind(r.kind) || !r.line) continue;
-        const lineAt = starts[r.line - 1];
-        if (lineAt === undefined) continue;
-        const call = new RegExp(`(?<![\\w$.])tt\\s*\\.\\s*${r.api || r.kind}\\s*(?:<[^()]*>\\s*)?\\(`, "g");
-        call.lastIndex = lineAt;
-        const m = call.exec(src);
-        if (!m || m.index >= (starts[r.line] ?? src.length) || seen.has(m.index)) continue;
-        seen.add(m.index);
-        const from = m.index + m[0].length;
-        const args = src.slice(from, closeOf(src, from) - 1);
-        const used = bound.filter((name) => new RegExp(`(?<![\\w$.])${name.replace(/\$/g, "\\$")}(?![\\w$]|\\s*:(?!:))`).test(args));
-        if (/(?<![\w$.])tt\s*\.\s*siteStore\b/.test(args)) used.push("tt.siteStore");
-        if (used.length) out.push(`${routeLabel(r)}: uses ${used.map((x) => `\`${x}\``).join(", ")} — ${NO_SITE_STORE}`);
-    }
+    for (const { r, call } of netCalls(a, routes, (r) => isNetKind(r.kind)))
+        if (call.siteStores.length) out.push(`${routeLabel(r)}: uses ${call.siteStores.map((x) => `\`${x.name}\``).join(", ")} — ${NO_SITE_STORE}`);
     return out;
 }
 
 /**
  * Warnings ("onSite #N: …", Problems view) for onSite handlers that use a
  * store or a handle: in the site's world stores throw and handle calls
- * throw (SiteCannotCallError). And errors for network handlers that use
- * `tt.siteStore` (which needs a page).
+ * throw (SiteCannotCallError). Errors for network handlers that use
+ * `tt.siteStore` (which needs a page). And scriptLint's static selector and
+ * shortcut checks, as "line N (error|warning): …".
  */
 export function siteProblems(code: string, routes: RouteMeta[]): string[] {
-    const net = /\bsiteStore\b/.test(code) ? netSiteStoreProblems(codeOnly(code), routes) : [];
-    if (!/\bonSite\b/.test(code)) return net;
-    const uses = onSiteUses(code);
-    if (!uses.length) return net;
+    const site = /\bonSite\b/.test(code);
+    const net = /\bsiteStore\b/.test(code);
+    const dom = /\.\s*(?:elements|mount|iframes|shortcut)\b/.test(code);
+    if (!site && !net && !dom) return [];
+    const a = analyzeScript(code);
+    if (!a) return [];
+    const out: string[] = net ? netSiteStoreProblems(a, routes) : [];
+    const uses = site ? onSiteUses(code) : [];
     const names = (n: string[]) => n.map((x) => `\`${x}\``).join(", ");
-    const out: string[] = [...net];
-    for (const r of routes) {
+    for (const r of uses.length ? routes : []) {
         if (r.kind !== "onDocument" || placeOf(r) !== "onSite" || r.lib !== undefined) continue;
         const u = uses.find((u) => u.nth === (r.n ?? r.index));
         if (!u) continue;
@@ -1002,5 +951,6 @@ export function siteProblems(code: string, routes: RouteMeta[]): string[] {
         if (stores.length) out.push(`${at}uses ${names(stores)} — ${SITE_NO_STORES}`);
         if (u.handles.length) out.push(`${at}uses ${names(u.handles)} — ${SITE_NO_HANDLES}`);
     }
+    for (const d of a.checks) out.push(lintLineWarning(d));
     return out;
 }

@@ -10,6 +10,7 @@ import { builtinSpec, jsxElementAt } from "../shared/builtinSpecs";
 import { PACKAGE_MODULES_KEY, PACKAGE_TYPINGS_KEY, TYPINGS_ROOT, type PackageStatus, type StoredTypings } from "../shared/packageImports";
 import { coveredMissingModule, dependantsOf, importSpecs, isImageDataPath, isMarkdownPath, isSvgPath, packageImportMarks, packageUrls } from "../shared/scriptImports";
 import { isTsxName } from "../shared/scriptName";
+import { scriptLint } from "../shared/scriptLint";
 import { baseName } from "./explorerTree";
 import { jsonDeclPath, jsonModuleDts } from "./jsonTypes";
 import { BUILTIN_ROOT } from "./monacoSetup";
@@ -19,6 +20,7 @@ export const UNPINNED = "unpinned-import";
 export const JSX_OWNER = "tt-jsx";
 export const JSX_IN_TS = "jsx-in-ts";
 export const TS_OWNER = "typescript";
+export const LINT_OWNER = "tt-lint";
 
 export interface TsPosition {
     lineNumber: number;
@@ -318,6 +320,32 @@ export function createTsWorkspace(host: TsWorkspaceHost): TsWorkspace {
         host.setModelMarkers(m, IMPORT_OWNER, markers);
     }
 
+    /** scriptLint's diagnostics (world access, rules side effects, selectors and shortcuts), whole-line: lint sees transpiled code, which keeps lines but not columns */
+    function updateLintMarkers(m: TsModelLike): void {
+        if (m.isDisposed()) return;
+        const code = m.getValue();
+        const found = scriptLint(code);
+        const had = host.getModelMarkers(m.uri, LINT_OWNER);
+        if (!found.length && !had.length) return;
+        const lines = code.split("\n");
+        const markers: TsMarkerData[] = found.map((d) => {
+            const text = lines[d.line - 1] ?? "";
+            const startColumn = text.length - text.trimStart().length + 1;
+            return {
+                severity: d.severity === "error" ? sev.Error : sev.Warning,
+                source: "tangitweak",
+                code: d.rule,
+                message: d.message,
+                startLineNumber: d.line,
+                startColumn,
+                endLineNumber: d.line,
+                endColumn: Math.max(text.trimEnd().length + 1, startColumn + 1),
+            };
+        });
+        if (markers.map(markerKey).join("\n") === had.map(markerKey).join("\n")) return;
+        host.setModelMarkers(m, LINT_OWNER, markers);
+    }
+
     function updateJsxMarker(m: TsModelLike, scriptName: string): void {
         if (m.isDisposed()) return;
         const at = !isTsxName(scriptName) ? jsxElementAt(m.getValue()) : -1;
@@ -437,6 +465,7 @@ export function createTsWorkspace(host: TsWorkspaceHost): TsWorkspace {
                 entry.syncedVersion = m.getVersionId();
                 updateJsxMarker(m, entry.name);
                 updateImportMarkers(m);
+                updateLintMarkers(m);
                 const nonReady = packageUrls(m.getValue()).filter((u) => statusOf(u)?.state !== "ready");
                 if (nonReady.length) pendingStatusRefresh = fetchStatuses(nonReady);
                 const live = liveScripts();
@@ -679,6 +708,7 @@ export function createTsWorkspace(host: TsWorkspaceHost): TsWorkspace {
             for (const { model, name } of markerRefresh) {
                 updateJsxMarker(model, name);
                 updateImportMarkers(model);
+                updateLintMarkers(model);
                 for (const u of packageUrls(model.getValue())) {
                     if (statusOf(u)?.state !== "ready") urlsToQuery.add(u);
                 }

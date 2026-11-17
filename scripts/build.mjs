@@ -116,7 +116,7 @@ function entriesFor(dist, mv3) {
  * the bridge injects hook.js with a <script> tag there; MV3 and Firefox
  * (128+) get it here.
  */
-const HOOK_MAIN = { matches: ["*://*/*"], js: ["hook.js"], all_frames: true, run_at: "document_start", world: "MAIN" };
+const HOOK_MAIN = { matches: ["*://*/*"], js: ["hook.js"], all_frames: true, match_about_blank: true, match_origin_as_fallback: true, run_at: "document_start", world: "MAIN" };
 
 /** manifest.json → Firefox manifest object */
 function firefoxManifest(mv2) {

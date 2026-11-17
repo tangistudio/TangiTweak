@@ -1279,6 +1279,36 @@ tt.onPage("*://app.example.com/*", (ctx) => {
 - **`ctx.style(css)`** adds one `<style>` to the document's `<head>` per
   distinct CSS, copied into each `ctx.mount`'s shadow root; removed once no
   run adds it.
+- **`ctx.elements(selector, opts?)`** returns the elements `selector`
+  matches now, in page order. **`ctx.elements(selector, fn, opts?)`** runs
+  `fn(el, signal)` on each match, now and as matches appear. When one
+  leaves (removed, or it no longer matches) its `signal` aborts and the
+  function `fn` returned, if any, runs. On a save every match leaves and
+  arrives again with the new `fn`. It returns a function that stops it.
+  - **`first: true`**: only the first match; with `fn`, it moves to the
+    next match when that one leaves.
+  - **`shadow: true`**: also look inside shadow roots. Each part of the
+    selector matches within one root, so `"x-app .bar"` can't reach into
+    `<x-app>`'s shadow root; write `".bar"`. Closed shadow roots are found
+    too in `onSite` and in MV2 (Firefox) `onPage`; in MV3 (Chrome)
+    `onPage` only open ones are.
+  - **`root`**: where to look (an element, document or shadow root).
+  - **`key`**: tells apart two `fn` calls with the same selector.
+  - What it notices: elements added or removed, and changes to the
+    attributes the selector uses (`.on` → `class`). Focus, hover and
+    values set by code (`input.value`, `checkbox.checked`) don't change
+    attributes, so `:focus`, `:hover` and `:checked` aren't followed:
+    listen for `focusin`, `mouseover` or `change` instead.
+  - Your own `ctx.mount` UI never matches.
+
+  ```ts
+  tt.onPage("*://video.example.com/*", (ctx) => {
+      ctx.elements("video", (video, signal) => {
+          video.playbackRate = 2;
+          video.addEventListener("ratechange", () => (video.playbackRate = 2), { signal });
+      }, { shadow: true });
+  });
+  ```
 - **`ctx.mount(ui)` / `ctx.mount(target, ui, opts?)`** renders JSX (a
   `.tsx` script; without React it throws `ctx.mount needs React`) with the
   [built-in React](#built-in-valtio-and-react). A save renders into the
@@ -1302,6 +1332,8 @@ tt.onPage("*://app.example.com/*", (ctx) => {
     and `"overlay"` covers it (`position: absolute; inset: 0`). Clicks pass
     through an overlay to the page except on your UI, and a `static` match
     becomes `position: relative` while the overlay is there.
+  - **`shadow: true`** also mounts on matches inside shadow roots (as in
+    `ctx.elements`).
   - **`autoRestore: true`** puts the UI back when the page removes it (a
     framework re-rendering the match's children). If the page keeps
     removing it, more than 20 times a second, it stops and Problems says so
@@ -1325,7 +1357,7 @@ tt.onPage("*://app.example.com/*", (ctx) => {
       ctx.mount("#avatar", (el) => <Badge user={el.title} />, { position: "overlay", autoRestore: true });
   });
   ```
-- **`ctx.iframes(fn)` / `ctx.iframes(selector, fn)`** runs `fn` in every
+- **`ctx.iframes(fn, opts?)` / `ctx.iframes(selector, fn, opts?)`** runs `fn` in every
   same-origin iframe of the document (or only those `selector` matches),
   now and as they're added. It also reaches iframes your script may not
   run in itself, such as the `about:blank` and `srcdoc` frames that
@@ -1345,6 +1377,10 @@ tt.onPage("*://app.example.com/*", (ctx) => {
     `f.document`. The iframe's elements aren't `instanceof` the parent's
     classes (`HTMLElement` and the like): use `f.window.HTMLElement`, or
     check `tagName`.
+  - **`shadow: true`** also follows iframes inside shadow roots.
+  - A page the iframe swaps in with `document.open()` (no load event)
+    counts as a new document too: `fn` runs again.
+  - In `onPage`, `f.shortcut` listens for keys pressed in that iframe.
 
   ```ts
   tt.onPage("*://mail.example.com/*", (ctx) => {
@@ -1537,6 +1573,21 @@ tt.onOverlay("*://app.example.com/*", (ctx) => {
   Playwriter) removes overlays. Shortcuts are hot keys: they work at all
   times, also while typing in a text field or editable area. Only events
   the page makes up itself don't count.
+- **Iframes.** Keys pressed inside an iframe don't reach the page around
+  it. Editors such as Google Docs take typing in a hidden iframe, so add
+  `{ iframes: true }` to count keys pressed in child iframes too (nested
+  ones included), or a selector, `{ iframes: "iframe.editor" }`, for some
+  of them. `{ iframes: { shadow: true } }` also finds iframes inside
+  shadow roots. When an iframe wipes its page with `document.open()`, the
+  shortcut listens again right after; keys pressed in that moment go to
+  the page.
+
+  ```ts
+  tt.onPage("*://docs.google.com/*", (ctx) => {
+      if (window.top !== window) return;
+      ctx.shortcut("Alt+Shift+R", renameTab, { iframes: true });
+  });
+  ```
 - **Several scripts.** If two overlays use the same keys, the one higher
   in the script list gets them; the other's Log says so. The same goes
   for two `onPage` scripts in MV2 builds. In MV3 each `onPage` script

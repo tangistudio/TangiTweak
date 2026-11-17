@@ -320,6 +320,61 @@ declare namespace TangiTweak {
          * ctx.style(`.ad-banner { display: none !important }`);
          */
         style(css: string): void;
+        /**
+         * The elements `selector` matches now, in page order. Your own
+         * `ctx.mount` UI is never included.
+         *
+         * @example
+         * const save = ctx.elements("button.save", { first: true })[0];
+         * for (const img of ctx.elements("img", { shadow: true })) img.loading = "lazy";
+         */
+        elements<K extends keyof HTMLElementTagNameMap>(selector: K, opts?: ElementsOptions): HTMLElementTagNameMap[K][];
+        elements<E extends Element = Element>(selector: string, opts?: ElementsOptions): E[];
+        /**
+         * Run `fn` on each element `selector` matches, now and as they're
+         * added. When one leaves (removed, or it stops matching) its `signal`
+         * aborts and the function `fn` returned runs. On a save every match
+         * leaves and arrives again with the new `fn`; it all ends with the run.
+         *
+         * Changes are seen when elements are added or removed, or when an
+         * attribute the selector uses changes. Focus, hover and properties
+         * set by code (`input.value`) don't change attributes: for
+         * `:focus`, `:hover` or `:checked` listen to events instead.
+         *
+         * Returns a function that stops it early.
+         *
+         * @example
+         * ctx.elements("video", (video, signal) => {
+         *     video.playbackRate = 2;
+         *     video.addEventListener("ratechange", () => (video.playbackRate = 2), { signal });
+         *     return () => tt.log("a video left");
+         * }, { shadow: true });
+         */
+        elements<K extends keyof HTMLElementTagNameMap>(selector: K, fn: (el: HTMLElementTagNameMap[K], signal: AbortSignal) => (() => void) | void, opts?: ObserveOptions): () => void;
+        elements<E extends Element = Element>(selector: string, fn: (el: E, signal: AbortSignal) => (() => void) | void, opts?: ObserveOptions): () => void;
+    }
+
+    /** Options for `ctx.elements(selector, opts)`. */
+    interface ElementsOptions {
+        /**
+         * Look inside shadow roots too. Each part of the selector must
+         * match within one root: `"x-app .bar"` can't cross into
+         * `<x-app>`'s shadow root, but `".bar"` finds it there.
+         *
+         * Closed roots are found too in `onSite` and in MV2 (Firefox)
+         * `onPage`; in MV3 (Chrome) `onPage` only open roots are.
+         */
+        shadow?: boolean;
+        /** Only the first match (with `fn`: it moves to the next when that one leaves). */
+        first?: boolean;
+        /** Where to look (default: the document). */
+        root?: Document | Element | ShadowRoot;
+    }
+
+    /** Options for `ctx.elements(selector, fn, opts)`. */
+    interface ObserveOptions extends ElementsOptions {
+        /** Tells apart two calls with the same selector in one handler. */
+        key?: string;
     }
 
     /** Where and how `ctx.mount(target, ui, opts)` places its UI. */
@@ -343,6 +398,8 @@ declare namespace TangiTweak {
          * error in Problems, if the page keeps removing it (a fight).
          */
         autoRestore?: boolean;
+        /** Also mount on matches inside shadow roots (see `ElementsOptions.shadow`). */
+        shadow?: boolean;
     }
 
     /** What `onPage` and `onOverlay` ctx add: React UI and handle loops. */
@@ -416,7 +473,7 @@ declare namespace TangiTweak {
     interface SiteIframeCtx extends RunCtx, IframeInfo, IframesCtx<SiteIframeCtx> {}
 
     /** What an `onPage` handler's `ctx.iframes` passes `fn`: a run in one iframe. */
-    interface PageIframeCtx extends TrustedRunCtx, IframeInfo, IframesCtx<PageIframeCtx> {}
+    interface PageIframeCtx extends TrustedRunCtx, IframeInfo, IframesCtx<PageIframeCtx>, Pick<PageCtx, "shortcut"> {}
 
     interface IframesCtx<F> {
         /**
@@ -449,8 +506,36 @@ declare namespace TangiTweak {
          *     });
          * });
          */
-        iframes(fn: (f: F) => unknown): () => void;
-        iframes(selector: string, fn: (f: F) => unknown): () => void;
+        iframes(fn: (f: F) => unknown, opts?: IframeOptions): () => void;
+        iframes(selector: string, fn: (f: F) => unknown, opts?: IframeOptions): () => void;
+    }
+
+    /** Options for `ctx.iframes`. */
+    interface IframeOptions {
+        /** Also follow iframes inside shadow roots (see `ElementsOptions.shadow`). */
+        shadow?: boolean;
+    }
+
+    /**
+     * Which iframes a shortcut also listens in: `true` (all), a selector,
+     * or `{ selector, shadow, crossOrigin }`.
+     */
+    type ShortcutIframes = boolean | string | { selector?: string; shadow?: boolean; crossOrigin?: boolean };
+
+    /** Options for `ctx.shortcut`. */
+    interface ShortcutOptions {
+        /** `"before-page"` (default): beat the page; `"after-page"`: only if the page didn't handle the key. */
+        priority?: "before-page" | "after-page";
+        /**
+         * Also count keys pressed in child iframes (nested ones too, the
+         * same selector picking at each level): rich-text editors such as
+         * Google Docs take typing in a hidden iframe. A page the iframe
+         * replaces with `document.open()` is followed too, though the page
+         * can get the first keys before the shortcut listens again.
+         * `shadow`: iframes inside shadow roots too. `crossOrigin`: iframes
+         * from other sites too; there `"pass"` doesn't give the key back.
+         */
+        iframes?: ShortcutIframes;
     }
 
     /** The context an `onPage` handler gets (`url` is the frame's URL). */
@@ -469,7 +554,8 @@ declare namespace TangiTweak {
          * Returns a function that removes it (it's also removed when the
          * run ends).
          *
-         * onPage: keys pressed in the frame the handler runs in. Overlay:
+         * onPage: keys pressed in the frame the handler runs in (`f.shortcut`
+         * in `ctx.iframes`: in that iframe; `iframes`: in child iframes too). Overlay:
          * keys pressed in the page or in the overlay. `"pass"` works for
          * keys pressed in the overlay only: a page key reaches the overlay
          * after the page's turn, so it stays consumed.
@@ -482,7 +568,7 @@ declare namespace TangiTweak {
          *     ctx.shortcut("Esc", () => (box.hidden ? "pass" : void (box.hidden = true)));
          * });
          */
-        shortcut(keys: string, fn: () => unknown, opts?: { priority?: "before-page" | "after-page" }): () => void;
+        shortcut(keys: string, fn: () => unknown, opts?: ShortcutOptions): () => void;
     }
 
     /** The context an `onOverlay` handler gets (`url` is the page's URL). */

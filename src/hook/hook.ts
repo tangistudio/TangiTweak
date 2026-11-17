@@ -16,6 +16,7 @@ import { makeLibRequire, type ShippedLib } from "../shared/scriptImports";
 import { routeMatches, takesBinary, type DocumentWhen, type RouteMeta } from "../shared/route";
 import { makePageShim, domHandlersFor, scheduleDocument, fireRun, type PageDocumentHandler } from "../shared/pageShim";
 import { ScriptLife, type Generation } from "../shared/runLifecycle";
+import { noteShadowRoot } from "../shared/domElements";
 import { CANCEL_FN, Exposer, isRpcCall, NOT_RUNNING, type RpcCall, type RpcResult } from "../shared/rpc";
 import { bodyKind, setTextTypes } from "../shared/bodyKind";
 import { readFetchBody } from "../shared/requestBody";
@@ -34,6 +35,20 @@ import { watchCall, type CallWatch } from "../shared/callWatch";
     if (w.chrome?.runtime?.id || w.browser?.runtime?.id) return;
     if (w.__resOverrideHooked) return;
     w.__resOverrideHooked = true;
+    // ctx.elements/mount/iframes { shadow }: closed shadow roots, kept as the page makes them (the page still sees null)
+    try {
+        const attach = Element.prototype.attachShadow;
+        Object.defineProperty(Element.prototype, "attachShadow", {
+            ...Object.getOwnPropertyDescriptor(Element.prototype, "attachShadow"),
+            value: {
+                attachShadow(this: Element, init: ShadowRootInit) {
+                    const root = attach.call(this, init);
+                    if (init?.mode === "closed") noteShadowRoot(this, root);
+                    return root;
+                },
+            }.attachShadow,
+        });
+    } catch {}
     const BRIDGE_SOURCE = "res-override-bridge";
     const HOOK_SOURCE = "res-override-hook";
 

@@ -302,9 +302,18 @@ export function collectProblems(scripts: ProblemScript[], liveMarkers: Map<strin
         // (the saved code's type errors aren't checked while it fails to compile)
         else if (!s.error) problems.push(...(s.typeErrors || []).map(storedTypeError));
         // (errors: onPage and onSite code that can't run — user scripts are off; a store a place can't have — they throw there)
+        // (scriptLint's line checks come as "line N (error|warning): …"; a warning the editor's live lint already marks is listed once)
         const taken = new Set<number>();
-        for (const w of s.routeWarnings || [])
+        const marked = new Set(live?.map((m) => m.message));
+        for (const w of s.routeWarnings || []) {
+            const lint = /^line (\d+) \((error|warning)\): ([\s\S]*)$/.exec(w);
+            if (marked.has(lint ? lint[3] : w)) continue;
+            if (lint) {
+                problems.push({ severity: lint[2] as ProblemSeverity, kind: "route", message: lint[3], ...(lines ? lineRange(lines, Number(lint[1])) : { line: Number(lint[1]) }) });
+                continue;
+            }
             problems.push({ severity: w.includes(USER_SCRIPTS_PROBLEM) || w.includes(NO_SITE_STORE) || w.includes(SITE_NO_STORES) ? "error" : "warning", kind: "route", message: w, ...(siteUseRange(w, s) ?? rulesUseRange(w, s, taken) ?? handler(w)) });
+        }
         if (problems.length) groups.push({ id: s.id, label: s.label, file: s.label.endsWith(".tsx") ? "tsx" : "ts", problems: problems.sort(byPosition) });
     }
     for (const d of dataFiles) if (d.markers.length) groups.push({ id: d.id, label: d.label, file: "json", problems: fromMarkers(d.markers, "json").sort(byPosition) });

@@ -32,7 +32,7 @@ import { fromWireResponse, toWireRequest } from "../shared/ttFetch";
 import { formatScriptError } from "../shared/scriptError";
 import { formatLogArgs, scriptLogLine, type ScriptLogLevel } from "../shared/scriptLog";
 import { collectRects, normalizeRects, watchRects } from "../shared/overlayRects";
-import { ShortcutRegistry, watchShortcuts, shortcutPriority, runShortcut, type ShortcutPriority } from "../shared/shortcut";
+import { ShortcutRegistry, watchShortcuts, shortcutPriority, shortcutFrames, runShortcut, type ShortcutOptions } from "../shared/shortcut";
 
 const PHASES: DocumentWhen[] = ["document_start", "document_end", "document_idle"];
 const rank = (p: DocumentWhen | undefined) => PHASES.indexOf(p ?? "document_end");
@@ -125,14 +125,16 @@ export async function startOverlay(ep: Endpoint, init: OverlayInit, env: Overlay
     };
     ep.on("shortcut.fire", ({ id }) => void fireKey(id));
     const stopKeys = watchShortcuts(win, (e) => keys.find(e), (hits) => hits.map((h) => fireKey(h.id)).includes(true), { trusted: env.trustedKey });
-    const shortcut = (combo: string, fn: () => unknown, opts?: { priority?: ShortcutPriority }) => {
+    const shortcut = (combo: string, fn: () => unknown, opts?: ShortcutOptions) => {
         const priority = shortcutPriority(fn, opts);
+        // iframes: the bridge also listens in the page's iframes
+        const iframes = shortcutFrames(opts, document);
         // a shortcut param the user cleared
         if (combo === "") return () => {};
         const id = String(++keyIds);
         keys.add(s, id, combo, priority);
         keyFns.set(id, fn);
-        ep.push("shortcut.add", { id, keys: combo, priority });
+        ep.push("shortcut.add", { id, keys: combo, priority, iframes });
         return () => {
             if (!keyFns.delete(id)) return;
             keys.remove(s, id);
@@ -264,7 +266,7 @@ export async function startOverlay(ep: Endpoint, init: OverlayInit, env: Overlay
             signal.addEventListener("abort", off, { once: true });
             return off;
         },
-        shortcut(combo: string, fn: () => unknown, opts?: { priority?: ShortcutPriority }) {
+        shortcut(combo: string, fn: () => unknown, opts?: ShortcutOptions) {
             const off = shortcut(combo, fn, opts);
             signal.addEventListener("abort", off, { once: true });
             return off;

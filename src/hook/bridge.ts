@@ -32,6 +32,7 @@ import { makeLibRequire, type ShippedLib } from "../shared/scriptImports";
 import { builtinsReady, scriptBuiltin, ensureBuiltins, setBuiltinLoader, shippedSources, sourceLoader } from "../shared/builtins";
 import { makePageShim, domHandlersFor, scheduleDocument, fireRun, pageCtxBase, type PageDocumentHandler } from "../shared/pageShim";
 import { reactOf, ScriptLife, type Generation, type ReactDomClient } from "../shared/runLifecycle";
+import { setShadowResolver } from "../shared/domElements";
 import { hotRegistry } from "../shared/hotRefresh";
 import { packBytes, unpackBytes } from "../shared/bytesPack";
 import { Endpoint, endpointPair, messagePortEndpoint, portEndpoint, ISO_STORE_TAG, type ReqOf, type ReqOps, type ResOf } from "../shared/wire";
@@ -45,10 +46,13 @@ import { inertRemote } from "../shared/remote";
 import type { DocumentWhen, PlaceApi, RouteMeta } from "../shared/route";
 import { clipPathFor, normalizeRects } from "../shared/overlayRects";
 import { fromWireRequest, toWireResponse } from "../shared/ttFetch";
-import { ShortcutRegistry, watchShortcuts, FrameShortcuts } from "../shared/shortcut";
+import { ShortcutRegistry, watchShortcuts, FrameShortcuts, ShortcutWindows, shortcutFrames } from "../shared/shortcut";
 import type { RanApi } from "../shared/netTypes";
 
 (() => {
+    // ctx.elements/mount/iframes { shadow }: closed shadow roots too (Chrome: chrome.dom; Firefox: the element's own method)
+    const dom = (globalThis as any).chrome?.dom;
+    setShadowResolver((el) => (typeof dom?.openOrClosedShadowRoot === "function" ? dom.openOrClosedShadowRoot(el) : ((el as any).openOrClosedShadowRoot?.() ?? null)) ?? null);
     const MAIN_SOURCE = "res-override-bridge";
     const HOOK_SOURCE = "res-override-hook";
 
@@ -525,7 +529,13 @@ import type { RanApi } from "../shared/netTypes";
             let life = lives[world].get(h.scriptId);
             if (!life) {
                 const id = h.scriptId;
-                life = new ScriptLife({ doc: document, react: world === "isolated" ? () => reactDoms.get(id)!() : undefined, onError: (e) => scriptLog(id, "error", formatScriptError(h.name, e, "teardown"), ctx) });
+                life = new ScriptLife({
+                    doc: document,
+                    react: world === "isolated" ? () => reactDoms.get(id)!() : undefined,
+                    onError: (e) => scriptLog(id, "error", formatScriptError(h.name, e, "teardown"), ctx),
+                    // f.shortcut (MV2 onPage): keys pressed in that iframe
+                    frameCtx: world === "isolated" ? (doc, signal) => ({ shortcut: (combo: string, fn: () => unknown, opts?: any) => pageKeys.add(id, combo, fn, opts, signal, doc.defaultView!) }) : undefined,
+                });
                 lives[world].set(id, life);
             }
             const gen = life.begin();
@@ -767,18 +777,21 @@ import type { RanApi } from "../shared/netTypes";
         const i = lastOverlays.findIndex((o) => o.scriptId === s);
         return i < 0 ? Infinity : i;
     });
-    if (window === top)
-        watchShortcuts(
-            window,
-            (e) => (shortcuts.size ? shortcuts.find(e) : []),
-            (hits) =>
-                guard(() => {
-                    const o = overlays.get(hits[0].s);
-                    if (!o?.ep) return;
-                    if (o.frame && o.frame.style.zIndex !== String(zTop)) o.frame.style.zIndex = String(++zTop);
-                    for (const h of hits) o.ep.push("shortcut.fire", { id: h.id });
-                })
-        );
+    const fireOverlayKeys = (hits: ReturnType<ShortcutRegistry["find"]>) =>
+        guard(() => {
+            const o = overlays.get(hits[0].s);
+            if (!o?.ep) return;
+            if (o.frame && o.frame.style.zIndex !== String(zTop)) o.frame.style.zIndex = String(++zTop);
+            for (const h of hits) o.ep.push("shortcut.fire", { id: h.id });
+        });
+    if (window === top) watchShortcuts(window, (e) => (shortcuts.size ? shortcuts.find(e) : []), fireOverlayKeys);
+    /** overlay shortcuts with `iframes`: keys pressed in the page's iframes too */
+    const overlayKeyFrames = new ShortcutWindows((e, only) => shortcuts.find(e, only), fireOverlayKeys);
+    const overlayKeyUnfollow = new Map<string, () => void>();
+    const unfollowOverlayKey = (s: string, id: string) => {
+        overlayKeyUnfollow.get(s + "\n" + id)?.();
+        overlayKeyUnfollow.delete(s + "\n" + id);
+    };
 
     /** the bundle's overlays for this page: start new ones, update changed ones in place (code hash), drop the rest */
     function syncOverlays(list: OverlayInfo[], hot: boolean): void {
@@ -910,17 +923,25 @@ import type { RanApi } from "../shared/netTypes";
         ep.on("shortcut.add", (a) => {
             if (!proven || o.closed || typeof a?.id !== "string" || typeof a.keys !== "string" || a.id.length > 32 || a.keys.length > 64) return;
             let r: ReturnType<ShortcutRegistry["add"]>;
+            let frames: ReturnType<typeof shortcutFrames>;
             try {
+                frames = shortcutFrames({ iframes: a.iframes ?? undefined }, document);
                 r = shortcuts.add(s, a.id, a.keys, a.priority === "after-page" ? "after-page" : "before-page");
             } catch {
                 return;
             }
+            unfollowOverlayKey(s, a.id);
+            if (frames && window === top) overlayKeyUnfollow.set(s + "\n" + a.id, overlayKeyFrames.follow(document, s, a.id, frames, (e) => scriptLog(s, "error", formatScriptError(o.info.name, e, "ctx.shortcut"), "isolated")));
             // the warning goes to the script that lost the keys
             const nameOf = (x: string) => overlays.get(x)?.info.name ?? x;
             if (r.taken) log("warn", scriptLogLine(o.info.name, "overlay", `shortcut ${a.keys}: "${nameOf(r.taken)}" (earlier in the list) uses these keys too and keeps them`));
             if (r.displaced) scriptLog(r.displaced, "warn", scriptLogLine(nameOf(r.displaced), "overlay", `shortcut ${a.keys}: "${o.info.name}" (earlier in the list) uses these keys too and keeps them`));
         });
-        ep.on("shortcut.remove", (a) => proven && typeof a?.id === "string" && shortcuts.remove(s, a.id));
+        ep.on("shortcut.remove", (a) => {
+            if (!proven || typeof a?.id !== "string") return;
+            shortcuts.remove(s, a.id);
+            unfollowOverlayKey(s, a.id);
+        });
         ep.on("rpc.call", (c) => proven && isRpcCall(c) && routeOverlayCall(s, c, (r) => ep.push("rpc.result", r)));
         ep.on("site.up", (m) => proven && !o.closed && relaySiteUp(s, m));
         ep.on("rpc.result", (r) => {
@@ -962,6 +983,7 @@ import type { RanApi } from "../shared/netTypes";
         overlays.delete(s);
         o.closed = true;
         shortcuts.removeScript(s);
+        for (const k of [...overlayKeyUnfollow.keys()]) if (k.startsWith(s + "\n")) unfollowOverlayKey(s, k.slice(s.length + 1));
         dropOverlaySubs(s);
         o.frame?.remove();
         o.ep?.close(why);

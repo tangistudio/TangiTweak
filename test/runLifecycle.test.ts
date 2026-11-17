@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { ScriptLife, type RunCtx, type ReactDomClient } from "../src/shared/runLifecycle";
 import { Exposer, RpcClient, ReloadedError } from "../src/shared/rpc";
 import { firePageHandler, type PageDocumentHandler } from "../src/shared/pageShim";
+import { noteShadowRoot, setShadowResolver } from "../src/shared/domElements";
 
 /** a react-dom/client stand-in: records what each root renders */
 function fakeReact() {
@@ -489,6 +490,156 @@ describe("ScriptLife", () => {
         await expect(it.next()).rejects.toThrow("nope");
     });
 
+    describe("ctx.elements", () => {
+        const tick = () => new Promise((r) => setTimeout(r, 0));
+        const add = (html: string, into: ParentNode = document.body) => {
+            const t = document.createElement("template");
+            t.innerHTML = html;
+            const el = t.content.firstElementChild!;
+            into.appendChild(el);
+            return el;
+        };
+        afterEach(() => setShadowResolver(null));
+
+        it("finds the matches now, skipping our mounts; first gives one", () => {
+            add(`<b class="x">1</b>`);
+            add(`<b class="x">2</b>`);
+            reload((ctx) => {
+                (ctx as any).mount("#slot", "ui");
+                expect(ctx.elements("b.x").map((e: Element) => e.textContent)).toEqual(["1", "2"]);
+                expect(ctx.elements("b.x", { first: true }).map((e: Element) => e.textContent)).toEqual(["1"]);
+                expect(ctx.elements("tangitweak-mount div")).toEqual([]);
+            });
+        });
+
+        it("shadow: finds inside open roots, and closed ones where they're readable, in tree order", () => {
+            const open = add(`<x-open></x-open>`);
+            open.attachShadow({ mode: "open" }).innerHTML = `<b class="x">in-open</b>`;
+            const closedHost = add(`<x-closed></x-closed>`);
+            const closed = closedHost.attachShadow({ mode: "closed" });
+            closed.innerHTML = `<b class="x">in-closed</b>`;
+            add(`<b class="x">light</b>`);
+            reload((ctx) => {
+                const text = (o: object) => ctx.elements("b.x", o).map((e: Element) => e.textContent);
+                expect(text({})).toEqual(["light"]);
+                expect(text({ shadow: true })).toEqual(["in-open", "light"]);
+                setShadowResolver((el) => (el === closedHost ? closed : null));
+                expect(text({ shadow: true })).toEqual(["in-open", "in-closed", "light"]);
+                expect(text({ shadow: true, first: true })).toEqual(["in-open"]);
+            });
+        });
+
+        it("fn runs as matches arrive; their signal aborts and the cleanup runs as they leave", async () => {
+            const a = add(`<i class="t">a</i>`);
+            const log: string[] = [];
+            const sigs = new Map<string, AbortSignal>();
+            reload((ctx) =>
+                ctx.elements("i.t", (el: Element, signal: AbortSignal) => {
+                    log.push("+" + el.textContent);
+                    sigs.set(el.textContent!, signal);
+                    return () => log.push("-" + el.textContent);
+                })
+            );
+            expect(log).toEqual(["+a"]);
+            const b = add(`<i class="t">b</i>`);
+            await tick();
+            expect(log).toEqual(["+a", "+b"]);
+            a.remove();
+            await tick();
+            expect(log).toEqual(["+a", "+b", "-a"]);
+            expect(sigs.get("a")!.aborted).toBe(true);
+            // no longer matching counts as leaving
+            b.className = "";
+            await tick();
+            expect(log).toEqual(["+a", "+b", "-a", "-b"]);
+            b.className = "t";
+            await tick();
+            expect(log).toEqual(["+a", "+b", "-a", "-b", "+b"]);
+        });
+
+        it("follows matches added inside shadow roots, including roots attached later", async () => {
+            const host = add(`<x-host></x-host>`);
+            const root = host.attachShadow({ mode: "open" });
+            const seen: string[] = [];
+            reload((ctx) => ctx.elements("i", (el: Element) => void seen.push(el.textContent!), { shadow: true }));
+            add(`<i>one</i>`, root);
+            await tick();
+            expect(seen).toEqual(["one"]);
+            const later = add(`<x-later></x-later>`);
+            await tick();
+            const r2 = later.attachShadow({ mode: "closed" });
+            noteShadowRoot(later, r2);
+            add(`<i>two</i>`, r2);
+            await tick();
+            expect(seen).toEqual(["one", "two"]);
+        });
+
+        it("first follows one match, falling through to the next", async () => {
+            const a = add(`<i>a</i>`);
+            add(`<i>b</i>`);
+            const seen: string[] = [];
+            reload((ctx) => ctx.elements("i", (el: Element) => void seen.push(el.textContent!), { first: true }));
+            add(`<i>c</i>`, document.body.insertBefore(document.createElement("div"), document.body.firstChild));
+            await tick();
+            expect(seen).toEqual(["a"]);
+            a.remove();
+            await tick();
+            expect(seen).toEqual(["a", "c"]);
+        });
+
+        it("a save restarts it with the new fn; stop() and the run ending end it", async () => {
+            add(`<i>a</i>`);
+            const log: string[] = [];
+            const v = (n: string) => (ctx: RunCtx) => ctx.elements("i", (el: Element) => (log.push(n + "+"), () => log.push(n + "-")));
+            reload(v("v1"));
+            const { ctx } = reload(v("v2"));
+            expect(log).toEqual(["v1+", "v1-", "v2+"]);
+            const stop = ctx.elements("i", () => void log.push("k+"), { key: "k" });
+            stop();
+            add(`<i>b</i>`);
+            await tick();
+            expect(log).toEqual(["v1+", "v1-", "v2+", "k+", "v2+"]);
+            life.stop();
+            expect(log.filter((x) => x === "v2-").length).toBe(2);
+        });
+
+        it("a throwing fn is reported and the others still run", () => {
+            add(`<i>a</i>`);
+            add(`<i>b</i>`);
+            const seen: string[] = [];
+            const reported: unknown[] = [];
+            const gen = life.begin();
+            life.fire(gen, "onPage:0", (e) => reported.push(e), (ctx) =>
+                ctx.elements("i", (el: Element) => {
+                    if (el.textContent === "a") throw new Error("boom");
+                    seen.push(el.textContent!);
+                })
+            );
+            life.commit(gen);
+            expect(seen).toEqual(["b"]);
+            expect(reported.map((e: any) => e.message)).toEqual(["boom"]);
+        });
+
+        it("checks its arguments", () => {
+            reload((ctx) => {
+                expect(() => ctx.elements(1 as any)).toThrow(TypeError);
+                expect(() => ctx.elements("[[")).toThrow(SyntaxError);
+                expect(() => ctx.elements("i", null)).toThrow(TypeError);
+                expect(() => ctx.elements("i", { root: {} })).toThrow(TypeError);
+            });
+        });
+
+        it("ctx.mount shadow: mounts onto a target inside a shadow root", async () => {
+            const host = add(`<x-app></x-app>`);
+            const root = host.attachShadow({ mode: "open" });
+            reload((ctx) => (ctx as any).mount(".bar", "ui", { shadow: true }));
+            expect(react.roots.length).toBe(0);
+            const bar = add(`<div class="bar"></div>`, root);
+            await tick();
+            expect(bar.querySelector("tangitweak-mount")).not.toBeNull();
+        });
+    });
+
     describe("ctx.iframes", () => {
         const tick = () => new Promise((r) => setTimeout(r, 30));
         const frame = (html: string, cls = "") => {
@@ -593,8 +744,41 @@ describe("ScriptLife", () => {
             expect(reported.map((e: any) => e.message)).toEqual(["boom"]);
         });
 
+        it("a document.open() wiping the iframe's page runs fn again once the new page is in (no load event comes)", async () => {
+            const el = frame("<p>a</p>");
+            await tick();
+            const runs: AbortSignal[] = [];
+            reload((ctx) => ctx.iframes!((f: any) => void runs.push(f.signal)));
+            const doc = el.contentDocument!;
+            doc.documentElement.remove();
+            await tick();
+            expect(runs.length).toBe(1);
+            expect(runs[0].aborted).toBe(true);
+            doc.appendChild(doc.createElement("html"));
+            await tick();
+            expect(runs.length).toBe(2);
+            expect(runs[1].aborted).toBe(false);
+        });
+
+        it("shadow: follows iframes inside shadow roots", async () => {
+            const host = document.createElement("x-embed");
+            document.body.append(host);
+            const root = host.attachShadow({ mode: "open" });
+            const el = document.createElement("iframe");
+            el.srcdoc = "<p>in-shadow</p>";
+            root.append(el);
+            await tick();
+            const seen: string[] = [];
+            reload((ctx) => {
+                ctx.iframes!((f: any) => void seen.push("plain:" + f.document.body.textContent));
+                ctx.iframes!((f: any) => void seen.push("shadow:" + f.document.body.textContent), { shadow: true });
+            });
+            expect(seen).toEqual(["shadow:in-shadow"]);
+        });
+
         it("checks its arguments", () => {
             reload((ctx) => {
+                expect(() => ctx.iframes!(() => {}, { crossOrigin: true })).toThrow(TypeError);
                 expect(() => ctx.iframes!("iframe")).toThrow(TypeError);
                 expect(() => ctx.iframes!("[[", () => {})).toThrow(SyntaxError);
             });

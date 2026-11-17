@@ -296,6 +296,86 @@ describe("FrameShortcuts (onPage's ctx.shortcut)", () => {
         expect(n).toBe(1);
         expect(page).toEqual([]);
     });
+
+    describe("iframes", () => {
+        const tick = () => new Promise((r) => setTimeout(r, 30));
+        afterEach(() => (document.body.innerHTML = ""));
+        const frame = (cls = "", into: ParentNode = document.body) => {
+            const el = document.createElement("iframe");
+            el.className = cls;
+            el.srcdoc = "<p>x</p>";
+            into.appendChild(el);
+            return el;
+        };
+        const pressIn = (el: HTMLIFrameElement) => {
+            const W = el.contentWindow as any;
+            const e = new W.KeyboardEvent("keydown", { key: "k", code: "KeyK", altKey: true, bubbles: true, cancelable: true });
+            el.contentDocument!.body.dispatchEvent(e);
+            return e as KeyboardEvent;
+        };
+
+        it("keys pressed in child iframes count with iframes set (a selector picks which), not without", async () => {
+            const { h } = setup();
+            const a = frame("editor");
+            const b = frame("ad");
+            await tick();
+            const fired: string[] = [];
+            const sig = new AbortController().signal;
+            h.add("a", "Alt+K", () => fired.push("plain"), undefined, sig);
+            h.add("b", "Alt+K", () => fired.push("editor"), { iframes: "iframe.editor" }, sig);
+            expect(pressIn(a).defaultPrevented).toBe(true);
+            expect(pressIn(b).defaultPrevented).toBe(false);
+            expect(fired).toEqual(["editor"]);
+            // the main window still goes by list order
+            press();
+            expect(fired).toEqual(["editor", "plain"]);
+        });
+
+        it("follows iframes added later, nested ones and ones in shadow roots; stops on off()", async () => {
+            const { h } = setup();
+            const ac = new AbortController();
+            let n = 0;
+            h.add("a", "Alt+K", () => n++, { iframes: { shadow: true } }, ac.signal);
+            const outer = frame();
+            await tick();
+            const inner = frame("", outer.contentDocument!.body);
+            const shadowHost = document.createElement("x-embed");
+            document.body.append(shadowHost);
+            const inShadow = frame("", shadowHost.attachShadow({ mode: "open" }));
+            await tick();
+            pressIn(outer);
+            pressIn(inner);
+            pressIn(inShadow);
+            expect(n).toBe(3);
+            ac.abort();
+            pressIn(outer);
+            pressIn(inner);
+            expect(n).toBe(3);
+        });
+
+        it("listens again after a document.open() wipes the iframe's page (Google Docs)", async () => {
+            const { h } = setup();
+            const el = frame();
+            await tick();
+            let n = 0;
+            h.add("a", "Alt+K", () => n++, { iframes: true }, new AbortController().signal);
+            const doc = el.contentDocument!;
+            // what document.open() does: the page is replaced in the same document, and no load event comes
+            doc.documentElement.remove();
+            doc.appendChild(doc.createElement("html")).appendChild(doc.createElement("body"));
+            await tick();
+            pressIn(el);
+            expect(n).toBe(1);
+        });
+
+        it("checks the option", () => {
+            const { h } = setup();
+            const sig = new AbortController().signal;
+            expect(() => h.add("a", "Alt+K", () => {}, { iframes: 1 as any }, sig)).toThrow(TypeError);
+            expect(() => h.add("a", "Alt+K", () => {}, { iframes: "[[" }, sig)).toThrow(SyntaxError);
+            expect(() => h.add("a", "Alt+K", () => {}, { iframes: { selector: 2 as any } }, sig)).toThrow(TypeError);
+        });
+    });
 });
 
 describe("shortcut params: recording, showing, checking", () => {

@@ -88,7 +88,13 @@ import { FrameShortcuts } from "../shared/shortcut";
     let reactDom: () => ReactDomClient = () => {
         throw new Error("no React");
     };
-    const life = new ScriptLife({ doc: document, react: () => reactDom(), onError: (e) => log("error", formatScriptError(scriptName, e, "onPage")) });
+    const life = new ScriptLife({
+        doc: document,
+        react: () => reactDom(),
+        onError: (e) => log("error", formatScriptError(scriptName, e, "onPage")),
+        // f.shortcut: keys pressed in that iframe
+        frameCtx: (doc, signal) => ({ shortcut: (combo: string, fn: () => unknown, opts?: any) => keys.add(s, combo, fn, opts, signal, doc.defaultView!) }),
+    });
     /** ctx.shortcut: keys pressed in this frame (listening from the start, before the page) */
     const keys = new FrameShortcuts(window, {
         name: () => scriptName,

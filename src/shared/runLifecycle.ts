@@ -16,6 +16,7 @@
  */
 import { AbortError } from "./rpc";
 import { hookSignature, notHot } from "./hotRefresh";
+import { HOST_ATTR, checkSelector, findElements, followIframes, type FrameEnd, type Watch, watch } from "./domElements";
 
 export interface ReactDomClient {
     createRoot(el: Element): { render(node: unknown): void; unmount(): void };
@@ -37,6 +38,8 @@ export interface LifeOptions {
     shadow?: boolean;
     /** a teardown, or a ctx.mount that followed the page (a new match, autoRestore), failed */
     onError?: (e: unknown) => void;
+    /** what `ctx.iframes` adds to an iframe's ctx (onPage: `f.shortcut`, listening in that iframe) */
+    frameCtx?: (doc: Document, signal: AbortSignal) => object;
     /** offer `ctx.iframes` (default true; the overlay has no page iframes to follow) */
     iframes?: boolean;
 }
@@ -49,7 +52,8 @@ export interface RunCtx {
     style(css: string): void;
     mount?: (a: unknown, b?: unknown, c?: unknown) => () => void;
     each<A extends any[], T>(fn: (...args: A) => Promise<T>, ...args: A): AsyncIterableIterator<T>;
-    iframes?: (a: unknown, b?: unknown) => () => void;
+    iframes?: (a: unknown, b?: unknown, c?: unknown) => () => void;
+    elements(selector: unknown, b?: unknown, c?: unknown): any;
 }
 
 /** what `ctx.iframes` passes its `fn` for one iframe: a run in the iframe's document */
@@ -127,33 +131,39 @@ interface MountOwner extends Owner {
     /** renders a render-function `ui` (stable, so its state stays across saves) */
     Fn: (p: { anchor?: Element }) => unknown;
     slots: Map<Element | null, Slot>;
-    mo?: MutationObserver;
+    /** look inside shadow roots for anchors */
+    shadow: boolean;
+    /** follows the page: a selector's matches, or (autoRestore) the page removing the UI */
+    watch?: Watch;
     /** autoRestore re-insertions in the last second (a page fighting back) */
     restores: number[];
     restoreOff?: boolean;
 }
 
-/** one iframe a ctx.iframes runs in: its document gets its own runs and claims */
+/** one iframe document a ctx.iframes runs in: it gets its own runs and claims */
 interface FrameSlot {
     el: HTMLIFrameElement;
-    life: ScriptLife | null;
-    doc: Document | null;
-    /** the root fn ran under: a document.open() swaps it (same document, wiped page) */
-    root: Element | null;
-    onLoad: () => void;
+    doc: Document;
+    life: ScriptLife;
 }
 
 /** a ctx.iframes key's owner: its fn in every matching same-origin iframe */
 interface IframesOwner extends Owner {
-    selector: string;
     fn: (f: IframeCtx) => unknown;
     report: (e: unknown) => void;
-    frames: Map<Element, FrameSlot>;
-    mo: MutationObserver;
+    frames: Set<FrameSlot>;
+    stop: () => void;
 }
 
-/** marks a mount's host: page changes there are ours, and anchors inside aren't matches */
-const HOST_ATTR = "data-tangitweak-mount";
+/** a ctx.elements(selector, fn) key's owner: fn on each match while it matches */
+interface ElementsOwner extends Owner {
+    selector: string;
+    first: boolean;
+    fn: (el: Element, signal: AbortSignal) => unknown;
+    report: (e: unknown) => void;
+    active: Map<Element, { ctl: AbortController; cleanup?: () => void }>;
+    watch: Watch;
+}
 /** autoRestore gives up after this many re-insertions in a second */
 const MAX_RESTORES = 20;
 
@@ -180,7 +190,7 @@ export class ScriptLife {
     private readonly styles = new Map<string, { css: string; els: Element[] }>();
     private readonly slots = new Set<Slot>();
     /** element targets of ctx.mount: a stable id each, so a mount there keeps its key */
-    private readonly targetIds = new WeakMap<Element, number>();
+    private readonly targetIds = new WeakMap<object, number>();
     /** overlay anchors made `position: relative`: by how many mounts, and their own inline position */
     private readonly positioned = new WeakMap<Element, { n: number; prev: string }>();
     private nextTargetId = 0;
@@ -352,8 +362,9 @@ export class ScriptLife {
                 run.settle?.();
                 return each(run.ctl.signal, fn, args);
             },
+            elements: (selector, b, c) => this.elements(run, selector, b, c),
         };
-        if (this.o.iframes !== false) ctx.iframes = (a, b) => (b === undefined ? this.iframes(run, undefined, a) : this.iframes(run, a, b));
+        if (this.o.iframes !== false) ctx.iframes = (a, b, c) => (typeof a === "function" ? this.iframes(run, undefined, a, b) : this.iframes(run, a, b, c));
         if (this.o.react) ctx.mount = (...args: unknown[]) => (args.length < 2 ? this.mount(run, undefined, args[0], undefined) : this.mount(run, args[0], args[1], args[2]));
         return ctx;
     }
@@ -445,18 +456,13 @@ export class ScriptLife {
     private mount(run: Run, target: unknown, ui: unknown, opts: unknown): () => void {
         if (target !== undefined && typeof target !== "string" && !isTarget(target)) throw new TypeError("ctx.mount: the target must be a selector or an element");
         if (opts !== undefined && (opts === null || typeof opts !== "object")) throw new TypeError("ctx.mount: the options must be an object");
-        const o = (opts ?? {}) as { position?: unknown; key?: unknown; first?: unknown; autoRestore?: unknown };
+        const o = (opts ?? {}) as { position?: unknown; key?: unknown; first?: unknown; autoRestore?: unknown; shadow?: unknown };
         const pos = (o.position ?? "inside-last") as MountPosition;
         if (!POSITIONS.includes(pos)) throw new TypeError(`ctx.mount: position must be one of ${POSITIONS.map((p) => `"${p}"`).join(", ")}`);
         if (o.key !== undefined && typeof o.key !== "string") throw new TypeError("ctx.mount: the key must be a string");
         const doc = this.o.doc;
-        if (typeof target === "string") {
-            try {
-                doc.querySelectorAll(target);
-            } catch {
-                throw new SyntaxError(`ctx.mount: "${target}" isn't a valid selector`);
-            }
-        }
+        if (typeof target === "string") checkSelector(doc, target, "ctx.mount");
+        const shadow = !!o.shadow;
         let client: ReactDomClient;
         try {
             client = this.o.react!();
@@ -467,7 +473,7 @@ export class ScriptLife {
         const single = typeof target !== "string" || !!o.first;
         // one mount per (handler, target, position, key): mounting there again re-renders it
         const where = typeof target === "string" ? ":" + target : target ? "@" + this.targetId(target as Element) : "";
-        const key = "mount:" + run.h + where + (target === undefined ? "" : "|" + pos + (single ? "|first" : "")) + (o.key ? "#" + o.key : "");
+        const key = "mount:" + run.h + where + (target === undefined ? "" : "|" + pos + (single ? "|first" : "") + (shadow ? "|shadow" : "")) + (o.key ? "#" + o.key : "");
         const owner = this.claim(run, key, (): MountOwner => {
             const m: MountOwner = {
                 claimers: new Set<Run>(),
@@ -479,9 +485,10 @@ export class ScriptLife {
                 client,
                 Fn: notHot((p: { anchor?: Element }) => (m.ui as (a?: Element) => unknown)(p.anchor)),
                 slots: new Map(),
+                shadow,
                 restores: [],
                 teardown: () => {
-                    m.mo?.disconnect();
+                    m.watch?.stop();
                     const errs: unknown[] = [];
                     for (const sl of [...m.slots.values()])
                         try {
@@ -494,16 +501,8 @@ export class ScriptLife {
             };
             // a selector follows the page; autoRestore watches for the page removing the UI
             if (typeof target === "string" || m.autoRestore) {
-                m.mo = new MutationObserver((records) => {
-                    // changes inside our UI, and our own insertions, aren't the page's (a removal of ours may be: autoRestore)
-                    if (records.every((r) => isOurs(r.target) || (!r.removedNodes.length && ([...r.addedNodes] as Node[]).every(isOurs)))) return;
-                    try {
-                        this.syncMount(m, false);
-                    } catch (e) {
-                        this.o.onError?.(e);
-                    }
-                });
-                m.mo.observe(doc, { childList: true, subtree: true });
+                const onError = (e: unknown) => this.o.onError?.(e);
+                m.watch = watch(doc, { shadow, selectors: typeof target === "string" ? [target] : [] }, () => this.syncMount(m, false), onError);
             }
             return m;
         });
@@ -515,92 +514,57 @@ export class ScriptLife {
         return () => this.unclaim(run, key);
     }
 
-    private iframes(run: Run, selector: unknown, fn: unknown): () => void {
+    private iframes(run: Run, selector: unknown, fn: unknown, opts: unknown): () => void {
         if (selector !== undefined && typeof selector !== "string") throw new TypeError("ctx.iframes: the selector must be a string");
-        if (typeof fn !== "function") throw new TypeError("ctx.iframes: the last argument must be a function");
+        if (typeof fn !== "function") throw new TypeError("ctx.iframes: the function must come after the selector");
+        if (opts !== undefined && (opts === null || typeof opts !== "object")) throw new TypeError("ctx.iframes: the options must be an object");
+        const o = (opts ?? {}) as { shadow?: unknown; crossOrigin?: unknown };
+        if (o.crossOrigin) throw new TypeError("ctx.iframes: crossOrigin isn't supported (only shortcuts follow cross-origin iframes: ctx.shortcut(keys, fn, { iframes: { crossOrigin: true } }))");
         const sel = selector ?? "iframe";
-        try {
-            this.o.doc.querySelectorAll(sel);
-        } catch {
-            throw new SyntaxError(`ctx.iframes: "${sel}" isn't a valid selector`);
-        }
-        const key = "iframes:" + run.h + ":" + (selector ?? "");
+        checkSelector(this.o.doc, sel, "ctx.iframes");
+        const shadow = !!o.shadow;
+        const key = "iframes:" + run.h + ":" + (selector ?? "") + (shadow ? "|shadow" : "");
         let fresh = false;
         const owner = this.claim(run, key, (): IframesOwner => {
             fresh = true;
             const m: IframesOwner = {
                 claimers: new Set<Run>(),
-                selector: sel,
                 fn: fn as IframesOwner["fn"],
                 report: run.report,
-                frames: new Map(),
-                mo: new MutationObserver((records) => {
-                    if (records.every((r) => isOurs(r.target) || ([...r.addedNodes, ...r.removedNodes] as Node[]).every(isOurs))) return;
-                    try {
-                        this.syncFrames(m, false);
-                    } catch (e) {
-                        this.o.onError?.(e);
-                    }
-                }),
-                teardown: () => {
-                    m.mo.disconnect();
-                    for (const s of [...m.frames.values()]) this.dropFrame(m, s);
-                },
+                frames: new Set(),
+                stop: () => {},
+                teardown: () => m.stop(),
             };
-            m.mo.observe(this.o.doc, { childList: true, subtree: true });
+            m.stop = followIframes(
+                this.o.doc,
+                { selector: sel, shadow },
+                ({ iframe, document: doc }) => {
+                    const s: FrameSlot = { el: iframe, doc, life: new ScriptLife({ doc, react: this.o.react, shadow: this.o.shadow, onError: this.o.onError, frameCtx: this.o.frameCtx }) };
+                    m.frames.add(s);
+                    this.runFrame(m, s);
+                    return (why: FrameEnd) => {
+                        m.frames.delete(s);
+                        s.life.stop(why === "stopped" ? "the script stopped" : why);
+                    };
+                },
+                (e) => this.o.onError?.(e)
+            );
             return m;
         });
         owner.fn = fn as IframesOwner["fn"];
         owner.report = run.report;
         // a later run (a save) runs the new fn in every iframe; the iframes' mounts and claims carry over
-        this.syncFrames(owner, !fresh);
+        if (!fresh) for (const s of [...owner.frames]) this.runFrame(owner, s);
         return () => this.unclaim(run, key);
     }
 
-    /** start following new matching iframes, drop gone ones; `rerun`: run fn again in the followed ones */
-    private syncFrames(m: IframesOwner, rerun: boolean): void {
-        const want = new Set([...this.o.doc.querySelectorAll(m.selector)].filter((el) => el.localName === "iframe" && !inHost(el)));
-        for (const [el, s] of [...m.frames]) if (!want.has(el) || !el.isConnected) this.dropFrame(m, s);
-        for (const el of want) {
-            const known = m.frames.get(el);
-            if (known) {
-                if (rerun && known.life) this.runFrame(m, known);
-                continue;
-            }
-            const s: FrameSlot = { el: el as HTMLIFrameElement, life: null, doc: null, root: null, onLoad: () => this.loadFrame(m, s, true) };
-            m.frames.set(el, s);
-            el.addEventListener("load", s.onLoad);
-            this.loadFrame(m, s, false);
-        }
-    }
-
-    /** the iframe's document is ready (or replaced): a fresh child life runs fn in it */
-    private loadFrame(m: IframesOwner, s: FrameSlot, onLoad: boolean): void {
-        let doc: Document | null = null;
-        try {
-            doc = s.el.contentDocument;
-        } catch {}
-        // the empty document an iframe starts with while its real one loads isn't the one the script wants
-        if (doc && !onLoad && (doc.readyState === "loading" || (doc.URL === "about:blank" && loadsOther(s.el)))) doc = null;
-        // the load of the document fn already runs in (a document.open() replaced its root: run again)
-        if (doc && doc === s.doc && doc.documentElement === s.root && s.life) return;
-        s.life?.stop("the iframe navigated");
-        s.life = null;
-        s.doc = doc;
-        s.root = doc?.documentElement ?? null;
-        // cross-origin (contentDocument is null) or still loading: wait for a load
-        if (!doc || !doc.defaultView) return;
-        s.life = new ScriptLife({ doc, react: this.o.react, shadow: this.o.shadow, onError: this.o.onError });
-        this.runFrame(m, s);
-    }
-
     private runFrame(m: IframesOwner, s: FrameSlot): void {
-        const life = s.life!;
-        const doc = s.doc!;
+        const life = s.life;
+        const doc = s.doc;
         const gen = life.begin();
         try {
             life.fire(gen, "iframes", m.report, (ctx, report) => {
-                const out = m.fn({ ...ctx, iframe: s.el, document: doc, window: doc.defaultView! });
+                const out = m.fn({ ...this.o.frameCtx?.(doc, ctx.signal), ...ctx, iframe: s.el, document: doc, window: doc.defaultView! });
                 if (out && typeof (out as any).then === "function") (out as Promise<unknown>).then(undefined, report);
                 return out;
             });
@@ -611,27 +575,88 @@ export class ScriptLife {
         life.commit(gen);
     }
 
-    private dropFrame(m: IframesOwner, s: FrameSlot): void {
-        m.frames.delete(s.el);
-        s.el.removeEventListener("load", s.onLoad);
-        s.life?.stop("the iframe was removed");
-        s.life = null;
+    /** ctx.elements: the matches now, or (with fn) fn on each match while it matches */
+    private elements(run: Run, selector: unknown, b: unknown, c: unknown): any {
+        if (typeof selector !== "string") throw new TypeError("ctx.elements: the selector must be a string");
+        const observing = typeof b === "function";
+        const opts = observing ? c : b;
+        if (opts !== undefined && (opts === null || typeof opts !== "object")) throw new TypeError("ctx.elements: the options must be an object");
+        const o = (opts ?? {}) as { shadow?: unknown; first?: unknown; root?: unknown; key?: unknown };
+        if (o.root !== undefined && !isRoot(o.root)) throw new TypeError("ctx.elements: root must be a document, element or shadow root");
+        if (o.key !== undefined && typeof o.key !== "string") throw new TypeError("ctx.elements: the key must be a string");
+        checkSelector(this.o.doc, selector, "ctx.elements");
+        const root = (o.root ?? this.o.doc) as ParentNode;
+        const shadow = !!o.shadow;
+        const first = !!o.first;
+        if (!observing) return findElements(root, selector, { shadow, first });
+        // one per (handler, selector, options, key): calling it again (a save) restarts it with the new fn
+        const key = "elements:" + run.h + ":" + selector + (first ? "|first" : "") + (shadow ? "|shadow" : "") + (o.root ? "@" + this.targetId(o.root as object) : "") + (o.key ? "#" + o.key : "");
+        let fresh = false;
+        const owner = this.claim(run, key, (): ElementsOwner => {
+            fresh = true;
+            const m: ElementsOwner = {
+                claimers: new Set<Run>(),
+                selector,
+                first,
+                fn: b as ElementsOwner["fn"],
+                report: run.report,
+                active: new Map(),
+                watch: null as any,
+                teardown: () => {
+                    m.watch.stop();
+                    for (const el of [...m.active.keys()]) this.leave(m, el, "the script stopped");
+                },
+            };
+            m.watch = watch(root, { shadow, selectors: [selector] }, () => this.syncElements(m), (e) => m.report(e));
+            return m;
+        });
+        owner.fn = b as ElementsOwner["fn"];
+        owner.report = run.report;
+        if (!fresh) for (const el of [...owner.active.keys()]) this.leave(owner, el, "the script reloaded");
+        this.syncElements(owner);
+        return () => this.unclaim(run, key);
+    }
+
+    private syncElements(m: ElementsOwner): void {
+        const cur = m.first ? ([...m.active.keys()][0] ?? null) : null;
+        const want = m.watch.find(m.selector, m.first, cur);
+        const live = new Set(want);
+        for (const el of [...m.active.keys()]) if (!live.has(el)) this.leave(m, el, "the element left");
+        for (const el of want) if (!m.active.has(el)) this.arrive(m, el);
+    }
+
+    private arrive(m: ElementsOwner, el: Element): void {
+        const a: { ctl: AbortController; cleanup?: () => void } = { ctl: new AbortController() };
+        m.active.set(el, a);
+        try {
+            const out = m.fn(el, a.ctl.signal);
+            if (typeof out === "function") a.cleanup = out as () => void;
+            else if (out && typeof (out as any).then === "function") (out as Promise<unknown>).then(undefined, m.report);
+        } catch (e) {
+            m.report(e);
+        }
+    }
+
+    private leave(m: ElementsOwner, el: Element, why: string): void {
+        const a = m.active.get(el);
+        if (!a) return;
+        m.active.delete(el);
+        a.ctl.abort(new AbortError(why));
+        try {
+            a.cleanup?.();
+        } catch (e) {
+            m.report(e);
+        }
     }
 
     /** the anchors `m` goes on now */
     private anchorsOf(m: MountOwner): Element[] {
-        const doc = this.o.doc;
         const t = m.target;
         if (t === undefined) return [];
         if (typeof t !== "string") return [t];
-        if (m.single) {
-            const cur = m.slots.get(null)?.anchor;
-            // the current match stays while it's still one
-            if (cur && cur.isConnected && cur.matches(t) && !inHost(cur)) return [cur];
-            for (const el of doc.querySelectorAll(t)) if (!inHost(el)) return [el];
-            return [];
-        }
-        return [...doc.querySelectorAll(t)].filter((el) => !inHost(el));
+        // the current match stays while it's still one
+        if (m.watch) return m.watch.find(t, m.single, m.slots.get(null)?.anchor);
+        return findElements(this.o.doc, t, { shadow: m.shadow, first: m.single });
     }
 
     /**
@@ -785,31 +810,21 @@ export class ScriptLife {
         if (a.style.position === "relative") a.style.position = p.prev;
     }
 
-    private targetId(el: Element): number {
+    private targetId(el: object): number {
         let id = this.targetIds.get(el);
         if (id === undefined) this.targetIds.set(el, (id = this.nextTargetId++));
         return id;
     }
 }
 
-/** the iframe has a document of its own coming (srcdoc, or a src that isn't about:blank) */
-function loadsOther(el: HTMLIFrameElement): boolean {
-    if (el.hasAttribute("srcdoc")) return true;
-    const src = (el.getAttribute("src") ?? "").trim();
-    return src !== "" && !/^about:blank$/i.test(src);
-}
-
 function isTarget(v: unknown): v is Element {
     return !!v && typeof v === "object" && (v as any).nodeType === 1;
 }
 
-/** a mount's host, or inside one */
-function isOurs(n: Node): boolean {
-    return n.nodeType === 1 ? !!(n as Element).closest(`[${HOST_ATTR}]`) : !!n.parentElement?.closest(`[${HOST_ATTR}]`);
-}
-
-function inHost(el: Element): boolean {
-    return !!el.closest(`[${HOST_ATTR}]`);
+/** a document, element, or shadow root (a fragment) */
+function isRoot(v: unknown): v is ParentNode {
+    const t = !!v && typeof v === "object" ? (v as any).nodeType : 0;
+    return (t === 1 || t === 9 || t === 11) && typeof (v as any).querySelectorAll === "function";
 }
 
 /**

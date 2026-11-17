@@ -35,7 +35,7 @@ import { getStoresText, applyStoresText, storesTextParses, STORES_FILE } from ".
 import { storeOwner } from "./engine/stores";
 import { SETTINGS_FILE, SCHEMA_FILE } from "../shared/settingsJson";
 import { settingsSchemaJson } from "../shared/settingsSchema";
-import { API_DTS_FILE, BUILTIN_TYPINGS_ROOT, PACKAGE_JSON_FILE, TSCONFIG_FILE, apiDtsText, packageJsonText, tsconfigText } from "../shared/generatedFiles";
+import { API_DTS_FILE, BUILTIN_TYPINGS_ROOT, ESLINT_PLUGIN_FILE, PACKAGE_JSON_FILE, TSCONFIG_FILE, apiDtsText, eslintPluginText, packageJsonText, tsconfigText } from "../shared/generatedFiles";
 import { broadcastToUi } from "./engine/logs";
 import { dlogLevel } from "../shared/debugLog";
 import { folderPathProblem, isConfigJsonPath, scriptFileName, scriptNameFromFile } from "../shared/scriptName";
@@ -1114,8 +1114,19 @@ async function ensureSupportFiles(): Promise<void> {
     }
     await ensureFile(TSCONFIG_FILE, tsconfigText());
     await ensureFile(PACKAGE_JSON_FILE, packageJsonText());
+    await ensureEslintPlugin();
     await ensureSchemaFile();
     await ensurePackageTypingsFiles();
+}
+
+/** scriptLint's rules as an ESLint plugin, for external editors (in .tangitweak/, so ensureFile's top-level read doesn't reach it) */
+async function ensureEslintPlugin(): Promise<void> {
+    try {
+        const text = eslintPluginText();
+        if ((await readTextOrNull(ESLINT_PLUGIN_FILE)) !== text) await writeFile(ESLINT_PLUGIN_FILE, text);
+    } catch (e: any) {
+        dlogLevel("sync", "warn", `Folder sync: could not write ${ESLINT_PLUGIN_FILE}: ${e?.message || e}`);
+    }
 }
 
 /** what ensurePackageTypingsFiles last wrote or found in this folder (path → text) */

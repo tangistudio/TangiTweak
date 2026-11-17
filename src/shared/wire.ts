@@ -112,7 +112,8 @@ export interface WireOps {
     /** L3: the code assigned a param (`lib`: an imported library's) — saved like a ⚙ change */
     "param.set": { req: { key: string; value: any; lib?: string }; res: {} };
     /** L3: `ctx.shortcut` registered keys (`id` is the overlay's); the bridge listens for them in the page */
-    "shortcut.add": { push: { id: string; keys: string; priority: "before-page" | "after-page" } };
+    /** iframes: also keys pressed in the page's iframes (the ones the selector picks; null: none) */
+    "shortcut.add": { push: { id: string; keys: string; priority: "before-page" | "after-page"; iframes?: { selector?: string; shadow: boolean; crossOrigin: boolean } | null } };
     "shortcut.remove": { push: { id: string } };
     /** L3: a shortcut's keys were pressed in the page */
     "shortcut.fire": { push: { id: string } };
