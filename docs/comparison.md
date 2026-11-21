@@ -49,7 +49,7 @@ Desktop proxies run outside the browser as local TLS man-in-the-middle servers. 
 | **Chrome (MV3) + Firefox** | **Yes** | **Yes** (+ Safari on TM) | Yes | Chromium only | OS-wide (any browser) |
 | **Works with DevTools closed** | **Yes** | **Yes** | **Yes** | No | **Yes** |
 | **No-code GUI rule tables** | No (code-only) | No | **Yes** | **Yes** (file mapping) | **Yes** (Charles/Proxyman) |
-| **Runs `.user.js` ecosystem** | No (`tt.*` API) | **Yes** | No | No | No |
+| **Runs `.user.js` ecosystem** | No (`tweak.*` API) | **Yes** | No | No | No |
 | **Redirect, block & edit headers** | **Yes** | No | **Yes** | Response headers only | **Yes** |
 | **Mock or transform `fetch` / XHR bodies** | **Yes** | Manual monkey-patching | **Yes** (transform paid in tweak) | Static local files only | **Yes** |
 | **Rewrite HTML documents, `<script>` & workers without Chrome's debugger bar** | **Yes** (via optional `tangitweak-helper`) | No | Desktop app required on Chrome | Only while DevTools is open | **Yes** |
@@ -59,7 +59,7 @@ Desktop proxies run outside the browser as local TLS man-in-the-middle servers. 
 | **Two-way local folder sync (edit in VS Code / Cursor with generated types)** | **Yes** | Single-file external editor sync | Local file map (desktop) | **Yes** | Script files on disk (`mitmproxy`) |
 | **Page DOM & site-world hooks (`onPage` / `onSite`)** | **Yes** (with `ctx.patch` hot teardown) | **Yes** | Basic JS injection | No | No (must rewrite HTML) |
 | **Isolated Shadow/iframe React + `valtio` page overlays (`onOverlay`)** | **Yes** (built-in) | Manual DOM + `@require` | No | No | No |
-| **Typed UI settings (`tt.params` + `settings.json`)** | **Yes** (with nested sections) | `GM_config` libraries | Environment variables (paid) | No | Script env vars |
+| **Typed UI settings (`tweak.params` + `settings.json`)** | **Yes** (with nested sections) | `GM_config` libraries | Environment variables (paid) | No | Script env vars |
 | **In-place hot reload without reloading the tab** | **Yes** | No (requires reload) | Rule toggle on next request | Next request | Next request |
 | **In-extension Network diff (`Modified` vs `Original` body) + LLM diagnostics** | **Yes** | No | Basic logger | DevTools Network | **Yes** (full proxy inspector; no LLM bundle) |
 | **Intercepts non-browser traffic (iOS, Android, CLI, backend)** | No (browser only) | No | Desktop app only | No | **Yes** |

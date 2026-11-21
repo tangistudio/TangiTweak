@@ -142,7 +142,7 @@ loaded with a `<script>` tag only when a script imports it. Bumping
 changelog. `.tsx` scripts compile with the automatic JSX runtime
 (`"jsx": "react-jsx"` in the generated `tsconfig.json`).
 
-A script's overlay GUI (`tt.onOverlay`) runs in `overlay.html` + `overlay.js`
+A script's overlay GUI (`tweak.onOverlay`) runs in `overlay.html` + `overlay.js`
 (`src/overlay/overlayRuntime.ts`), a web-accessible page the bridge
 (`src/hook/bridge.ts`) frames into the top page inside a closed shadow
 root, one frame per script. The bridge hands the frame a `MessagePort`;
@@ -179,7 +179,7 @@ pages, and drops blocking `webRequest`):
   only MV3 context where `new Function` is allowed. The service worker
   routes compiles/ executions there through an offscreen document
   (`offscreen.html` bridges chrome.runtime ⇄ iframe postMessage). Handler
-  results, script logs and `tt.storage` round-trip back over the same
+  results, script logs and `tweak.storage` round-trip back over the same
   channel.
 - **The `page` strategy carries page fetch/XHR interception** (patching in the
   page's MAIN world — same behavior, transforms execute in the sandbox).

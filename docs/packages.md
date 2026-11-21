@@ -6,8 +6,8 @@ You share scripts as a **package**, which is one of two things:
 
 - **A script.** One `.ts` or `.tsx` file, plus every file it imports by a
   relative path (`./lib`, `../shared/util.ts`, `./config.json`,
-  `./icon.svg`), followed through those files too. Its `tt.metadata({ … })`
-  call says what it is.
+  `./icon.svg`), followed through those files too. It has no metadata
+  (name, version, description…) of its own.
 - **A bundle.** A folder whose `metadata.json` lists several scripts. They
   install, update and roll back together, along with what they import.
 
@@ -15,39 +15,8 @@ Either way, the routes say what it can do.
 
 ## Metadata
 
-A script describes itself with `tt.metadata`, called once at top level. The
-install page reads it when it compiles the script, before anything is
-installed:
-
-```ts
-tt.metadata({
-    name: "GitHub dark mode",
-    version: "1.2.0",
-    minTangiTweakVersion: "0.35.0",
-    description: "Forces the dark theme on github.com",
-    icon: "./icon.svg",
-    author: "me",
-    license: "MIT",
-    homepage: "https://github.com/me/scripts",
-    updateURL: "https://github.com/me/scripts/blob/main/dark.tangitweak.ts",
-    connect: ["api.github.com"],
-});
-tt.onPage({ url: "*://github.com/*" }, () => { … });
-```
-
-Every field is optional. `description` is also the script's tooltip in the Editor and the popup.
-`icon` sets a custom icon shown in the Explorer and the popup: pass a relative file path (`.svg`, `.png`, `.webp`, `.jpg`, `.gif`, `.ico`, `.avif`), a `data:` or `https://` URL, or inline `<svg>` markup.
-`version` is compared part by part (`1.10.0` is newer than `1.9`).
-`minTangiTweakVersion` declares the oldest TangiTweak version the script or bundle supports (for example `"0.35.0"`): TangiTweak warns on **Import**, **Install**, and **Upgrade** when the running extension is older, and holds background auto-updates for review until TangiTweak is updated.
-`connect` lists the hosts the script's `tt.fetch` calls reach. An update that
-adds one waits for your approval.
-`updateURL` is where updates come from, instead of where the package was
-installed from. It takes any URL the install page reads, as listed in the table under
-[Install a package](#install-a-package): a script, `metadata.json` or `.zip` URL, a GitHub
-file or folder, a gist, or a gist's raw file. See [Updates](#updates).
-
-A bundle's `metadata.json` has the same fields plus `scripts`, the bundle's
-scripts relative to its folder:
+A bundle describes itself in its `metadata.json`: its scripts, relative to
+its folder, and what the install page shows before anything is installed:
 
 ```json
 {
@@ -55,17 +24,31 @@ scripts relative to its folder:
     "version": "2.0.0",
     "minTangiTweakVersion": "0.35.0",
     "description": "Review helpers for GitHub pull requests",
+    "icon": "icon.svg",
+    "author": "me",
+    "license": "MIT",
+    "homepage": "https://github.com/me/scripts",
+    "updateURL": "https://github.com/me/scripts/blob/main/pr-tools/metadata.json",
     "connect": ["api.github.com"],
     "scripts": ["pr-tools.ts", "review/diff.ts"]
 }
 ```
 
+Every field but `scripts` is optional. `description` is also the tooltip of the bundle's scripts in the popup.
+`icon` sets the bundle's icon, shown in the Explorer and next to its scripts in the popup: pass a relative file path (`.svg`, `.png`, `.webp`, `.jpg`, `.gif`, `.ico`, `.avif`), a `data:` or `https://` URL, or inline `<svg>` markup.
+`version` is compared part by part (`1.10.0` is newer than `1.9`).
+`minTangiTweakVersion` declares the oldest TangiTweak version the script or bundle supports (for example `"0.35.0"`): TangiTweak warns on **Import**, **Install**, and **Upgrade** when the running extension is older, and holds background auto-updates for review until TangiTweak is updated.
+`connect` lists the hosts its scripts' `tweak.fetch` calls reach. An update that
+adds one waits for your approval.
+`updateURL` is where updates come from, instead of where the package was
+installed from. It takes any URL the install page reads, as listed in the table under
+[Install a package](#install-a-package): a script, `metadata.json` or `.zip` URL, a GitHub
+file or folder, a gist, or a gist's raw file. See [Updates](#updates).
+
 The Editor checks `metadata.json` against its schema and completes its
 fields; in `scripts` it completes the `.ts`/`.tsx` files in the folder (and
 its subfolders) that aren't listed yet, and an entry naming no script there
-is an error (in the file and in Problems). A bundle's scripts can still call `tt.metadata`: their
-`description` stays their own tooltip, and their `connect` hosts add to the
-bundle's. Files outside the bundle's folder can't be imported.
+is an error (in the file and in Problems). Files outside the bundle's folder can't be imported.
 
 ## Install a package
 
@@ -119,7 +102,7 @@ Before anything is written, the page shows:
 - **what it can do**, riskiest first:
   - running on every site;
   - the `debugger` strategy;
-  - running code in the site's JavaScript world (`tt.onSite`);
+  - running code in the site's JavaScript world (`tweak.onSite`);
   - the `helper` strategy;
   - the sites it runs on;
   - the other strategies;
@@ -186,7 +169,7 @@ nothing changes.
 An update applies by itself only when all of these hold:
 
 - it can't do more than the installed version: no new sites, strategies,
-  `tt.onSite` code, overlays, `connect` hosts or unpkg packages;
+  `tweak.onSite` code, overlays, `connect` hosts or unpkg packages;
 - you haven't edited, renamed or deleted any of the package's files;
 - its `version` doesn't go down;
 - it doesn't change where updates come from (its `updateURL`);
@@ -231,12 +214,10 @@ A zip of the folder works for people installing from local files.
 **Make Package…** (right-click a script or a folder in the Explorer) lays a
 package out for you:
 
-- **On a script that imports nothing**, it adds `name` and `version` (and
-  `connect`, for the hosts of `tt.fetch` calls with a literal URL) to its
-  `tt.metadata` call, or adds the call.
-- **On a script that imports files**, it makes a bundle. The script and every
+- **On a script**, it makes a bundle. The script and every
   file it imports by a relative path move into a folder named after it, and
-  a `metadata.json` lists the script. Their layout under the script's folder
+  a `metadata.json` lists the script, with a `name`, a `version` and
+  `connect` (the hosts of `tweak.fetch` calls with a literal URL). Their layout under the script's folder
   is kept. A file that other scripts still use is copied instead of moved.
   The imports are rewritten for the new places. A script already alone in its
   folder with what it imports stays where it is.

@@ -12,6 +12,10 @@ conversation.
 A TypeScript file the user writes that registers handlers. Its name is its path in the explorer, folders included (`mock/api mock`).
 _Avoid_: rule, override, userscript
 
+**`tweak`**:
+The scripting API object a file imports (`import { tweak } from "tangitweak"`); each file gets its own, and its handlers and unnamed stores are named after that file.
+_Avoid_: `tt` (the global it replaced, removed in 0.40)
+
 **Library**:
 A script that registers no handlers with its current param values; it only runs when another script imports it.
 _Avoid_: utility, lib, helper
@@ -33,24 +37,24 @@ A function exported by a library that registers handlers on behalf of the script
 _Avoid_: macro, preset
 
 **Handler**:
-One registration in a script (`tt.onRequest`, `tt.onResponseHeaders`, `tt.onResponseBody`, `tt.replaceResponse`, `tt.onSite`, `tt.onPage` or `tt.onOverlay`) pairing a route with a function.
+One registration in a script (`tweak.onRequest`, `tweak.onResponseHeaders`, `tweak.onResponseBody`, `tweak.replaceResponse`, `tweak.onSite`, `tweak.onPage` or `tweak.onOverlay`) pairing a route with a function.
 _Avoid_: hook, rule, interceptor, listener, onDom
 
 **Place**:
-Where a page handler's code runs: the site's own JavaScript world (`tt.onSite`, untrusted), the isolated world over the same DOM (`tt.onPage`), or the script's own GUI frame (`tt.onOverlay`).
+Where a page handler's code runs: the site's own JavaScript world (`tweak.onSite`, untrusted), the isolated world over the same DOM (`tweak.onPage`), or the script's own GUI frame (`tweak.onOverlay`).
 _Avoid_: world option, `js: "page"`, `dom: "overlay"`
 
 **Handle**:
-What `tt.onSite`, `tt.onPage` or `tt.onOverlay` returns: the functions its handler returned, callable (async) from `onPage` and `onOverlay` code. Calls wait for the handler and never time out.
+What `tweak.onSite`, `tweak.onPage` or `tweak.onOverlay` returns: the functions its handler returned, callable (async) from `onPage` and `onOverlay` code. Calls wait for the handler and never time out.
 _Avoid_: remote, proxy, stub
 
 **Site store**:
-A `tt.siteStore`: a store that lives in the site's JavaScript world, one copy per page, which `onSite` code uses directly and the site can read and change — page data.
+A `tweak.siteStore`: a store that lives in the site's JavaScript world, one copy per page, which `onSite` code uses directly and the site can read and change — page data.
 _Avoid_: page-world store, unsafe store
 
 **Mirror**:
 A site store's live copy in `onPage` or `onOverlay` code: it follows the site's copy and sends its changes there.
-_Avoid_: replica (that's a copy of a `tt.globalStore` or `tt.pageStore`)
+_Avoid_: replica (that's a copy of a `tweak.globalStore` or `tweak.pageStore`)
 
 **Run**:
 One execution of a page handler in one frame. A save, navigation or disable ends it, aborting `ctx.signal`.
@@ -65,7 +69,7 @@ The one stand-in `ctx.patch` installs on an object's property; saves swap what i
 _Avoid_: hook, monkey-patch wrapper
 
 **Body handler**:
-A `tt.onResponseBody` or `tt.replaceResponse` handler: one that works on a response body.
+A `tweak.onResponseBody` or `tweak.replaceResponse` handler: one that works on a response body.
 _Avoid_: response handler, modifyResponse
 
 **Route**:
@@ -89,7 +93,7 @@ An `onRequest` result that ends the request's handler chain: `replaceResponse`, 
 _Avoid_: terminal result, short-circuit, cancel, respond
 
 **Replacement**:
-A whole new response that TangiTweak serves instead of the real one (from a `tt.replaceResponse` handler or an `onRequest` `replaceResponse` result).
+A whole new response that TangiTweak serves instead of the real one (from a `tweak.replaceResponse` handler or an `onRequest` `replaceResponse` result).
 _Avoid_: mock, override, fake response, respond
 
 **Stacking**:
@@ -157,7 +161,7 @@ The "being debugged" bar Chrome shows while the `debugger` strategy is attached 
 _Avoid_: yellow bar, infobar
 
 **Page**:
-One document shown in a tab, from the navigation or reload that commits it until the next one or the tab closing; a single-page app's route change stays on the same page. Each page has its own copy of a `tt.pageStore`.
+One document shown in a tab, from the navigation or reload that commits it until the next one or the tab closing; a single-page app's route change stays on the same page. Each page has its own copy of a `tweak.pageStore`.
 _Avoid_: tab (a tab shows many pages over time)
 
 **Page load**:

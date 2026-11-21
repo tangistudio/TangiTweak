@@ -9,7 +9,20 @@ its section below.
 
 ### Added
 
-- **`import { tweak } from "tangitweak"`**, the imported authoring API, next to `tt`. It works in every world (network handlers, `onSite`, `onPage`, `onOverlay`, `@tangitweak/test`) and in imported files, with full typings in the Editor and in Folder Sync. Unlike `tt` it has no `metadata` or `defineParam`; `tweak.globalStore(id, …)` takes a file-name-safe ID (lowercase letters, digits, `-`, `_`, `.`); `tweak.tabStore`, `tweak.pageStore` and `tweak.siteStore` take no name.
+- **`import { tweak } from "tangitweak"`**, the imported authoring API that replaces `tt`. It works in every world (network handlers, `onSite`, `onPage`, `onOverlay`, `@tangitweak/test`) and in imported files, with full typings in the Editor and in Folder Sync. `tweak.globalStore(id, …)` takes a file-name-safe ID (lowercase letters, digits, `-`, `_`, `.`); `tweak.tabStore`, `tweak.pageStore` and `tweak.siteStore` take no name.
+
+### Changed
+
+- Handlers are keyed by their registration order per API (`onPage:0`, `onPage:1`, `onPage:0@lib` for a library's), the same in every world, with no source rewriting. Unnamed stores are named after the file that creates them and their position among its `tabStore` / `pageStore` / `siteStore` calls (`main#0`, `lib/state#1`); a store or handler a library function creates belongs to the script that calls it, and keeps its name however many scripts import the library.
+- The built-in samples, new-script templates, quick fixes, completions, hover docs, Problems and log messages all use `tweak`.
+- **Make Package** always makes a bundle: the script goes into its own folder with a `metadata.json`.
+- A single-file script has no description, icon, version or `minTangiTweakVersion`; a bundle's `metadata.json` supplies them.
+
+### Removed
+
+- **The `tt` global**, with no compatibility shim. A script that still uses it fails to load with an error that says to `import { tweak } from "tangitweak"`.
+- **`tt.metadata(…)`**: metadata comes from a bundle's `metadata.json`.
+- **`tt.defineParam(…)`**: use `tweak.params({ … })`, which may be called more than once.
 
 ## [0.37.0-alpha] - 2026-11-15
 

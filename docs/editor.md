@@ -3,7 +3,7 @@
 [<img src="../icons/icon.svg" width="16" height="16" align="absmiddle" alt=""> README](../README.md) · [Glossary](../GLOSSARY.md)
 
 The Editor is TangiTweak's full-page UI. Its **Code view** embeds **Monaco** (the VS Code editor) with full TypeScript
-IntelliSense for the `tt` API — completions, hover docs, and diagnostics work
+IntelliSense for the `tweak` API — completions, hover docs, and diagnostics work
 out of the box. Shortcuts follow VS Code (⌘ = Ctrl on Windows/Linux; F1
 lists the Code view commands, and the **?** dialog's **Shortcuts** tab has a
 searchable list of all of them):
@@ -24,14 +24,14 @@ searchable list of all of them):
 | ⌘, | Open Settings |
 | ⌘/, ⌘F, ⌘D | Comment, find, select next occurrence (Monaco) |
 | F8 / ⇧F8 | Go to the next / previous problem in the script (TypeScript, compile, rules, runtime, route) |
-| F12 | Go to definition — also into the `tt` API typings; on a JSON import it opens the data file |
+| F12 | Go to definition — also into the `tweak` API typings; on a JSON import it opens the data file |
 | Alt+← / Alt+→ (⌃- / ⌃⇧- on macOS) | Go back / forward after a definition jump or a hover type link |
 
-In a hover, the `tt` API types in the signature (`RouteOptions`, `RequestCtx`, …,
+In a hover, the `tweak` API types in the signature (`RouteOptions`, `RequestCtx`, …,
 dotted underline) and `{@link}`s in its docs are clickable: a click swaps the
 same hover for that type's signature and docs, so you can drill down type by
 type without leaving your script; **← Back to …** at the top walks back up.
-To read the source, press F12 / ⌘-click on `tt.onRequest`, `ctx.url`, a
+To read the source, press F12 / ⌘-click on `tweak.onRequest`, `ctx.url`, a
 `TangiTweak.*` type: the API typings (`tt-api.d.ts`) open read-only in the
 Code view at that declaration. Hovers and F12 work there too, so you can keep
 digging; Go back returns to your script with its cursor and unsaved edits
@@ -170,7 +170,7 @@ at the right of the toolbar do the same.
   themselves once fixed: TypeScript problems update live as you type (even
   before saving); compile, rules and route problems on save; a runtime error
   on save or with its ×. Every entry has a line and column: where the error
-  was thrown, the URL pattern a rules error is about, or the `tt.*` call that
+  was thrown, the URL pattern a rules error is about, or the `tweak.*` call that
   registered the handler it names — and is squiggled there in the editor
   like TypeScript errors (its hover comes before the API docs; F8 reaches it). Click an entry (or
   Enter) to open the file at that line; ↑/↓ move, ←/→ collapse/expand a file; the filter box in
@@ -183,8 +183,8 @@ at the right of the toolbar do the same.
   `isolated › host` (its `onPage` code) or `page › host` (its `onSite`
   code). A handle call in `onSite` code (`SiteCannotCallError`) is such an
   error, with a quick fix (Ctrl+. / ⌘.) that moves the handler to
-  `tt.onPage`; a route with the removed `js`, `dom` or `unsafe` option gets
-  one to `tt.onSite` / `tt.onOverlay`.
+  `tweak.onPage`; a route with the removed `js`, `dom` or `unsafe` option gets
+  one to `tweak.onSite` / `tweak.onOverlay`.
   On Chrome, `onPage` or `onSite` code while
   [user scripts are off](scripting.md#user-scripts-on-chrome) is an error
   whose `chrome://extensions` link opens TangiTweak's details page; the
@@ -283,16 +283,16 @@ at the right of the toolbar do the same.
 
 ### Preview
 
-The **Preview** tab (⌥⇧V) runs the overlay (`tt.onOverlay`) of the script
+The **Preview** tab (⌥⇧V) runs the overlay (`tweak.onOverlay`) of the script
 open in the Code view in a frame inside the Editor, without opening its
 page, so you can work on the GUI before going to the site; a script that's
 turned off previews too. It runs the saved script and updates it in place
 on every save, as on a page ([hot reload](scripting.md#hot-reload--runs-and-ctx)).
 
-- **Real stores.** The preview's `tt.globalStore`s are live copies of the
+- **Real stores.** The preview's `tweak.globalStore`s are live copies of the
   background's, like a page's overlay: flipping a switch in the preview
   turns a mock on or off for the pages in your tabs, and their overlays
-  follow. Its `tt.siteStore`s belong to the checkerboard "page": they
+  follow. Its `tweak.siteStore`s belong to the checkerboard "page": they
   start from `initial` and last while the preview does.
 - **URL.** The field in the panel header is the URL the overlay gets as
   `ctx.url`, and the base for its relative `fetch` URLs. It starts at a URL
@@ -301,10 +301,10 @@ on every save, as on a page ([hot reload](scripting.md#hot-reload--runs-and-ctx)
   it, Esc puts back the current one. Only the handlers whose route matches
   it run, as on a page; **no handler matches** shows when none does.
 - **Fetches.** There's no page behind the preview, so the overlay's `fetch`
-  (and `tt.fetch`, `from: "page"`) goes from the extension background
+  (and `tweak.fetch`, `from: "page"`) goes from the extension background
   instead — host permissions, no CORS, the browser's cookies — and the
   header shows **fetch runs from the background** once it has. Your
-  scripts' handlers see these requests like `tt.fetch`'s.
+  scripts' handlers see these requests like `tweak.fetch`'s.
 - **No page.** `onSite` and `onPage` code don't run in the preview: the
   overlay's calls into them reject with `there's no page in the Editor
   preview`.
@@ -462,7 +462,7 @@ or *Light*. It applies to the Editor (Code view included) and the popup.
 [Strategies](strategies.md) explains every strategy, with a table of their
 pros and cons and [which browsers run which](strategies.md#compatibility). There is no default
 strategy: every network handler names its own
-(`tt.onRequest({ url, strategy: "helper" }, fn)`). There is no fallback
+(`tweak.onRequest({ url, strategy: "helper" }, fn)`). There is no fallback
 either: a handler whose strategy isn't available doesn't run — the script
 gets a ⚠ and the Problems view a warning.
 
@@ -514,7 +514,7 @@ box narrows the tree to paths containing what you type, and **Select
 all**/**None** act on what it shows. On import each row says whether it's
 **new** or **replaces existing** (a script at the same path is overwritten
 rather than duplicated). Untick `settings.json` to leave settings, params
-and `enabled` state alone. When any script has persisted `tt.globalStore`
+and `enabled` state alone. When any script has persisted `tweak.globalStore`
 state, **Export…** also lists `stores.json` (unticked by default, marked
 `opt-in`) so you can include persisted store data when needed; **Import…**
 applies `stores.json` when present and ticked. If a picked script imports a library or data
@@ -533,7 +533,7 @@ A plain `.ts`/`.tsx`/`.js` file imports as a single script.
 The Explorer always has a ⚙ **settings.json** entry at the top (no folder needed; no
 toggle, not deletable). Like VS Code's `settings.json`, it stores only
 non-default overrides (`{}` when everything is at its default): global settings
-at the top level and per-script `enabled` / `tt.params` overrides under
+at the top level and per-script `enabled` / `tweak.params` overrides under
 `"scripts"`. Omitting any key — or clearing the file to `{}` — resets it to its
 default. With a synced folder connected, `settings.json` syncs two-way on disk
 alongside a generated `settings.schema.json` (which Monaco's built-in JSON
@@ -559,7 +559,7 @@ Content-Types `onResponseBody` gets as text and replaces the defaults
 ## `stores.json`
 
 Right below `settings.json`, the Explorer has a **stores.json** entry holding
-the persisted `tt.globalStore` data of your scripts (`{ "<script file>": { "<store name>": { … } } }`, e.g. `"mock-users.ts"` or `"bonsai/index.tsx"`).
+the persisted `tweak.globalStore` data of your scripts (`{ "<script file>": { "<store name>": { … } } }`, e.g. `"mock-users.ts"` or `"bonsai/index.tsx"`).
 Stores declared inside an imported library belong to that library's file (and are shared across all scripts that import it), matching `settings.json`.
 As scripts update their persisted global stores, `stores.json` updates live;
 editing and saving it in the Code view (or in `stores.json` at the root of your

@@ -9,12 +9,12 @@ has five **interception strategies**. Every network handler names exactly
 no default:
 
 ```ts
-tt.onRequest({ url: "*://api.example.com/*", strategy: "helper" }, fn);
-tt.onResponseBody({ url: "https://example.com/app/*.js", strategy: "debugger" }, fn);
+tweak.onRequest({ url: "*://api.example.com/*", strategy: "helper" }, fn);
+tweak.onResponseBody({ url: "https://example.com/app/*.js", strategy: "debugger" }, fn);
 ```
 
 A route without `strategy` (or a bare URL pattern such as
-`tt.onRequest("*://example.com/*", fn)`) makes the script fail to load: the
+`tweak.onRequest("*://example.com/*", fn)`) makes the script fail to load: the
 Problems view shows the error at that line until the route names one.
 
 `strategy` is a single value — there are no priority lists and no `auto`.
@@ -32,14 +32,14 @@ most once.
 | `debugger` | `chrome.debugger` + CDP Fetch domain: pause → run handlers → continue or fulfill | **everything**: documents, script tags, images, fonts, XHR — even requests the page didn't initiate | **yes** — Chrome shows a yellow "being debugged" bar while attached | Chromium-only; attach/detach is lazy and automatic |
 | `rules` | each handler runs **once** when scripts load; its result becomes a browser-native rule (`declarativeNetRequest`) that the browser applies itself | **everything**, the first navigation included | **never** | block, redirect and request/response headers only, with a fixed result ([what `rules` can do](#what-rules-can-do)); Chrome MV3, Chromium MV2 and Firefox 113+ |
 
-`tt.onSite`, `tt.onPage` and `tt.onOverlay` aren't network strategies: they
+`tweak.onSite`, `tweak.onPage` and `tweak.onOverlay` aren't network strategies: they
 run in the page whatever the setting ([page
 code](scripting.md#page-code--wtonsite-wtonpage-wtonoverlay),
 [overlays](scripting.md#overlays--wtonoverlay)).
 
 **Requests from an overlay.** An
 [overlay](scripting.md#overlays--wtonoverlay)'s `fetch` (and its
-`tt.fetch`, which fetches as the page by default) goes through your
+`tweak.fetch`, which fetches as the page by default) goes through your
 handlers like any request the tab makes, on every strategy except `page`,
 which only sees the page's own JavaScript. `{ bypass: true }` keeps every
 handler off one.
@@ -69,7 +69,7 @@ handler off one.
 > extension's `serve.html` — the address bar shows a `chrome-extension://…`
 > URL and the page loses its origin (cookies, relative links, same-origin
 > calls). To rewrite or replace the page itself on Chromium, use `helper`
-> or `debugger` on that handler (`tt.onPage` for DOM/title tweaks). Firefox's
+> or `debugger` on that handler (`tweak.onPage` for DOM/title tweaks). Firefox's
 > `extension` doesn't have this limit.
 
 > **WebSockets (`ws:`/`wss:`).** On a WebSocket handshake only **block** and
@@ -102,7 +102,7 @@ samples (Help → Samples) only use those.
   `{ url, resourceTypes: ["xmlhttprequest"], strategy: "page" }`.
 - **Rewrite page HTML / `<script src>` bodies** → `helper` or `debugger` on
   Chromium, `extension` on Firefox — not `page`.
-- **Change title/DOM after render** → `tt.onPage` — no network interception
+- **Change title/DOM after render** → `tweak.onPage` — no network interception
   at all, works even when the HTML is service-worker served or hydration
   re-renders it (the resilient choice for SPA title/DOM tweaks).
 - **Keep a route off assets** → set `resourceTypes`. On `debugger` other types are never
@@ -164,7 +164,7 @@ first navigation included, with no banner and no helper.
 
 Code in the handler runs at that one-time run only, never for a request:
 the Problems view warns about calls that look meant to run per request —
-`console.*`, `tt.log`, `fetch`/`tt.fetch`, timers and store writes. To log
+`console.*`, `tweak.log`, `fetch`/`tweak.fetch`, timers and store writes. To log
 or count requests, use a per-request strategy (`extension`, `debugger` or
 `helper`).
 
@@ -176,15 +176,15 @@ wins. A block or redirect makes the same handler's `headers` moot, as on
 every strategy.
 
 ```ts
-tt.onRequest({ url: "*://ads.example.com/*", strategy: "rules" }, () => ({ block: true }));
-tt.onRequest({ url: "https://api.example.com/*", strategy: "rules" }, () => ({
+tweak.onRequest({ url: "*://ads.example.com/*", strategy: "rules" }, () => ({ block: true }));
+tweak.onRequest({ url: "https://api.example.com/*", strategy: "rules" }, () => ({
     headers: { set: { "x-debug": "1" }, remove: ["cookie"] },
 }));
-tt.onResponseHeaders({ url: "https://example.com/*", strategy: "rules" }, () => ({
+tweak.onResponseHeaders({ url: "https://example.com/*", strategy: "rules" }, () => ({
     headers: { remove: ["content-security-policy"] },
 }));
 // rules where the browser has them, the per-request extension strategy elsewhere
-tt.onRequest({ url: "*://tracker.example.com/*", strategy: tt.isMV3 ? "rules" : "extension" }, () => ({ block: true }));
+tweak.onRequest({ url: "*://tracker.example.com/*", strategy: tweak.isMV3 ? "rules" : "extension" }, () => ({ block: true }));
 ```
 
 ### Captures in a redirect
@@ -196,7 +196,7 @@ browser substitutes them per request:
 ```ts
 // /api/users/7    → https://staging.example.com/users/7?v=
 // /api/v2/users/7 → https://staging.example.com/users/7?v=2
-tt.onRequest(
+tweak.onRequest(
     { url: "https://example.com/api{/v:ver}?/users/:id(\\d+)", strategy: "rules" },
     (ctx) => ({ redirect: `https://staging.example.com/users/${ctx.groups.id}?v=${ctx.groups.ver ?? ""}` }),
 );
@@ -238,14 +238,14 @@ doesn't run, the rest of the script does:
 - the browser refuses the rule (e.g. its limit on session or regex rules is
   reached), with the browser's reason.
 
-> **Dynamic stores vs frozen values.** A `rules` handler sees `tt.params`,
-> `tt.globalStore` and `tt.tabStore`: changing any of them re-runs the
-> handler and updates the browser's session rules (`tt.tabStore` scopes
+> **Dynamic stores vs frozen values.** A `rules` handler sees `tweak.params`,
+> `tweak.globalStore` and `tweak.tabStore`: changing any of them re-runs the
+> handler and updates the browser's session rules (`tweak.tabStore` scopes
 > rules per tab with `tabIds` / `excludedTabIds`, surviving tab refreshes).
 > Returning `undefined` / `null` after reading one turns that rule off
-> cleanly. Anything else the handler reads — the time, `tt.storage`,
+> cleanly. Anything else the handler reads — the time, `tweak.storage`,
 > `Math.random()`, a counter — is read once and refreshed only on reload;
-> `tt.pageStore` isn't available (it resets on reload; use `tt.tabStore`).
+> `tweak.pageStore` isn't available (it resets on reload; use `tweak.tabStore`).
 
 In the Network view a request a rule matched is marked Modified, with the
 rule's action (e.g. `onRequest → block (rules)`). The Log view's line for
@@ -258,7 +258,7 @@ it is info level.
   settles — the banner clears while you keep browsing; MV3 keeps matching
   tabs attached.
 - **Strict**: only handlers on `debugger` ever attach the debugger. Avoid the
-  banner by picking `helper`, `page` or `extension` and use `tt.onPage` for
+  banner by picking `helper`, `page` or `extension` and use `tweak.onPage` for
   page changes.
 - **Narrow with `resourceTypes`**: a `debugger` route only pauses its `resourceTypes`, so
   `resourceTypes: ["main_frame"]` leaves the page's assets and API calls alone.
@@ -378,9 +378,9 @@ Which strategies each browser and build gives you
 ([strategies](#interception-strategies) explained above). The Settings
 strategy picker disables the ones the current browser can't use.
 
-| | `helper` (local helper) | `page` (page fetch/XHR) | `extension` (blocking webRequest) | `debugger` (chrome.debugger) | `rules` (browser-native rules) | page code (`tt.onSite`, `tt.onPage`, `tt.onOverlay`) |
+| | `helper` (local helper) | `page` (page fetch/XHR) | `extension` (blocking webRequest) | `debugger` (chrome.debugger) | `rules` (browser-native rules) | page code (`tweak.onSite`, `tweak.onPage`, `tweak.onOverlay`) |
 |---|---|---|---|---|---|---|
-| **Chrome / Edge / Brave / Vivaldi, current** — `dist-mv3/` | ✅ no banner | ✅ | ❌ | ✅ banner shown | ✅ | ✅ (`tt.onPage` and `tt.onSite` need [user scripts](scripting.md#user-scripts-on-chrome); `tt.onOverlay` doesn't) |
+| **Chrome / Edge / Brave / Vivaldi, current** — `dist-mv3/` | ✅ no banner | ✅ | ❌ | ✅ banner shown | ✅ | ✅ (`tweak.onPage` and `tweak.onSite` need [user scripts](scripting.md#user-scripts-on-chrome); `tweak.onOverlay` doesn't) |
 | **Chromium with MV2** (ungoogled-chromium, Brave, Arc… — any Chromium that still loads MV2 extensions) — `dist/` | ✅ no banner | ✅ | ✅ no banner — redirect, block, headers, sync replaceResponse; no body streaming or async (see [async](scripting.md#async-handlers)) | ✅ banner shown | ✅ | ✅ |
 | **Firefox** — `dist/` | ❌ (not needed: `extension` reaches everything) | ✅ | ✅ no banner | ❌ | ✅ 113+ | ✅ |
 

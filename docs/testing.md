@@ -18,8 +18,8 @@ Connecting a [synced folder](editor.md#folder-sync) writes the test harness to
 Your own `scripts`, `dependencies` and `devDependencies` in `package.json` are
 preserved when TangiTweak refreshes its managed files.
 
-Install Vitest (plus `happy-dom` if you test `tt.onPage` / `tt.onSite` /
-`tt.onOverlay` DOM and React components):
+Install Vitest (plus `happy-dom` if you test `tweak.onPage` / `tweak.onSite` /
+`tweak.onOverlay` DOM and React components):
 
 ```sh
 npm install -D vitest happy-dom @testing-library/react
@@ -75,7 +75,7 @@ load/probe time just like in the extension.
 Add `// @vitest-environment happy-dom` at the top of `.test.tsx` files to test
 DOM mutations, `ctx.patch`, `ctx.style`, keyboard shortcuts (`ctx.shortcut`),
 cross-world handles (`await site.myMethod()`), `valtio` stores
-(`tt.globalStore`, `tt.tabStore`, `tt.pageStore`, `tt.siteStore`), and React 19
+(`tweak.globalStore`, `tweak.tabStore`, `tweak.pageStore`, `tweak.siteStore`), and React 19
 components mounted inside closed shadow roots:
 
 ```tsx
