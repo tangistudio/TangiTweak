@@ -1,6 +1,6 @@
 # Tweak Bundle Architecture Plan (`0.40.0-alpha`)
 
-**Status:** design plan. No runtime code has changed yet. Edited in place as feedback arrives.
+**Status:** implemented in 0.40.0-alpha (every phase of §9). Kept as the design record.
 
 All code in this document is a proposed interface, not something that exists yet, unless a section says "today".
 

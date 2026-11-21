@@ -48,6 +48,7 @@ React + `valtio` GUI overlay on the page.
   so the model can pinpoint the cause. Cookies and authorization headers are redacted.
 - **Install and share tweaks** — a tweak is a folder with a `package.json`; open its URL with `#tangitweak:install` (a gist, a GitHub repo or folder, any site, a local file) to install it with the files it imports and the npm packages its `dependencies` list; the install page shows what it can do first. Installed tweaks [update themselves](docs/packages.md#updates) unless an update can do more, which waits for your review.
 - **Folder sync** — keep scripts, data files (`.json`, `.md`, `.svg`, images) and their folders as plain files in a synced folder of your choice.
+- **Type-check and test tweaks** with the `tangitweak` npm package (`npm install -D tangitweak vitest react react-dom valtio`): Vitest tests that run a tweak the way the browser does ([docs](docs/testing.md)). Folder Sync also writes it to a synced folder, so it works without npm's copy.
 - **Chrome (MV3), MV2 Chromium and Firefox.**
 
 ## Install

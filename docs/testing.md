@@ -12,14 +12,32 @@ Sync, package installs and zip exports.
 
 ## Setup
 
-`"tangitweak/test"` is part of the `tangitweak` package, the same one a
-tweak's `import { tweak } from "tangitweak"` comes from. Add Vitest next to it:
+`"tangitweak/test"` is part of the `tangitweak` package on npm (the
+**SDK**), the same one a tweak's `import { tweak } from "tangitweak"` and its
+`tsconfig.json`'s `"extends": "tangitweak/tsconfig.json"` come from. Add
+Vitest next to it:
 
 ```sh
-npm install -D tangitweak vitest
+npm install -D tangitweak vitest react react-dom valtio
 # only for plain component tests (renderTweak or React Testing Library on its own):
 npm install -D happy-dom @testing-library/react
 ```
+
+It needs Node.js 23.8 or later and Vitest 2, 3 or 4. React, ReactDOM and
+valtio are the copies the tests share with the tweak's code (in the browser,
+TangiTweak provides them). The SDK's version is the extension's, so install
+the one that matches the TangiTweak you run
+(`npm install -D tangitweak@0.40.0-alpha`).
+
+**Without npm's copy:** in a [synced folder](editor.md#folder-sync), Folder
+Sync writes the SDK of the extension you're running to
+`.tangitweak/sdk/tangitweak/` and the folder's root `package.json` links it
+(`"tangitweak": "file:.tangitweak/sdk/tangitweak"`). Run
+`npm install -D vitest react react-dom valtio` there and the tests use that
+copy, which always matches your extension. Each
+[GitHub release](https://github.com/tangistudio/TangiTweak/releases) also
+attaches it as `tangitweak-sdk-v<version>.tgz`
+(`npm install -D ./tangitweak-sdk-v0.40.0-alpha.tgz`).
 
 Put the tests inside the tweak's folder, for example in `__tests__/`:
 

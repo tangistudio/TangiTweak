@@ -278,6 +278,10 @@ _Avoid_: export, backup
 `tt-api.d.ts`, `tsconfig.json` and `settings.schema.json`: files TangiTweak writes into the synced folder and rewrites on every start, not meant to be edited.
 _Avoid_: generated files, owned files, support files, typings
 
+**SDK**:
+The `tangitweak` npm package: the `tweak` API's typings, the `tsconfig.json` tweaks extend, and the test SDK (`tangitweak/test`). Its version is the extension's; Folder Sync writes the running extension's copy to `.tangitweak/sdk/tangitweak/`.
+_Avoid_: `@tangitweak/test` (the test package it replaced in 0.40), typings package
+
 **Diagnostics report**:
 The Markdown file the Editor produces for a bug report.
 _Avoid_: debug dump, log export

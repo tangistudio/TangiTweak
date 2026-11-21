@@ -30,8 +30,9 @@ Load the extension from `dist/` ("Load unpacked", MV2), or any recent Firefox
 Every user-facing change goes under `## [Unreleased]` in
 [CHANGELOG.md](../CHANGELOG.md). To release, rename that heading to
 `## [X.Y.Z] - YYYY-MM-DD`, add a fresh empty `## [Unreleased]` above it and a
-compare link at the bottom, and bump the version (`manifest.json`,
-`package.json`, `src/background/sandbox.ts`). A unit test fails while the
+compare link at the bottom, and bump the version (`manifest.json`'s
+`version` without the suffix and `version_name` with it, `package.json` and
+`package-lock.json`, `src/background/sandbox.ts`). A unit test fails while the
 current version has no changelog section. The release notes are that section
 (`scripts/release-notes.mjs`, relative links made absolute) plus a link to
 [install.md](install.md); install steps live there, not in the notes.
@@ -42,6 +43,39 @@ always match the tagged `manifest.json` version. The Firefox `.xpi` is signed
 by Mozilla (AMO) in a separate job, which can take a while: the release is
 published without it, and the `.xpi` is added to it when signing finishes (an
 unsigned one if signing fails).
+
+### The SDK on npm
+
+`npm run build` also builds the SDK, the npm package `tangitweak`, into
+`dist-sdk/` (`buildSdk` in `scripts/build.mjs`): the `tweak` runtime and
+typings (`.`), the test SDK (`./test`, from `src/testing/test.ts`), the
+`tsconfig.json` tweaks extend, and the built-ins' typings it points to. Its
+version is `manifest.json`'s `version_name`, and its README is
+`src/testing/README.md`. The build checks with `npm pack --dry-run` that
+every file its `exports` name is in the package. The extension carries the
+same files as `lib/tangitweak-sdk.json`, which Folder Sync writes to
+`.tangitweak/sdk/tangitweak/`.
+
+The release job attaches `tangitweak-sdk-v<version>.tgz` to the GitHub
+release and publishes `dist-sdk/` to npm with
+[Trusted Publishing](https://docs.npmjs.com/trusted-publishers): the workflow
+proves who it is with GitHub's OIDC token, so there's no npm token or secret,
+and npm adds a provenance statement. A prerelease (`0.40.0-alpha`) goes under
+its dist-tag (`alpha`), any other version under `latest`. A version that's
+already on npm is skipped, so rerunning a release is safe.
+
+Before the first automated publish, a maintainer does this once:
+
+1. Publish the package by hand, so it exists on npm: `npm login`, then
+   `npm run build` and `cd dist-sdk && npm publish --access public --tag alpha`.
+2. On npmjs.com, open the `tangitweak` package's **Settings** → **Trusted
+   Publisher** → **GitHub Actions**, and enter the organization
+   `tangistudio`, the repository `TangiTweak` and the workflow file
+   `release.yml` (no environment).
+3. Optional: on the same page, under **Publishing access**, require two-factor
+   authentication and disallow tokens, so only the workflow can publish.
+
+After that, pushing a `vX.Y.Z` tag publishes that version.
 
 The helper is versioned separately in `helper/Cargo.toml`: bump it only when
 the helper changes. When the extension starts depending on new helper

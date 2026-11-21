@@ -429,18 +429,19 @@ TypeScript completions; saves hot apply instantly. The typings of
 [package imports](scripting.md#packages-from-unpkg) go to
 `.tangitweak/types/`, which TangiTweak owns: it rewrites and prunes them as
 scripts change. The built-ins' (`valtio`, `react`, `react-dom`) go to
-`.tangitweak/types/builtin/`, so their imports resolve there too, and the
-low-level [test loader](testing.md#loadtweak-the-low-level-api) (`@tangitweak/test`) goes to
-`.tangitweak/test/`. The running build's SDK goes to
-`.tangitweak/sdk/tangitweak/` (a `package.json`, its `index.d.ts` and the
-`tsconfig.json` tweaks extend), and the root `package.json` lists it as the
-`tangitweak` devDependency (`file:.tangitweak/sdk/tangitweak`): after
-`npm install` at the root, a tweak's `{ "extends": "tangitweak/tsconfig.json" }`
-and `import { tweak } from "tangitweak"` resolve there.
+`.tangitweak/types/builtin/`, so their imports resolve there too. The
+running build's SDK goes to `.tangitweak/sdk/tangitweak/`: the same files as
+the `tangitweak` npm package (the `tweak` API's typings, the `tsconfig.json`
+tweaks extend, and [`tangitweak/test`](testing.md)). The root `package.json`
+lists it as the `tangitweak` devDependency
+(`file:.tangitweak/sdk/tangitweak`): after `npm install` at the root, a
+tweak's `{ "extends": "tangitweak/tsconfig.json" }`,
+`import { tweak } from "tangitweak"` and its tests' `tangitweak/test`
+resolve there.
 
 Those support files are refreshed on every browser start
 and extension update, so new APIs, settings and test helpers reach an already-synced folder.
-`tt-api.d.ts`, `tsconfig.json` and `settings.schema.json` are owned by TangiTweak (edits there are overwritten); `package.json` keeps your own `scripts`, `dependencies` and `devDependencies` while maintaining `"type": "module"` and the `@tangitweak/test` / `#tangitweak/test` mappings. `settings.json` is yours: an
+`tt-api.d.ts`, `tsconfig.json` and `settings.schema.json` are owned by TangiTweak (edits there are overwritten); `package.json` keeps your own `scripts`, `dependencies` and `devDependencies` while maintaining `"type": "module"` and the `tangitweak` devDependency. `settings.json` is yours: an
 update only adds documentation for settings it doesn't mention yet.
 
 Sync is two-way and watches the folder for **creates, renames/moves and
