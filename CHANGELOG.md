@@ -19,6 +19,7 @@ its section below.
 ### Changed
 
 - **`npm install` in a synced tweak's folder works before the SDK is on npm**: the synced folder's root `package.json` now lists every tweak and `.tangitweak/sdk/tangitweak` as npm `workspaces`, so a tweak's `tangitweak` dependency installs as the running extension's SDK instead of failing with `No versions available for tangitweak`.
+- **No more "registered no handler at top level" warnings** for a bundle's modules: a module that registers handlers inside a function its entry calls is the normal layout.
 - **No more `tt-api.d.ts`** at the root of the synced folder: each tweak's `tsconfig.json` extends the SDK's, whose `index.d.ts` has the same typings. The one TangiTweak wrote is removed; one you wrote yourself stays.
 - **No more `settings.schema.json`** in the synced folder. The one TangiTweak wrote is removed; `settings.json` still gets completions and validation in the Editor.
 - **The Explorer folds a tweak's stores** under one `.tweak/stores` row, closed until you open it (click, Enter or →); opening a store from elsewhere opens the row.
