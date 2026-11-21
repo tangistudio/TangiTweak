@@ -1406,6 +1406,79 @@ declare const tt: {
     readonly isLinux: boolean;
 };
 
+/**
+ * The TangiTweak API, imported: `import { tweak } from "tangitweak"`. The
+ * same as {@link tt}, except:
+ * - no `metadata` and no `defineParam` (declare params with `tweak.params`);
+ * - `globalStore` takes an ID: lowercase letters, digits, `-`, `_` and `.`
+ *   (not first) — unique in the tweak;
+ * - `tabStore`, `pageStore` and `siteStore` take no name: a store is known
+ *   by the file that creates it and its place among that file's
+ *   `tabStore` / `pageStore` / `siteStore` calls.
+ *
+ * Each file that imports it gets its own `tweak`; handlers it registers in
+ * a file are known by their order there ("the 2nd `onPage`").
+ */
+declare module "tangitweak" {
+    export const tweak: TangiTweak.Tweak;
+}
+
+declare namespace TangiTweak {
+    /** `import { tweak } from "tangitweak"`: {@link tt} without `metadata` / `defineParam`, with unnamed tab/page/site stores */
+    type Tweak = Omit<typeof tt, "metadata" | "defineParam" | "globalStore" | "tabStore" | "pageStore" | "siteStore"> & {
+        /**
+         * Reactive [valtio](https://valtio.dev) store shared across the entire
+         * browser (see `tt.globalStore`): one copy across all tabs and pages,
+         * persisted by default. Not in `onSite` code (use {@link siteStore}).
+         *
+         * @param id The store's ID, unique in the tweak: lowercase letters,
+         *   digits, `-`, `_` and `.` (not first).
+         *
+         * @example
+         * const state = tweak.globalStore("state", { mocking: true, hits: 0 });
+         * tweak.onRequest({ url: "*://api.example.com/*", strategy: "helper" }, () => {
+         *     state.hits++;
+         *     if (state.mocking) return { replaceResponse: { body: { mocked: true } } };
+         * });
+         */
+        globalStore<T extends object>(id: string, initial: T, opts?: TangiTweak.StoreOptions<T>): T;
+
+        /**
+         * Reactive [valtio](https://valtio.dev) store scoped to one browser tab
+         * (see `tt.tabStore`): survives reloads and navigations in that tab.
+         * Call it at top level: a store is known by its file and its place
+         * among the file's `tabStore` / `pageStore` / `siteStore` calls.
+         *
+         * @example
+         * const tab = tweak.tabStore({ staging: false });
+         */
+        tabStore<T extends object>(initial: T): T;
+
+        /**
+         * Reactive [valtio](https://valtio.dev) store scoped to a single page
+         * document load (see `tt.pageStore`): resets on reload. Call it at top
+         * level: a store is known by its file and its place among the file's
+         * `tabStore` / `pageStore` / `siteStore` calls.
+         *
+         * @example
+         * const page = tweak.pageStore({ staging: false });
+         */
+        pageStore<T extends object>(initial: T): T;
+
+        /**
+         * Reactive [valtio](https://valtio.dev) store living in the site's own
+         * JavaScript world (see `tt.siteStore`): untrusted, mirrored to
+         * `onPage` and `onOverlay` code. Call it at top level: a store is known
+         * by its file and its place among the file's `tabStore` / `pageStore` /
+         * `siteStore` calls.
+         *
+         * @example
+         * const flags = tweak.siteStore({ loggedIn: false });
+         */
+        siteStore<T extends object>(initial: T): T;
+    };
+}
+
 /*
  * Newer web platform APIs that the editor's bundled TypeScript doesn't know
  * yet. TangiTweak targets current browsers, so scripts may use them freely.

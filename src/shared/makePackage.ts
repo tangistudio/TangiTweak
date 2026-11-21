@@ -116,10 +116,10 @@ export function manifestText(name: string, scripts: string[], connect: string[] 
     return JSON.stringify({ name, version: "1.0.0", description: "", ...(connect.length ? { connect } : {}), scripts }, null, 4) + "\n";
 }
 
-/** hosts the code's tt.fetch calls name in a literal URL */
+/** hosts the code's tt.fetch (or tweak.fetch) calls name in a literal URL */
 export function fetchHosts(codes: string[]): string[] {
     const out = new Set<string>();
-    for (const code of codes) for (const m of code.matchAll(/\btt\.fetch\s*\(\s*["'`]https?:\/\/([^/:"'`\s$?#]+)/g)) out.add(m[1].toLowerCase());
+    for (const code of codes) for (const m of code.matchAll(/\b(?:tt|tweak)\.fetch\s*\(\s*["'`]https?:\/\/([^/:"'`\s$?#]+)/g)) out.add(m[1].toLowerCase());
     return [...out].sort();
 }
 

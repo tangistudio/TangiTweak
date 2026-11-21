@@ -1,12 +1,14 @@
 /**
  * Which import specifiers name a built-in module (the extension's own
- * valtio and React, src/shared/builtins.ts). Pure, so the Editor, the page
- * hook and the download step can ask without loading the modules.
+ * valtio and React, src/shared/builtins.ts, and "tangitweak": each file's
+ * `tweak`, shared/tweakApi.ts). Pure, so the Editor, the page hook and the
+ * download step can ask without loading the modules.
  */
+import { TWEAK_MODULE } from "./tweakApi";
 
 export const REACT_BUILTINS = ["react", "react-dom", "react-dom/client", "react/jsx-runtime", "react/jsx-dev-runtime"] as const;
 export const VALTIO_BUILTINS = ["valtio", "valtio/vanilla", "valtio/utils", "valtio/vanilla/utils", "valtio/react", "valtio/react/utils"] as const;
-const ALL = new Set<string>([...REACT_BUILTINS, ...VALTIO_BUILTINS]);
+const ALL = new Set<string>([...REACT_BUILTINS, ...VALTIO_BUILTINS, TWEAK_MODULE]);
 
 /** where the built-ins' typings (lib/builtin-types.json, keyed like node_modules) go under `root`, by tsconfig `paths` */
 export function builtinPaths(root: string): Record<string, string[]> {

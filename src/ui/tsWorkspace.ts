@@ -7,6 +7,7 @@
  */
 
 import { builtinSpec, jsxElementAt } from "../shared/builtinSpecs";
+import { TWEAK_MODULE } from "../shared/tweakApi";
 import { PACKAGE_MODULES_KEY, PACKAGE_TYPINGS_KEY, TYPINGS_ROOT, type PackageStatus, type StoredTypings } from "../shared/packageImports";
 import { coveredMissingModule, dependantsOf, importSpecs, isImageDataPath, isMarkdownPath, isSvgPath, packageImportMarks, packageUrls } from "../shared/scriptImports";
 import { isTsxName } from "../shared/scriptName";
@@ -128,7 +129,7 @@ export interface TsWorkspace {
 /** Does any script code import a built-in module (`react`, `valtio`, …) or use JSX? */
 export function needsBuiltinTypings(codes: Iterable<string>): boolean {
     for (const code of codes) {
-        for (const s of importSpecs(code)) if (builtinSpec(s) === s) return true;
+        for (const s of importSpecs(code)) if (builtinSpec(s) === s && s !== TWEAK_MODULE) return true;
     }
     return false;
 }

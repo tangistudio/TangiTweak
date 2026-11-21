@@ -43,6 +43,9 @@ export const placeOf = (route: Pick<RouteMeta, "kind" | "world">): PlaceApi => (
  * function, called by the script) is numbered in the library's source and
  * named after it (`onPage:0@utils/x`). A call that runs again (a helper
  * registering twice) gets `#1`, `#2`, ….
+ *
+ * The imported `tweak`'s calls aren't rewritten: their `n` is their
+ * registration order in the script's run, per file and API (orderKeyer).
  */
 export function placeKeyer(): (api: PlaceApi, n?: number, lib?: string) => { key: string; n: number } {
     const seen = new Map<string, number>();
@@ -54,6 +57,17 @@ export function placeKeyer(): (api: PlaceApi, n?: number, lib?: string) => { key
         const again = seen.get(base) ?? 0;
         seen.set(base, again + 1);
         return { key: again ? `${base}#${again}` : base, n: typeof n === "number" ? n : count };
+    };
+}
+
+/** `tweak.onX`'s `n`: the how-manyth call to `api` from `lib`'s code (the script's own: undefined) this is */
+export function orderKeyer(): (api: PlaceApi, lib?: string) => number {
+    const counts = new Map<string, number>();
+    return (api, lib) => {
+        const at = `${api}@${lib ?? ""}`;
+        const n = counts.get(at) ?? 0;
+        counts.set(at, n + 1);
+        return n;
     };
 }
 
@@ -148,11 +162,11 @@ function checkPatterns(ps: string[], what: string, where: string): void {
  * Validate and normalize a registration's route argument. Throws a
  * script error on anything unusable (it surfaces like a syntax error).
  */
-export function normalizeRoute(kind: RouteKind, raw: unknown, index: number, api?: PlaceApi): RouteMeta {
+export function normalizeRoute(kind: RouteKind, raw: unknown, index: number, api?: PlaceApi, via: "tt" | "tweak" = "tt"): RouteMeta {
     const name = api || kind;
-    const where = `tt.${name}`;
+    const where = `${via}.${name}`;
     const doc = !isNetKind(kind);
-    const example = doc ? `tt.${name}("*://example.com/*", handler)` : `tt.${kind}({ url: "*://example.com/*", strategy: "helper" }, handler)`;
+    const example = doc ? `${via}.${name}("*://example.com/*", handler)` : `${via}.${kind}({ url: "*://example.com/*", strategy: "helper" }, handler)`;
     const shape = doc ? "a URL pattern (string, string[] or { url })" : "a route { url, strategy }";
     if (typeof raw === "function" || raw === undefined || raw === null) throw new Error(`${where}: first argument must be ${shape} — e.g. ${example}`);
     let obj: any;

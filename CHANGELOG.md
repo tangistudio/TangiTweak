@@ -7,6 +7,10 @@ its section below.
 
 ## [Unreleased]
 
+### Added
+
+- **`import { tweak } from "tangitweak"`**, the imported authoring API, next to `tt`. It works in every world (network handlers, `onSite`, `onPage`, `onOverlay`, `@tangitweak/test`) and in imported files, with full typings in the Editor and in Folder Sync. Unlike `tt` it has no `metadata` or `defineParam`; `tweak.globalStore(id, …)` takes a file-name-safe ID (lowercase letters, digits, `-`, `_`, `.`); `tweak.tabStore`, `tweak.pageStore` and `tweak.siteStore` take no name.
+
 ## [0.37.0-alpha] - 2026-11-15
 
 ### Added

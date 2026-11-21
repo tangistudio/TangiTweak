@@ -359,6 +359,50 @@ describe("@tangitweak/test harness", () => {
         await t.dispose();
     });
 
+    it("runs `import { tweak } from \"tangitweak\"` in every world, from the script and from a file it imports", async () => {
+        const t = await loadTweak({
+            name: "main",
+            files: {
+                "state.ts": `
+                import { tweak } from "tangitweak";
+                export const page = tweak.pageStore({ hits: 0 });
+                export const mark = () => tweak.onPage("*://example.com/*", () => { document.body.dataset.lib = "1"; });
+                `,
+            },
+            code: `
+            import { tweak } from "tangitweak";
+            import { page, mark } from "./state";
+            const app = tweak.globalStore("app", { n: 1 });
+            const tab = tweak.tabStore({ visits: 0 });
+            const flags = tweak.siteStore({ seen: false });
+            const site = tweak.onSite("*://example.com/*", () => {
+                flags.seen = true;
+                return { token: () => (window as any).__tok };
+            });
+            mark();
+            tweak.onPage("*://example.com/*", async () => {
+                page.hits++;
+                tab.visits++;
+                const out = document.createElement("output");
+                out.textContent = [await site.token(), page.hits, tab.visits, app.n].join("/");
+                document.body.appendChild(out);
+            });
+            tweak.replaceResponse({ url: "*://api.example.com/*", strategy: "helper" }, () => ({ n: app.n }));
+            `,
+        });
+        expect(t.errors).toEqual([]);
+        expect(await (await t.simulate("https://api.example.com/x")).json()).toEqual({ n: 1 });
+        (window as any).__tok = "tok";
+        const page = await t.openPage("https://example.com/");
+        await page.flush();
+        expect(document.querySelector("output")!.textContent).toBe("tok/1/1/1");
+        expect(document.body.dataset.lib).toBe("1");
+        // an unnamed store: its file + position among the file's tab/page/site stores
+        expect(page.siteStore("main#1").seen).toBe(true);
+        await page.close();
+        await t.dispose();
+    });
+
     it("catches invalid dynamic reads inside strategy: 'rules' handlers", async () => {
         await expect(
             loadTweak({

@@ -1213,7 +1213,7 @@ export async function loadTweak(source: TweakSource, options: LoadTweakOptions =
                             exposer: mine ? st.siteExposer : undefined,
                             siteStore: mine ? (name, initial) => siteHost.store(s.id, name, initial) : undefined,
                             onSiteCall: (e) => logSink(s.name, "error", "onSite", formatScriptError(s.name, e, "onSite")),
-                            log: (...args: any[]) => logSink(s.name, "info", "tt.log", scriptLogLine(libName ?? s.name, "tt.log", formatLogArgs(args))),
+                            log: (source, ...args) => logSink(s.name, "info", source, scriptLogLine(libName ?? s.name, source, formatLogArgs(args))),
                             storage: {
                                 get: async (key: string) => structuredClone(storageData.get(s.id)?.[key]),
                                 set: async (key: string, value: any) => {
@@ -1383,7 +1383,7 @@ export async function loadTweak(source: TweakSource, options: LoadTweakOptions =
                             siteStore: mine ? (n, initial) => isoSiteMirrors.store(s.id, n, initial) : undefined,
                             exposer: mine ? st.isoExposer : undefined,
                             call: mine ? callHandle : undefined,
-                            log: (...args: any[]) => logSink(s.name, "info", "tt.log", scriptLogLine(name, "tt.log", formatLogArgs(args))),
+                            log: (source, ...args) => logSink(s.name, "info", source, scriptLogLine(name, source, formatLogArgs(args))),
                             storage: {
                                 get: async (key: string) => structuredClone(storageData.get(s.id)?.[key]),
                                 set: async (key: string, value: any) => {

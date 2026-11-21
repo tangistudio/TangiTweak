@@ -232,7 +232,7 @@ import { FrameShortcuts } from "../shared/shortcut";
                 siteStore: mine ? (n, initial) => siteStores().store(s, n, initial) : undefined,
                 exposer: mine ? exposer : undefined,
                 call: mine ? handle(gen) : undefined,
-                log: (...args: any[]) => log("info", scriptLogLine(name, "tt.log", formatLogArgs(args))),
+                log: (source, ...args) => log("info", scriptLogLine(name, source, formatLogArgs(args))),
                 storage: {
                     get: (key: string) => linkUp().then((ep) => ep.call("storage.get", { key }, s)).then((r) => r.value, () => undefined),
                     set: (key: string, value: any) => linkUp().then((ep) => ep.call("storage.set", { key, value }, s)).then(() => null, () => null),

@@ -3,6 +3,7 @@
  * file, and settings.json). Unlike Log lines, a Problem goes away by itself once it is
  * fixed — type errors live as you type, the rest when the script is saved.
  */
+import { apiPattern } from "../shared/codeScan";
 import { scriptFrame } from "../shared/scriptError";
 import { userFrames } from "../shared/scriptHealth";
 import { USER_SCRIPTS_PROBLEM } from "../shared/userScriptsStatus";
@@ -171,7 +172,8 @@ function lineRange(lines: string[], line: number): Range {
  * Where a handler named in a message ("onRequest #2: …") is: the URL pattern
  * the message quotes, found in the source (from the registration on, else
  * anywhere — e.g. a constant), else the registration call itself. The
- * registration line comes from the stored route, else the Nth `tt.<kind>(`.
+ * registration line comes from the stored route, else the Nth `tt.<kind>(`
+ * (or `tweak.<kind>(`).
  */
 function handlerRange(msg: string, s: ProblemScript): Range | { line: number } | undefined {
     const m = HANDLER.exec(msg);
@@ -184,7 +186,7 @@ function handlerRange(msg: string, s: ProblemScript): Range | { line: number } |
     const lines = code.split("\n");
     let line = route?.line;
     if (!line && !m[3]) {
-        const calls = [...code.matchAll(new RegExp(`\\btt\\s*\\.\\s*${m[1]}\\s*\\(`, "g"))];
+        const calls = [...code.matchAll(new RegExp(`\\b${apiPattern(code)}\\s*\\.\\s*${m[1]}\\s*\\(`, "g"))];
         const call = calls[Number(m[2]) - 1];
         if (call) line = code.slice(0, call.index).split("\n").length;
     }
@@ -212,7 +214,7 @@ function siteUseRange(msg: string, s: ProblemScript): Range | undefined {
     const code = s.code!;
     const lines = code.split("\n");
     const from = lineStart(lines, h.line);
-    const next = code.slice(from + 1).search(/\btt\s*\.\s*on[A-Z]\w*\s*\(/);
+    const next = code.slice(from + 1).search(new RegExp(`\\b${apiPattern(code)}\\s*\\.\\s*on[A-Z]\\w*\\s*\\(`));
     const end = next < 0 ? code.length : from + 1 + next;
     const use = new RegExp(`(?<![\\w$.])${name!.replace(/\$/g, "\\$").split(".").join("\\s*\\.\\s*")}(?![\\w$])`, "g");
     use.lastIndex = from;
@@ -232,7 +234,7 @@ function rulesUseRange(msg: string, s: ProblemScript, taken: Set<number>): Range
     const code = s.code!;
     const lines = code.split("\n");
     const from = lineStart(lines, h.line);
-    const next = code.slice(from + 1).search(/\btt\s*\.\s*on[A-Z]\w*\s*\(/);
+    const next = code.slice(from + 1).search(new RegExp(`\\b${apiPattern(code)}\\s*\\.\\s*on[A-Z]\\w*\\s*\\(`));
     const end = next < 0 ? code.length : from + 1 + next;
     const use = new RegExp(`(?<![\\w$.])${text!.replace(/[$]/g, "\\$").split(".").join("\\s*\\.\\s*")}(?![\\w$])`, "g");
     use.lastIndex = from;

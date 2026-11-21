@@ -59,6 +59,36 @@ function errorsOf(snippet: string): string[] {
     return ts.getPreEmitDiagnostics(program, program.getSourceFile("/snippet.ts")).map((d) => ts.flattenDiagnosticMessageText(d.messageText, "\n"));
 }
 
+describe('import { tweak } from "tangitweak" typings', () => {
+    it("is tt's API, with unnamed tab/page/site stores and an ID for globalStore", () => {
+        expect(
+            errorsOf(`
+import { tweak } from "tangitweak";
+const cfg = tweak.params({ on: { type: "boolean", default: true } });
+const g = tweak.globalStore("seen-items", { n: 0 }, { persist: false });
+const tab = tweak.tabStore({ open: false });
+const page = tweak.pageStore({ hits: 0 });
+const flags = tweak.siteStore({ seen: false });
+const site = tweak.onSite("*", () => ({ title: () => document.title }));
+tweak.onOverlay("*", async () => { const t: string = await site.title(); g.n++; tab.open = !page.hits; flags.seen = cfg.on; });
+tweak.onRequest({ url: "*://a.com/*", strategy: "helper" }, () => (tweak.isMV3 ? { block: true } : undefined));
+tweak.log(tweak.storage, tweak.fetch);
+`)
+        ).toEqual([]);
+    });
+
+    it("has no metadata or defineParam; the unnamed stores take no name", () => {
+        expect(errorsOf(`import { tweak } from "tangitweak";
+tweak.metadata({ name: "x" });`)).toHaveLength(1);
+        expect(errorsOf(`import { tweak } from "tangitweak";
+tweak.defineParam("x", { type: "string" });`)).toHaveLength(1);
+        expect(errorsOf(`import { tweak } from "tangitweak";
+tweak.pageStore("x", {});`)).toHaveLength(1);
+        expect(errorsOf(`import { tweak } from "tangitweak";
+const s: { a: number } = tweak.tabStore({ a: "x" });`)).toHaveLength(1);
+    });
+});
+
 describe("onSite / onPage / onOverlay typings", () => {
     it("infers argument and result types both ways", () => {
         expect(

@@ -15,6 +15,7 @@ import * as vanilla from "valtio/vanilla";
 import * as vanillaUtils from "valtio/vanilla/utils";
 import { createProxy, isChanged } from "proxy-compare";
 import { builtinNeedsReact, builtinSpec, preactRoot, preactTarget, REACT_BUILTINS } from "./builtinSpecs";
+import { TWEAK_MODULE } from "./tweakApi";
 import { importSpecs, type ShippedLib } from "./scriptImports";
 import type { PackageModules } from "./packageImports";
 import type { HotCompile } from "./hotRefresh";
@@ -181,6 +182,8 @@ function withHooks(base: object, hooks: () => { useSnapshot: any; useProxy: any 
 export function builtinModule(spec: string, code = "", loadUrl?: (url: string) => any, hot?: { compile: HotCompile; path: string }): any {
     const name = builtinSpec(spec);
     if (!name) throw new Error(`"${spec}" isn't a built-in module`);
+    // each file's own `tweak` (scriptFunction's require); a package can't import it
+    if (name === TWEAK_MODULE) throw new Error(`"${TWEAK_MODULE}" can only be imported by a tweak's own files`);
     const root = preactRoot(code);
     const mapped = root ? preactTarget(root, name) : null;
     if (mapped) {

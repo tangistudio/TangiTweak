@@ -12,7 +12,8 @@ import { parseShortcut } from "./shortcut";
 import { formatLogArgs, makeScriptConsole, type ScriptLogLevel } from "./scriptLog";
 import { scriptFunction } from "./scriptFn";
 import { callerLine } from "./scriptError";
-import { isNetKind, normalizeRoute, placeApi, placeKeyer, placeKind, placeOf, routeLabel, type PlaceApi, type RouteKind, type RouteMeta } from "./route";
+import { isNetKind, normalizeRoute, orderKeyer, placeApi, placeKeyer, placeKind, placeOf, routeLabel, type PlaceApi, type RouteKind, type RouteMeta } from "./route";
+import { provideTweak, tweakStores, type NamedStores, type Via } from "./tweakApi";
 import { inertRemote, NO_SITE_STORE, REMOTE_FROM_BACKGROUND, SITE_NO_HANDLES, SITE_NO_STORES, unusableStore } from "./remote";
 import { scriptEnv } from "./scriptEnv";
 import { dataFileValue, importLine, importPath, importResolver, isDataSpec } from "./scriptImports";
@@ -22,7 +23,7 @@ import { builtinSpec } from "./builtinSpecs";
 import { proxy } from "valtio/vanilla";
 import { ReplicaHub } from "./storeReplica";
 import { claimStoreName, storePersist } from "./storeOps";
-import { closeOf, codeOnly } from "./codeScan";
+import { apiPattern, closeOf, codeOnly } from "./codeScan";
 import type { StorePersist, WireRequest, WireResponse } from "./wire";
 import { fromWireResponse, splitFetchInit, toWireRequest, type WtFetchInit } from "./ttFetch";
 
@@ -583,12 +584,12 @@ function makeForwardingConsole(sink?: ResApiOverrides["logSink"]): Console {
  * importer's top level belong to the importer). Empty = too late.
  */
 const collectors: ScriptHandlers[] = [];
-/** a collector's script: its name, its handles (`remote`) and its handler names (placeKeyer: one numbering per script run) */
+/** a collector's script: its name, its handles (`remote`) and its handler names (placeKeyer, orderKeyer: one numbering per script run) */
 type CollectorOwner = { name: string; remote?: ResApiOverrides["remote"] };
-const collectorOf = new WeakMap<ScriptHandlers, CollectorOwner & { keyOf: ReturnType<typeof placeKeyer> }>();
+const collectorOf = new WeakMap<ScriptHandlers, CollectorOwner & { keyOf: ReturnType<typeof placeKeyer>; order: ReturnType<typeof orderKeyer> }>();
 
 function withCollector<T>(c: ScriptHandlers, owner: CollectorOwner, run: () => T): T {
-    if (!collectorOf.has(c)) collectorOf.set(c, { ...owner, keyOf: placeKeyer() });
+    if (!collectorOf.has(c)) collectorOf.set(c, { ...owner, keyOf: placeKeyer(), order: orderKeyer() });
     collectors.push(c);
     try {
         return run();
@@ -682,71 +683,70 @@ function createOwner(meta: ResMeta, storedValues?: Record<string, any>) {
     };
 }
 
-/** `tt.globalStore`, `tt.tabStore`, `tt.pageStore` (each name once, across all three) and `tt.siteStore` (its own names) for one compiled instance */
-function makeStores(overrides?: ResApiOverrides): {
-    globalStore: (name: string, initial: object, opts?: unknown) => object;
-    tabStore: (name: string, initial: object) => object;
-    pageStore: (name: string, initial: object) => object;
-    siteStore: (name: string, initial: object) => object;
-} {
+/**
+ * `tt.globalStore`, `tt.tabStore`, `tt.pageStore` (each name once, across
+ * all three) and `tt.siteStore` (its own names) for one compiled instance;
+ * `via`: the API whose messages they give (`tweak`'s share the names)
+ */
+function makeStores(overrides?: ResApiOverrides): (via: Via) => NamedStores {
     const names = new Map<string, string>();
     const siteNames = new Map<string, string>();
     let local: ReplicaHub | null = null;
-    return {
+    return (via) => ({
         globalStore: (name, initial, opts) => {
             // save-time compile: arguments built from a stubbed import aren't known yet
             if (isStub(name) || isStub(initial) || isStub(opts)) return makeStubModule();
-            claimStoreName(names, "tt.globalStore", name, initial);
-            const persist = storePersist(name, opts);
+            claimStoreName(names, `${via}.globalStore`, name, initial);
+            const persist = storePersist(name, opts, `${via}.globalStore`);
             const out = overrides?.store ? overrides.store(name, initial, persist) : proxy(initial);
             const top = collectors[collectors.length - 1];
             if (top) (top as ScriptHandlers & { hasGlobalStore?: boolean }).hasGlobalStore = true;
-            names.set(name, "tt.globalStore");
+            names.set(name, `${via}.globalStore`);
             return out;
         },
         tabStore: (name, initial) => {
             if (isStub(name) || isStub(initial)) return makeStubModule();
-            claimStoreName(names, "tt.tabStore", name, initial);
+            claimStoreName(names, `${via}.tabStore`, name, initial);
             const out = overrides?.tabStore ? overrides.tabStore(name, initial) : (local ??= new ReplicaHub({ ctx: "local" })).tabStore("local", name, initial);
-            names.set(name, "tt.tabStore");
+            names.set(name, `${via}.tabStore`);
             return out;
         },
         pageStore: (name, initial) => {
             if (isStub(name) || isStub(initial)) return makeStubModule();
-            claimStoreName(names, "tt.pageStore", name, initial);
+            claimStoreName(names, `${via}.pageStore`, name, initial);
             const out = overrides?.pageStore ? overrides.pageStore(name, initial) : (local ??= new ReplicaHub({ ctx: "local" })).pageStore("local", name, initial);
-            names.set(name, "tt.pageStore");
+            names.set(name, `${via}.pageStore`);
             return out;
         },
         siteStore: (name, initial) => {
             if (isStub(name) || isStub(initial)) return makeStubModule();
-            claimStoreName(siteNames, "tt.siteStore", name, initial);
+            claimStoreName(siteNames, `${via}.siteStore`, name, initial);
             const out = overrides?.siteStore ? overrides.siteStore(name, initial) : unusableStore(NO_SITE_STORE);
-            siteNames.set(name, "tt.siteStore");
+            siteNames.set(name, `${via}.siteStore`);
             return out;
         },
-    };
+    });
 }
 
 /** `tt.fetch`: background code, or the overlay (with `pageFetch`) */
-function makeFetch(overrides?: ResApiOverrides): (input: RequestInfo | URL, init?: WtFetchInit) => Promise<Response> {
+function makeFetch(overrides?: ResApiOverrides, via: Via = "tt"): (input: RequestInfo | URL, init?: WtFetchInit) => Promise<Response> {
     return async (input, init) => {
         const { init: rest, from, bypass } = splitFetchInit(init);
         const page = overrides?.pageFetch;
         if (page && from !== "background") return fromWireResponse(await page.fetch(await toWireRequest(input, rest, page.url), bypass));
-        if (from === "page") throw new Error('tt.fetch: from: "page" fetches as the page, which only an overlay (tt.onOverlay) can do — background code uses from: "background"');
+        if (from === "page") throw new Error(`${via}.fetch: from: "page" fetches as the page, which only an overlay (${via}.onOverlay) can do — background code uses from: "background"`);
         if (!overrides?.fetch) return fetch(input, { credentials: "include", ...rest });
         return fromWireResponse(await overrides.fetch(await toWireRequest(input, rest), bypass));
     };
 }
 
 /** `tt.storage.set("$store:…")` writes behind a store's back: warn (the store owns the key) */
-function guardStoreKeys(storage: { get(key: string): any; set(key: string, value: any): any }, overrides?: ResApiOverrides) {
+function guardStoreKeys(storage: { get(key: string): any; set(key: string, value: any): any }, overrides?: ResApiOverrides, via: Via = "tt") {
     return {
         get: (key: string) => storage.get(key),
         set: (key: string, value: any) => {
             if (typeof key === "string" && key.startsWith("$store:")) {
-                const msg = `tt.storage.set("${key}"): that key is the persisted copy of tt.globalStore("${key.slice(7)}") — change the store instead (the store overwrites this on its next save)`;
+                const msg = `${via}.storage.set("${key}"): that key is the persisted copy of ${via}.globalStore("${key.slice(7)}") — change the store instead (the store overwrites this on its next save)`;
                 if (overrides?.logSink) overrides.logSink("warn", "tt", msg);
                 else console.warn("[TangiTweak]", msg);
             }
@@ -755,9 +755,14 @@ function guardStoreKeys(storage: { get(key: string): any; set(key: string, value
     };
 }
 
-/** `module`: the script or library whose code this shim is given to */
+/**
+ * `module`: the script or library whose code this shim is given to. Makes
+ * its `tt`, and (provideTweak) its `tweak`: the same internals — stores,
+ * params, handler collection — with `tweak.*` in messages and its
+ * onSite / onPage / onOverlay handlers keyed by registration order.
+ */
 function makeShim(owner: ReturnType<typeof createOwner>, overrides: ResApiOverrides | undefined, module: string): any {
-    const register = (kind: RouteKind, api?: PlaceApi) => (route: unknown, fn: unknown, n?: number) => {
+    const register = (kind: RouteKind, api?: PlaceApi, via: Via = "tt") => (route: unknown, fn: unknown, n?: number) => {
         const name = api || kind;
         const top = collectors[collectors.length - 1];
         const c = top && collectorOf.get(top);
@@ -767,22 +772,22 @@ function makeShim(owner: ReturnType<typeof createOwner>, overrides: ResApiOverri
         // page/overlay registrations hand back an RPC handle; in the background it's inert
         const remote = (r?: RouteMeta) => (!api ? undefined : r && toRemote ? toRemote(r) : inertRemote(REMOTE_FROM_BACKGROUND));
         if (!top) {
-            const msg = `tt.${name} called after the script's top level finished — handlers must be registered synchronously at top level (not after await / in callbacks); ignored`;
-            if (overrides?.logSink) overrides.logSink("error", "tt", msg);
+            const msg = `${via}.${name} called after the script's top level finished — handlers must be registered synchronously at top level (not after await / in callbacks); ignored`;
+            if (overrides?.logSink) overrides.logSink("error", via, msg);
             else console.error("[TangiTweak]", msg);
             return remote();
         }
-        if (typeof route === "function" && fn === undefined && !mentionsStub(route)) normalizeRoute(kind, route, 0, api); // throws the "first argument" error
-        if (typeof fn !== "function") throw new Error(`tt.${name}: second argument must be the handler function`);
+        if (typeof route === "function" && fn === undefined && !mentionsStub(route)) normalizeRoute(kind, route, 0, api, via); // throws the "first argument" error
+        if (typeof fn !== "function") throw new Error(`${via}.${name}: second argument must be the handler function`);
         const list = top[kind];
         // save-time compile with stubbed imports: route unknown until analyzed
         const r: RouteMeta = mentionsStub(route)
             ? { kind, index: list.length, url: [], exclude: [], ...(api === "onSite" || api === "onPage" ? { api, world: api === "onSite" ? "page" : "isolated" } : {}) }
-            : normalizeRoute(kind, route, list.length, api);
+            : normalizeRoute(kind, route, list.length, api, via);
         const line = callerLine();
         if (line) r.line = line;
         if (api) {
-            const k = c!.keyOf(api, n, lib);
+            const k = c!.keyOf(api, via === "tweak" ? c!.order(api, lib) : n, lib);
             r.key = k.key;
             if (lib !== undefined) {
                 r.lib = lib;
@@ -792,18 +797,14 @@ function makeShim(owner: ReturnType<typeof createOwner>, overrides: ResApiOverri
         list.push({ fn: fn as HandlerFn, route: r });
         return remote(r);
     };
-    const place = (api: PlaceApi) => placeApi(register(placeKind(api), api));
-    return {
-        onRequest: register("onRequest"),
-        onResponseHeaders: register("onResponseHeaders"),
-        replaceResponse: register("replaceResponse"),
-        onResponseBody: register("onResponseBody"),
-        onSite: place("onSite"),
-        onPage: place("onPage"),
-        onOverlay: place("onOverlay"),
-        metadata: (m: unknown) => owner.metadata(m),
+    const storesOf = makeStores(overrides);
+    const common = (via: Via) => ({
+        onRequest: register("onRequest", undefined, via),
+        onResponseHeaders: register("onResponseHeaders", undefined, via),
+        replaceResponse: register("replaceResponse", undefined, via),
+        onResponseBody: register("onResponseBody", undefined, via),
         params: (defs: ParamTree) => {
-            const r = owner.declare(defs, "tt.params");
+            const r = owner.declare(defs, `${via}.params`);
             if (isStub(r)) return r;
             const setParam = overrides?.setParam;
             return paramsProxy(r.known, r.raw, r.unknown, {
@@ -811,19 +812,35 @@ function makeShim(owner: ReturnType<typeof createOwner>, overrides: ResApiOverri
                 send: (k, v) => void setParam!(k, v).catch(() => {}),
             });
         },
+        storage: guardStoreKeys(overrides?.storage || {
+            get: () => undefined,
+            set: () => undefined,
+        }, overrides, via),
+        fetch: makeFetch(overrides, via),
+        log: (...args: any[]) => (overrides?.logSink ? overrides.logSink("info", `${via}.log`, formatLogArgs(args)) : console.log(`[TangiTweak] ${via}.log:`, ...args)),
+        ...scriptEnv(),
+    });
+    const place = (api: PlaceApi) => placeApi(register(placeKind(api), api));
+    const tt = {
+        ...common("tt"),
+        onSite: place("onSite"),
+        onPage: place("onPage"),
+        onOverlay: place("onOverlay"),
+        metadata: (m: unknown) => owner.metadata(m),
         defineParam: (name: string, def: ParamDef) => {
             if (typeof name !== "string" || !name) throw new Error("tt.defineParam: first argument must be the parameter name");
             return owner.add({ [name]: def }, "tt.defineParam", true)[name];
         },
-        storage: guardStoreKeys(overrides?.storage || {
-            get: () => undefined,
-            set: () => undefined,
-        }, overrides),
-        ...makeStores(overrides),
-        fetch: makeFetch(overrides),
-        log: (...args: any[]) => (overrides?.logSink ? overrides.logSink("info", "tt.log", formatLogArgs(args)) : console.log("[TangiTweak] tt.log:", ...args)),
-        ...scriptEnv(),
+        ...storesOf("tt"),
     };
+    provideTweak(tt, (file) => {
+        const ordered = (api: PlaceApi) => {
+            const r = register(placeKind(api), api, "tweak");
+            return (route: unknown, fn: unknown) => r(route, fn);
+        };
+        return { ...common("tweak"), onSite: ordered("onSite"), onPage: ordered("onPage"), onOverlay: ordered("onOverlay"), ...tweakStores(file, storesOf("tweak"), isStub) };
+    });
+    return tt;
 }
 
 
@@ -850,9 +867,9 @@ export function keyPlaceCalls(js: string): string {
 
 /** what an onSite handler uses that only trusted code may */
 export interface SiteUse {
-    /** 0-based: which `tt.onSite(` call of the source it is */
+    /** 0-based: which `tt.onSite(` (or `tweak.onSite(`) call of the source it is */
     nth: number;
-    /** the stores it uses: the variable names (or `tt.pageStore` / `tt.tabStore` / `tt.globalStore`), by kind */
+    /** the stores it uses: the variable names (or `tt.pageStore` / `tweak.tabStore` / …), by kind */
     pageStore: string[];
     tabStore?: string[];
     globalStore: string[];
@@ -868,12 +885,13 @@ export interface SiteUse {
  */
 export function onSiteUses(code: string): SiteUse[] {
     const src = codeOnly(code);
+    const api = apiPattern(code);
     const bound = new Map<string, "pageStore" | "tabStore" | "globalStore" | "handles">();
-    for (const m of src.matchAll(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=;]+)?=\s*tt\s*\.\s*(pageStore|tabStore|globalStore|onSite|onPage|onOverlay)\b/g))
+    for (const m of src.matchAll(new RegExp(`\\b(?:const|let|var)\\s+([A-Za-z_$][\\w$]*)\\s*(?::[^=;]+)?=\\s*${api}\\s*\\.\\s*(pageStore|tabStore|globalStore|onSite|onPage|onOverlay)\\b`, "g")))
         bound.set(m[1], m[2] === "pageStore" || m[2] === "tabStore" || m[2] === "globalStore" ? m[2] : "handles");
     const out: SiteUse[] = [];
     let nth = 0;
-    for (const m of src.matchAll(/(?<![\w$.])tt\s*\.\s*onSite\s*(?:<[^()]*>\s*)?\(/g)) {
+    for (const m of src.matchAll(new RegExp(`(?<![\\w$.])${api}\\s*\\.\\s*onSite\\s*(?:<[^()]*>\\s*)?\\(`, "g"))) {
         const from = m.index! + m[0].length;
         const args = src.slice(from, closeOf(src, from) - 1);
         const tabStore: string[] = [];
@@ -883,10 +901,10 @@ export function onSiteUses(code: string): SiteUse[] {
             if (kind === "tabStore") tabStore.push(name);
             else use[kind].push(name);
         }
-        for (const d of args.matchAll(/(?<![\w$.])tt\s*\.\s*(pageStore|tabStore|globalStore)\b/g)) {
-            const kind = d[1] as "pageStore" | "tabStore" | "globalStore";
+        for (const d of args.matchAll(new RegExp(`(?<![\\w$.])(${api})\\s*\\.\\s*(pageStore|tabStore|globalStore)\\b`, "g"))) {
+            const kind = d[2] as "pageStore" | "tabStore" | "globalStore";
             const list = kind === "tabStore" ? tabStore : use[kind];
-            if (!list.includes(`tt.${kind}`)) list.push(`tt.${kind}`);
+            if (!list.includes(`${d[1]}.${kind}`)) list.push(`${d[1]}.${kind}`);
         }
         if (tabStore.length) use.tabStore = tabStore;
         if (use.pageStore.length || tabStore.length || use.globalStore.length || use.handles.length) out.push(use);
@@ -895,11 +913,11 @@ export function onSiteUses(code: string): SiteUse[] {
 }
 
 
-/** what a `rules` handler might do per request, and what it's for (rulesProblems) */
-const RULES_SIDE_EFFECTS: { re: RegExp; does: string }[] = [
+/** what a `rules` handler might do per request, and what it's for (rulesProblems); `api`: apiPattern */
+const rulesSideEffects = (api: string): { re: RegExp; does: string }[] => [
     { re: /(?<![\w$.])console\s*\.\s*(?:log|info|warn|error|debug|trace|table|dir)\b(?=\s*\()/g, does: "log each request" },
-    { re: /(?<![\w$.])tt\s*\.\s*log\b(?=\s*\()/g, does: "log each request" },
-    { re: /(?<![\w$.])(?:tt\s*\.\s*)?fetch\b(?=\s*\()/g, does: "fetch for each request" },
+    { re: new RegExp(`(?<![\\w$.])${api}\\s*\\.\\s*log\\b(?=\\s*\\()`, "g"), does: "log each request" },
+    { re: new RegExp(`(?<![\\w$.])(?:${api}\\s*\\.\\s*)?fetch\\b(?=\\s*\\()`, "g"), does: "fetch for each request" },
     { re: /(?<![\w$.])(?:setTimeout|setInterval)\b(?=\s*\()/g, does: "run code for each request" },
 ];
 
@@ -915,16 +933,18 @@ export function rulesProblems(code: string, routes: RouteMeta[]): string[] {
     const rules = routes.filter((r) => r.strategy === "rules" && r.line);
     if (!rules.length) return [];
     const src = codeOnly(code);
+    const api = apiPattern(code);
+    const effects = rulesSideEffects(api);
     const starts = [0];
     for (let i = 0; i < src.length; i++) if (src[i] === "\n") starts.push(i + 1);
     const stores = new Set<string>();
-    for (const m of src.matchAll(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=;]+)?=\s*tt\s*\.\s*(?:pageStore|tabStore|globalStore)\b/g)) stores.add(m[1]);
+    for (const m of src.matchAll(new RegExp(`\\b(?:const|let|var)\\s+([A-Za-z_$][\\w$]*)\\s*(?::[^=;]+)?=\\s*${api}\\s*\\.\\s*(?:pageStore|tabStore|globalStore)\\b`, "g"))) stores.add(m[1]);
     const out: string[] = [];
     const seen = new Set<string>();
     for (const r of rules) {
         const lineAt = starts[r.line! - 1];
         if (lineAt === undefined) continue;
-        const call = new RegExp(`(?<![\\w$.])tt\\s*\\.\\s*${r.kind}\\s*(?:<[^()]*>\\s*)?\\(`, "g");
+        const call = new RegExp(`(?<![\\w$.])${api}\\s*\\.\\s*${r.kind}\\s*(?:<[^()]*>\\s*)?\\(`, "g");
         call.lastIndex = lineAt;
         const m = call.exec(src);
         if (!m || m.index >= (starts[r.line!] ?? src.length)) continue;
@@ -935,7 +955,7 @@ export function rulesProblems(code: string, routes: RouteMeta[]): string[] {
         const from = m.index + m[0].length;
         const args = src.slice(from, closeOf(src, from) - 1);
         const found: { at: number; text: string; does: string }[] = [];
-        for (const { re, does } of RULES_SIDE_EFFECTS) for (const e of args.matchAll(re)) found.push({ at: e.index!, text: e[0].replace(/\s+/g, ""), does });
+        for (const { re, does } of effects) for (const e of args.matchAll(re)) found.push({ at: e.index!, text: e[0].replace(/\s+/g, ""), does });
         for (const name of stores) {
             const esc = name.replace(/\$/g, "\\$");
             const write = new RegExp(`(?<![\\w$.])${esc}\\s*(?:\\.\\s*[A-Za-z_$][\\w$]*|\\[[^\\]]*\\])\\s*(?:[-+*/%&|^]|\\?\\?|&&|\\|\\||<<|>>>?|\\*\\*)?=(?!=)|(?:\\+\\+|--)\\s*${esc}\\b|(?<![\\w$.])${esc}\\s*\\.\\s*[A-Za-z_$][\\w$]*\\s*(?:\\+\\+|--)`, "g");
@@ -955,9 +975,9 @@ export function rulesProblems(code: string, routes: RouteMeta[]): string[] {
  * "onRequest #N: uses `x` — …" (an error in the Problems view). They have
  * no page, so it throws there.
  */
-function netSiteStoreProblems(src: string, routes: RouteMeta[]): string[] {
+function netSiteStoreProblems(src: string, routes: RouteMeta[], api: string): string[] {
     const bound: string[] = [];
-    for (const m of src.matchAll(/\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=;]+)?=\s*tt\s*\.\s*siteStore\b/g)) bound.push(m[1]);
+    for (const m of src.matchAll(new RegExp(`\\b(?:const|let|var)\\s+([A-Za-z_$][\\w$]*)\\s*(?::[^=;]+)?=\\s*${api}\\s*\\.\\s*siteStore\\b`, "g"))) bound.push(m[1]);
     const starts = [0];
     for (let i = 0; i < src.length; i++) if (src[i] === "\n") starts.push(i + 1);
     const out: string[] = [];
@@ -966,7 +986,7 @@ function netSiteStoreProblems(src: string, routes: RouteMeta[]): string[] {
         if (!isNetKind(r.kind) || !r.line) continue;
         const lineAt = starts[r.line - 1];
         if (lineAt === undefined) continue;
-        const call = new RegExp(`(?<![\\w$.])tt\\s*\\.\\s*${r.api || r.kind}\\s*(?:<[^()]*>\\s*)?\\(`, "g");
+        const call = new RegExp(`(?<![\\w$.])${api}\\s*\\.\\s*${r.api || r.kind}\\s*(?:<[^()]*>\\s*)?\\(`, "g");
         call.lastIndex = lineAt;
         const m = call.exec(src);
         if (!m || m.index >= (starts[r.line] ?? src.length) || seen.has(m.index)) continue;
@@ -974,7 +994,8 @@ function netSiteStoreProblems(src: string, routes: RouteMeta[]): string[] {
         const from = m.index + m[0].length;
         const args = src.slice(from, closeOf(src, from) - 1);
         const used = bound.filter((name) => new RegExp(`(?<![\\w$.])${name.replace(/\$/g, "\\$")}(?![\\w$]|\\s*:(?!:))`).test(args));
-        if (/(?<![\w$.])tt\s*\.\s*siteStore\b/.test(args)) used.push("tt.siteStore");
+        const direct = new RegExp(`(?<![\\w$.])(${api})\\s*\\.\\s*siteStore\\b`).exec(args);
+        if (direct) used.push(`${direct[1]}.siteStore`);
         if (used.length) out.push(`${routeLabel(r)}: uses ${used.map((x) => `\`${x}\``).join(", ")} — ${NO_SITE_STORE}`);
     }
     return out;
@@ -987,7 +1008,7 @@ function netSiteStoreProblems(src: string, routes: RouteMeta[]): string[] {
  * `tt.siteStore` (which needs a page).
  */
 export function siteProblems(code: string, routes: RouteMeta[]): string[] {
-    const net = /\bsiteStore\b/.test(code) ? netSiteStoreProblems(codeOnly(code), routes) : [];
+    const net = /\bsiteStore\b/.test(code) ? netSiteStoreProblems(codeOnly(code), routes, apiPattern(code)) : [];
     if (!/\bonSite\b/.test(code)) return net;
     const uses = onSiteUses(code);
     if (!uses.length) return net;

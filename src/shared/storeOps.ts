@@ -189,15 +189,15 @@ export function tabScopeOfPage(page: string | null | undefined): string | null {
     return dot > 0 && /^\d+$/.test(page.slice(0, dot)) ? `${TAB_SCOPE_PREFIX}${page.slice(0, dot)}` : `${TAB_SCOPE_PREFIX}${page}`;
 }
 
-/** `tt.globalStore`'s `persist` option, checked */
-export function storePersist(name: string, opts: unknown): StorePersist {
+/** `tt.globalStore`'s (`api`'s) `persist` option, checked */
+export function storePersist(name: string, opts: unknown, api = "tt.globalStore"): StorePersist {
     if (opts === undefined || opts === null) return true;
-    if (typeof opts !== "object") throw new TypeError(`tt.globalStore("${name}"): the third argument must be an options object`);
+    if (typeof opts !== "object") throw new TypeError(`${api}("${name}"): the third argument must be an options object`);
     const p = (opts as { persist?: unknown }).persist;
     if (p === undefined) return true;
     if (typeof p === "boolean") return p;
     if (Array.isArray(p) && p.every((k) => typeof k === "string")) return [...p];
-    throw new TypeError(`tt.globalStore("${name}"): persist must be true, false or a list of top-level field names`);
+    throw new TypeError(`${api}("${name}"): persist must be true, false or a list of top-level field names`);
 }
 
 /** a store's name and initial value, checked; `names` (name → the API that took it) holds each name once per script */

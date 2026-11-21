@@ -510,7 +510,7 @@ import type { RanApi } from "../shared/netTypes";
                     siteCallers.add(scriptId);
                     scriptLog(scriptId, "error", formatScriptError(name, e, "onSite"), ctx);
                 },
-                log: (...args: any[]) => scriptLog(scriptId, "info", scriptLogLine(name, "tt.log", formatLogArgs(args)), ctx),
+                log: (source, ...args) => scriptLog(scriptId, "info", scriptLogLine(name, source, formatLogArgs(args)), ctx),
                 storage: {
                     get: (key: string) => new Promise((r) => safeSend({ type: "scriptStorageGet", scriptId, key }, (x: any) => r(x && x.value))),
                     set: (key: string, value: any) => new Promise((r) => safeSend({ type: "scriptStorageSet", scriptId, key, value }, () => r(null))),
