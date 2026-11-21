@@ -58,6 +58,8 @@ export interface OverlayEnv {
     watchRects?: boolean;
     /** which key events count as the user's (default: `isTrusted`) */
     trustedKey?: (e: KeyboardEvent) => boolean;
+    /** the Fast Refresh registry's key (default: the script's name; the test loader keeps each page's apart) */
+    hotKey?: string;
 }
 
 /** run `init`'s script in this frame, talking to the bridge over `ep` */
@@ -210,7 +212,7 @@ export async function startOverlay(ep: Endpoint, init: OverlayInit, env: Overlay
                 moduleObj.exports = c.exports;
             },
             {
-                builtin: scriptBuiltin(codeOf, hotRegistry(init.name).begin()),
+                builtin: scriptBuiltin(codeOf, hotRegistry(env.hotKey ?? init.name).begin()),
                 style: (css) => {
                     if (libCss.has(css)) return;
                     libCss.add(css);

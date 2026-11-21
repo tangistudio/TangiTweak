@@ -122,6 +122,16 @@ export function routeProblem(r: { kind: RouteKind; strategy: Strategy; resourceT
     return null;
 }
 
+/**
+ * The debugger strategy missing a load that left before it attached to the
+ * tab (typically the page itself on a first visit): `what` "page load" or a
+ * resource type, `names` the scripts that would have intercepted it.
+ */
+export function debuggerMissedLine(what: string, url: string, names: string[], mv3: boolean, fromCache = false): string {
+    const hint = mv3 ? "Reload the tab (it stays attached from now on)." : "Reload the tab within a few seconds (the debugger detaches when the page goes idle).";
+    return `[debugger] ${what} ${url}${fromCache ? " (from cache)" : ""} was NOT intercepted by ${names.map((n) => `"${n}"`).join(", ")} — it loaded before the debugger attached to this tab. ${hint}`;
+}
+
 /** localhost, *.localhost, 127.0.0.0/8 or [::1]: hosts Chrome never proxies */
 export function isLoopbackUrl(url: string): boolean {
     let h: string;

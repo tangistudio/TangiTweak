@@ -7,6 +7,24 @@
 
 export type Strategy = "rules" | "page" | "debugger" | "helper" | "extension";
 export type DocumentWhen = "document_start" | "document_end" | "document_idle";
+export type BrowserName = "chrome" | "chromium-mv2" | "firefox";
+
+/** a handler that didn't run for a request, and why */
+export interface SkippedHandler {
+    /** `onResponseBody #1` */
+    handler: string;
+    strategy: Strategy;
+    script: string;
+    why: string;
+}
+
+/** the handler whose block, redirect or replacement ended the request */
+export interface DecidedBy {
+    strategy: Strategy;
+    handler: string;
+    script: string;
+    outcome: "replace" | "block" | "redirect";
+}
 
 export interface InlineTweakSource {
     /** Entry script TypeScript / TSX source code (optional when `files["package.json"]` is provided: its entry runs). */
@@ -34,6 +52,18 @@ export interface LoadTweakOptions {
     fetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
     /** Keep going instead of throwing when a script has compile, DNR rule, or `onSite` errors (inspect `t.errors`). */
     allowCompileErrors?: boolean;
+    /** The browser whose limits requests follow: `"chrome"` (MV3, default), `"chromium-mv2"` or `"firefox"`. */
+    browser?: BrowserName;
+    /**
+     * Requests walk the strategies as the browser's layers, each with its real
+     * limits (default `true`). `false`: every matching handler runs in one
+     * chain, whatever its strategy.
+     */
+    realLimits?: boolean;
+    /** The entry file to run instead of the package.json's (`"./only-misc.ts"`). */
+    entry?: string;
+    /** Files added to (or replacing) the tweak folder's (`path -> content`). */
+    files?: Record<string, string>;
 }
 
 export interface TweakLogEntry {
@@ -116,6 +146,10 @@ export interface SimulateRequestInit {
 
 export interface SimulatedResponse {
     action: "passthrough" | "modified" | "replaced" | "redirected" | "blocked";
+    /** Handlers that matched but didn't run, and why (the extension's words). */
+    skipped: SkippedHandler[];
+    /** The handler whose block, redirect or replacement produced the result (`null`: none). */
+    decidedBy: DecidedBy | null;
     blocked: boolean;
     redirectedTo: string | null;
     replaced: boolean;
@@ -141,6 +175,18 @@ export interface OpenPageOptions {
     shadow?: boolean;
     /** Route `window.fetch` through `t.simulate(...)` while the page is open (default `true`). */
     interceptFetch?: boolean;
+    /**
+     * The page's Content-Security-Policy. Without `'unsafe-eval'` in
+     * `script-src` (or `default-src`), `onSite` handlers run in the isolated
+     * world instead, as in the extension, and a problem says so.
+     */
+    csp?: string;
+    /**
+     * Runs before any handler, with the page's own `window` (the MAIN
+     * world): set up what the website itself would have, e.g. its globals.
+     * The isolated world (`onPage`) doesn't see them, as in Chrome.
+     */
+    setup?: (window: Window & typeof globalThis) => void;
 }
 
 export interface PageMountSlot {

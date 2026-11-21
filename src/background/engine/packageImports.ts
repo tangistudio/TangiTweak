@@ -212,13 +212,20 @@ class HttpError extends Error {
     }
 }
 
+let packageFetch: typeof fetch = (input, init) => fetch(input, init);
+
+/** where downloads come from (the test loader serves unpkg URLs from node_modules) */
+export function setPackageFetch(fn: typeof fetch | undefined): void {
+    packageFetch = fn ?? ((input, init) => fetch(input, init));
+}
+
 /** GET a file from unpkg (redirects followed): its final URL and text */
 function fetchText(url: string): Promise<{ url: string; text: string }> {
     return limited(async () => {
         const ctl = new AbortController();
         const timer = setTimeout(() => ctl.abort(), TIMEOUT_MS);
         try {
-            const res = await fetch(url, { signal: ctl.signal, credentials: "omit", redirect: "follow" });
+            const res = await packageFetch(url, { signal: ctl.signal, credentials: "omit", redirect: "follow" });
             if (!res.ok) throw new HttpError(`HTTP ${res.status}${res.status === 404 ? " — no such package, version or file" : ""}`, res.status);
             const final = res.url || url;
             if (!final.startsWith(PACKAGE_ORIGIN)) throw new Error(`redirected away from unpkg (${final})`);

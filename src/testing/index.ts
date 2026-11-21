@@ -5,6 +5,7 @@
  * `bodyOps` network pipeline, `StoreOwner` + `SiteStoreHost` Valtio replicas,
  * and `onSite` / `onPage` / `onOverlay` DOM + React 19 Shadow DOM lifecycles.
  */
+import "./dom";
 import "../shared/transpile";
 import * as fsSync from "node:fs";
 import * as fs from "node:fs/promises";
@@ -56,6 +57,16 @@ import { endpointPair, type OverlayInit, type WireRequest, type WireResponse } f
 import { runOp, type OpScript } from "../shared/bodyOps";
 import type { NetKind } from "../shared/netTypes";
 import { startOverlay, type OverlayRuntime } from "../overlay/overlayRuntime";
+import { setPackageFetch } from "../background/engine/packageImports";
+import { routeLabel } from "../shared/route";
+import { Window as HappyWindow } from "happy-dom";
+import { backgroundScope, inScope, pageScope, windowScope } from "./worlds";
+import type { ScriptScope } from "../shared/scriptScope";
+import { checkRules } from "./ruleChecks";
+import { localUnpkg, nodeModulesAbove } from "./localPackages";
+import { layerScripts, requestThroughLayers, webRequestType, type BrowserName, type DecidedBy, type RuleGroupRef, type SkippedHandler } from "./layers";
+
+export type { BrowserName, DecidedBy, SkippedHandler } from "./layers";
 
 if (typeof (globalThis as any).URLPattern === "undefined" && (nodeUrl as any).URLPattern) {
     (globalThis as any).URLPattern = (nodeUrl as any).URLPattern;
@@ -68,6 +79,10 @@ setBuiltinLoader(async () => ({
     "react/jsx-runtime": ReactJsxRuntime,
     "react/jsx-dev-runtime": ReactJsxDevRuntime,
 }));
+
+// npm packages come from the node_modules folders above the tweaks loaded so far, never the network
+const packageRoots = new Set<string>();
+setPackageFetch(localUnpkg(() => [...packageRoots]));
 
 const MOCK_GLOBAL = "__ttTestMockRegistry";
 const mockRegistry: Map<string, any> = ((globalThis as any)[MOCK_GLOBAL] ??= new Map<string, any>());
@@ -99,6 +114,18 @@ export interface LoadTweakOptions {
     fetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
     /** Keep going instead of throwing when a script has compile, DNR rule, or `onSite` errors (inspect `t.errors`). */
     allowCompileErrors?: boolean;
+    /** The browser whose limits requests follow: `"chrome"` (MV3, default), `"chromium-mv2"` or `"firefox"`. */
+    browser?: BrowserName;
+    /**
+     * Requests walk the strategies as the browser's layers, each with its real
+     * limits (default `true`). `false`: every matching handler runs in one
+     * chain, whatever its strategy.
+     */
+    realLimits?: boolean;
+    /** The entry file to run instead of the package.json's (`"./only-misc.ts"`). */
+    entry?: string;
+    /** Files added to (or replacing) the tweak folder's (`path -> content`). */
+    files?: Record<string, string>;
 }
 
 export interface TweakLogEntry {
@@ -153,6 +180,10 @@ export interface SimulateRequestInit {
 
 export interface SimulatedResponse {
     action: "passthrough" | "modified" | "replaced" | "redirected" | "blocked";
+    /** Handlers that matched but didn't run, and why (the extension's words). */
+    skipped: SkippedHandler[];
+    /** The handler whose block, redirect or replacement produced the result (`null`: none). */
+    decidedBy: DecidedBy | null;
     blocked: boolean;
     redirectedTo: string | null;
     replaced: boolean;
@@ -178,6 +209,18 @@ export interface OpenPageOptions {
     shadow?: boolean;
     /** Route `window.fetch` through `t.simulate(...)` while the page is open (default `true`). */
     interceptFetch?: boolean;
+    /**
+     * The page's Content-Security-Policy. Without `'unsafe-eval'` in
+     * `script-src` (or `default-src`), `onSite` handlers run in the isolated
+     * world instead, as in the extension, and a problem says so.
+     */
+    csp?: string;
+    /**
+     * Runs before any handler, with the page's own `window` (the MAIN
+     * world): set up what the website itself would have, e.g. its globals.
+     * The isolated world (`onPage`) doesn't see them, as in Chrome.
+     */
+    setup?: (window: Window & typeof globalThis) => void;
 }
 
 export interface PageMountSlot {
@@ -215,6 +258,20 @@ export interface TestPage {
     /** Tear down all handlers, unmount React roots, and restore `ctx.patch` & `window.fetch`. */
     close(): Promise<void>;
     [Symbol.asyncDispose](): Promise<void>;
+}
+
+/**
+ * Which store a `tweak.globalStore` / `tabStore` / `pageStore` /
+ * `siteStore` call made: a global store's id, or its file (the bundle path
+ * without extension) and its position among that file's unnamed stores.
+ */
+export type StoreIdentity = { kind: "globalStore"; id: string } | { kind: "tabStore" | "pageStore" | "siteStore"; file: string; n: number };
+
+/** what `tangitweak/test` reads off a loaded tweak and its pages (not public API) */
+export const LOADER = Symbol.for("tangitweak.loader");
+export interface LoaderAccess {
+    /** this copy's store for `id` (on `page`: that tab's copy; else the background's) */
+    store(id: StoreIdentity, initial: object, page?: TestPage): object;
 }
 
 export interface LoadedTweak {
@@ -283,7 +340,7 @@ function resolveTargetPath(target: string | URL, cwd?: string): string {
     return nodePath.resolve(process.cwd(), target);
 }
 
-async function listDirFiles(dir: string, prefix = ""): Promise<string[]> {
+export async function listDirFiles(dir: string, prefix = ""): Promise<string[]> {
     const entries = await fs.readdir(dir, { withFileTypes: true });
     const out: string[] = [];
     for (const ent of entries) {
@@ -309,6 +366,8 @@ interface RawWorkspace {
     entryNames: string[];
     scripts: { id: string; name: string; code: string }[];
     dataFiles: { path: string; text: string }[];
+    /** the tweak's folder on disk */
+    dir?: string;
 }
 
 async function loadRawWorkspace(source: TweakSource, opts: LoadTweakOptions): Promise<RawWorkspace> {
@@ -347,17 +406,20 @@ async function loadRawWorkspace(source: TweakSource, opts: LoadTweakOptions): Pr
     }
     // the tweak's folder: its package.json (or the one next to the file given)
     const rootDir = nodePath.dirname(absEntry);
-    const startRel = nodePath.basename(absEntry);
+    const startRel = opts.entry ? "package.json" : nodePath.basename(absEntry);
 
-    const crawled = await crawl(startRel, (rel) => {
+    const crawled = await crawl(startRel, async (rel) => {
+        if (opts.files && rel in opts.files) return opts.files[rel];
         const target = nodePath.resolve(rootDir, ...rel.split("/"));
         const relCheck = nodePath.relative(rootDir, target);
-        if (relCheck.startsWith("..") && nodePath.isAbsolute(relCheck)) return Promise.resolve(null);
-        return readDiskPackageFile(target, rel);
+        if (relCheck.startsWith("..") && nodePath.isAbsolute(relCheck)) return null;
+        const text = await readDiskPackageFile(target, rel);
+        if (rel !== "package.json" || !opts.entry || text === null) return text;
+        return JSON.stringify({ ...JSON.parse(text), main: opts.entry.replace(/^\.\//, "") });
     });
     const unmocked = crawled.missing.filter((m) => !opts.mocks || !(m.spec in opts.mocks));
     if (unmocked.length) throw new Error(`missing import "${unmocked[0].spec}" in ${unmocked[0].from}`);
-    return crawledToWorkspace(crawled);
+    return { ...crawledToWorkspace(crawled), dir: rootDir };
 }
 
 function crawledToWorkspace(crawled: Awaited<ReturnType<typeof crawl>>): RawWorkspace {
@@ -405,6 +467,17 @@ function serializeBody(body: SimulateRequestInit["body"], defaultMime?: string):
     return { raw: JSON.stringify(body), contentType: defaultMime || "application/json" };
 }
 
+/** whether a Content-Security-Policy lets the page `eval` (its `script-src`, else `default-src`) */
+export function cspAllowsEval(csp: string): boolean {
+    const directives = new Map<string, string[]>();
+    for (const part of csp.split(";")) {
+        const [name, ...values] = part.trim().split(/\s+/);
+        if (name && !directives.has(name.toLowerCase())) directives.set(name.toLowerCase(), values);
+    }
+    const src = directives.get("script-src") ?? directives.get("default-src");
+    return !src || src.includes("'unsafe-eval'");
+}
+
 function setWindowUrl(win: Window & typeof globalThis, nextUrl: string): void {
     const full = new URL(nextUrl, "https://localhost/").href;
     if ((win as any).happyDOM?.setURL) {
@@ -446,21 +519,15 @@ function setWindowUrl(win: Window & typeof globalThis, nextUrl: string): void {
     } catch {}
 }
 
-async function flushAsync(turns = 12, withAct = false): Promise<void> {
-    const act = withAct ? ((React as any).act as (<T>(cb: () => T | Promise<T>) => Promise<T>) | undefined) : undefined;
-    const prevActEnv = (globalThis as any).IS_REACT_ACT_ENVIRONMENT;
-    if (typeof act === "function") (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
-    try {
-        const pump = async () => {
-            for (let i = 0; i < turns; i++) {
-                await Promise.resolve();
-                await new Promise((r) => setTimeout(r, 0));
-            }
-        };
-        if (typeof act === "function") await act(pump);
-        else await pump();
-    } finally {
-        if (typeof act === "function") (globalThis as any).IS_REACT_ACT_ENVIRONMENT = prevActEnv;
+/**
+ * Let microtasks, timers, store hops and React renders settle. No `act()`:
+ * React's act queue is global, and concurrent tests (each with its own
+ * copy of the tweak) would overlap in it.
+ */
+async function flushAsync(turns = 12, _withAct = false): Promise<void> {
+    for (let i = 0; i < turns; i++) {
+        await Promise.resolve();
+        await new Promise((r) => setTimeout(r, 0));
     }
 }
 
@@ -488,6 +555,8 @@ export async function loadTweak(source: TweakSource, options: LoadTweakOptions =
     }
 
     const ws = await loadRawWorkspace(source, options);
+    const browser: BrowserName = options.browser ?? "chrome";
+    const realLimits = options.realLimits !== false;
     const scriptByName = new Map(ws.scripts.map((s) => [s.name, s]));
     const scriptById = new Map(ws.scripts.map((s) => [s.id, s]));
     const entrySet = new Set(ws.entryNames);
@@ -566,10 +635,12 @@ export async function loadTweak(source: TweakSource, options: LoadTweakOptions =
         let filtered = s.code;
         for (const spec of mockObjs.keys()) {
             if (isUrlSpec(spec)) filtered = filtered.split(spec).join("__tt_mocked_pkg__");
+            else if (!spec.startsWith(".")) for (const q of [`"`, `'`]) filtered = filtered.split(q + spec + q).join(`${q}./__tt_mocked_pkg__${q}`);
         }
         return { name: s.name, code: filtered };
     });
-    await ensurePackages(codesForPkgs);
+    if (ws.dir) for (const d of nodeModulesAbove(ws.dir)) packageRoots.add(d);
+    await ensurePackages(codesForPkgs, { data: ws.dataFiles });
     const basePkgs = packagesSnapshot();
     const pkgs: PackageModules = {
         aliases: { ...basePkgs.aliases },
@@ -646,34 +717,44 @@ export async function loadTweak(source: TweakSource, options: LoadTweakOptions =
 
     let compiledMap = new Map<string, CompiledScript & { deps: string[] }>();
     let opScripts: OpScript[] = [];
+    let allScripts: OpScript[] = [];
+    let layered: ReturnType<typeof layerScripts> = { scripts: [], refs: [], disabled: [] };
     let currentRules: RuleSpec[] = [];
     let currentRulesByScript = new Map<string, RuleSpec[]>();
     let currentErrors: string[] = [];
     let currentWarnings: string[] = [];
-    const openPages = new Set<TestPage & { _hotUpdate(): Promise<void> }>();
+    type OpenPage = TestPage & { _hotUpdate(): Promise<void>; _store(id: StoreIdentity, initial: object): object };
+    const openPages = new Set<OpenPage>();
 
     const knownTabIds = new Set<number>([1]);
 
+    let currentRuleGroups: RuleGroupRef[] = [];
+    let ruleWarnings: string[] = [];
+    // the rules Chrome would take, after its checks (RE2, size, counts: ruleChecks.ts)
     const probeAllRules = async (): Promise<{ rules: RuleSpec[]; byScript: Map<string, RuleSpec[]>; errors: string[] }> => {
-        const rules: RuleSpec[] = [];
         const byScript = new Map<string, RuleSpec[]>();
         const errs: string[] = [];
+        const groups: RuleGroupRef[] = [];
         for (const s of entryScripts) {
+            byScript.set(s.id, []);
             const c = compiledMap.get(s.id);
-            if (!c || c.error) {
-                byScript.set(s.id, []);
-                continue;
-            }
+            if (!c || c.error) continue;
             const probed = await probeScriptRules(c.handlers, [...knownTabIds]);
-            const specs = probed.rules.flatMap((r) => r.specs);
-            byScript.set(s.id, specs);
-            rules.push(...specs);
+            for (const r of probed.rules) groups.push({ scriptId: s.id, scriptName: s.name, route: r.route, specs: r.specs });
             for (const err of probed.errors) errs.push(`${s.name}: ${err}`);
         }
-        return { rules, byScript, errors: errs };
+        const checked = checkRules(groups);
+        errs.push(...checked.errors);
+        ruleWarnings = checked.warnings;
+        currentRuleGroups = checked.accepted as RuleGroupRef[];
+        for (const g of currentRuleGroups) byScript.get(g.scriptId)!.push(...g.specs);
+        return { rules: currentRuleGroups.flatMap((g) => g.specs), byScript, errors: errs };
     };
 
-    const compileAll = async () => {
+    // network handlers' world, like the extension's background page: kept across recompiles
+    const bgScope = backgroundScope();
+    const compileAll = () => inScope(bgScope, compileInScope);
+    const compileInScope = async () => {
         bgHub.prime(await owner.init(ws.scripts.map((s) => s.id), { page: null, tabs: true }));
         const makeOverrides = (s: { id: string; name: string }) => ({
             name: s.name,
@@ -734,11 +815,17 @@ export async function loadTweak(source: TweakSource, options: LoadTweakOptions =
         currentRules = probed.rules;
         currentRulesByScript = probed.byScript;
         errs.push(...probed.errors);
-        currentErrors = errs;
-        currentWarnings = warns;
-        opScripts = entryScripts
+        warns.push(...ruleWarnings);
+        allScripts = entryScripts
             .map((s) => ({ id: s.id, name: s.name, handlers: compiledMap.get(s.id)!.handlers }))
             .filter((s) => Boolean(s.handlers));
+        layered = layerScripts(allScripts, browser, (s, route) =>
+            logSink(s.name, "error", "", `async ${routeLabel(route)}: Chrome's blocking webRequest cannot await. Return synchronously, or set strategy: "debugger" or "helper" on this route.`)
+        );
+        if (realLimits) for (const d of layered.disabled) warns.push(`${d.ref.scriptName}: ${routeLabel(d.ref.route)}: ${d.why}`);
+        opScripts = realLimits ? layered.scripts : allScripts;
+        currentErrors = errs;
+        currentWarnings = warns;
 
         if (errs.length && !options.allowCompileErrors) {
             throw new Error(`TangiTweak compile failed:\n${errs.join("\n")}`);
@@ -770,13 +857,18 @@ export async function loadTweak(source: TweakSource, options: LoadTweakOptions =
         return [...out.values()];
     };
 
+    // problems found while opening pages (a page's CSP)
+    const pageWarnings = new Set<string>();
+    // tabs that loaded a document already (the debugger strategy may miss a new tab's first one)
+    const docTabs = new Set<number>();
+
     async function simulate(urlInput: string | URL, init: SimulateRequestInit = {}): Promise<SimulatedResponse> {
         const url = String(urlInput);
         const method = (init.method || "GET").toUpperCase();
         const tabId = init.tabId ?? 1;
         knownTabIds.add(tabId);
         const page = init.pageId ?? `tab:${tabId}`;
-        const resourceType = init.resourceType || "xmlhttprequest";
+        const resourceType = webRequestType(init.resourceType);
         const tabUrl = init.tabUrl || url;
         const reqHeaders = normalizeHeaders(init.headers);
         const serializedReq = serializeBody(init.body, reqHeaders["content-type"]);
@@ -820,9 +912,13 @@ export async function loadTweak(source: TweakSource, options: LoadTweakOptions =
             headers: Record<string, string>,
             body: string | Uint8Array,
             finalReqHeaders: Record<string, string>,
-            redirectedTo: string | null = null
+            redirectedTo: string | null = null,
+            skipped: SkippedHandler[] = [],
+            decidedBy: DecidedBy | null = null
         ): SimulatedResponse => ({
             action,
+            skipped,
+            decidedBy,
             blocked: action === "blocked",
             redirectedTo,
             replaced: action === "replaced",
@@ -837,6 +933,58 @@ export async function loadTweak(source: TweakSource, options: LoadTweakOptions =
             bytes: () => (typeof body === "string" ? utf8Enc.encode(body) : body),
         });
 
+        // the fake server (`upstream`, else `options.fetch`, else an empty 200)
+        const upstream = async (headers: Record<string, string>): Promise<{ status: number; headers: Record<string, string>; body: string | Uint8Array }> => {
+            const upReqBody =
+                serializedReq.raw === undefined
+                    ? undefined
+                    : (() => {
+                          const rawBytes = typeof serializedReq.raw === "string" ? utf8Enc.encode(serializedReq.raw) : serializedReq.raw;
+                          const textVal = typeof serializedReq.raw === "string" ? serializedReq.raw : utf8Dec.decode(serializedReq.raw);
+                          return {
+                              raw: rawBytes,
+                              text: textVal,
+                              contentType: headers["content-type"],
+                              json: <T = any>() => JSON.parse(textVal) as T,
+                              formData: () => new URLSearchParams(textVal),
+                          };
+                      })();
+            const upSpec =
+                typeof init.upstream === "function"
+                    ? await init.upstream({ url, method, headers: { ...headers }, body: upReqBody, resourceType, tabId, tabUrl })
+                    : init.upstream;
+            if (upSpec instanceof Response) {
+                return { status: upSpec.status, headers: normalizeHeaders(upSpec.headers), body: new Uint8Array(await upSpec.arrayBuffer()) };
+            }
+            if (upSpec) {
+                const upHeaders = normalizeHeaders(upSpec.headers);
+                if (upSpec.contentType && !upHeaders["content-type"]) upHeaders["content-type"] = upSpec.contentType;
+                const ser = serializeBody(upSpec.body, upHeaders["content-type"]);
+                if (ser.contentType && !upHeaders["content-type"]) upHeaders["content-type"] = ser.contentType;
+                return { status: upSpec.status ?? 200, headers: upHeaders, body: ser.raw ?? "" };
+            }
+            if (options.fetch) {
+                const res = await options.fetch(url, {
+                    method,
+                    headers,
+                    body: serializedReq.raw !== undefined && method !== "GET" && method !== "HEAD" ? (serializedReq.raw as BodyInit) : undefined,
+                });
+                return { status: res.status, headers: normalizeHeaders(res.headers), body: new Uint8Array(await res.arrayBuffer()) };
+            }
+            return { status: 200, headers: {}, body: "" };
+        };
+
+        if (realLimits && !init.strategy) {
+            const firstDocument = resourceType === "main_frame" && !docTabs.has(tabId);
+            if (resourceType === "main_frame") docTabs.add(tabId);
+            const r = await requestThroughLayers(
+                { browser, scripts: opScripts, refs: layered.refs, disabled: layered.disabled, rules: currentRuleGroups, opEnv, upstream },
+                { url, method, tabId, page, tabUrl, resourceType, requestHeaders: reqHeaders, requestBody, firstDocument }
+            );
+            return makeResult(r.action, r.status, r.headers, r.body, r.requestHeaders, r.redirectedTo, r.skipped, r.decidedBy);
+        }
+
+        // one chain: every matching handler (of `init.strategy`, when given), whatever its strategy
         const decision = await runOp(opScripts, "requestDecision", baseArgs, opEnv);
         if (decision?.kind === "cancel") {
             return makeResult("blocked", 0, {}, "", { ...reqHeaders });
@@ -872,58 +1020,10 @@ export async function loadTweak(source: TweakSource, options: LoadTweakOptions =
             return makeResult("replaced", 200, { "content-type": replaced.mime }, replaced.content, effectiveReqHeaders);
         }
 
-        // Upstream resolution
-        let upStatus = 200;
-        let upHeaders: Record<string, string> = {};
-        let upRaw: string | Uint8Array = "";
-        const upReqBody =
-            serializedReq.raw === undefined
-                ? undefined
-                : (() => {
-                      const rawBytes = typeof serializedReq.raw === "string" ? utf8Enc.encode(serializedReq.raw) : serializedReq.raw;
-                      const textVal = typeof serializedReq.raw === "string" ? serializedReq.raw : utf8Dec.decode(serializedReq.raw);
-                      return {
-                          raw: rawBytes,
-                          text: textVal,
-                          contentType: effectiveReqHeaders["content-type"],
-                          json: <T = any>() => JSON.parse(textVal) as T,
-                          formData: () => new URLSearchParams(textVal),
-                      };
-                  })();
-        const upSpec =
-            typeof init.upstream === "function"
-                ? await init.upstream({
-                      url,
-                      method,
-                      headers: { ...effectiveReqHeaders },
-                      body: upReqBody,
-                      resourceType,
-                      tabId,
-                      tabUrl,
-                  })
-                : init.upstream;
-
-        if (upSpec instanceof Response) {
-            upStatus = upSpec.status;
-            upHeaders = normalizeHeaders(upSpec.headers);
-            upRaw = new Uint8Array(await upSpec.arrayBuffer());
-        } else if (upSpec) {
-            upStatus = upSpec.status ?? 200;
-            upHeaders = normalizeHeaders(upSpec.headers);
-            if (upSpec.contentType && !upHeaders["content-type"]) upHeaders["content-type"] = upSpec.contentType;
-            const ser = serializeBody(upSpec.body, upHeaders["content-type"]);
-            if (ser.contentType && !upHeaders["content-type"]) upHeaders["content-type"] = ser.contentType;
-            upRaw = ser.raw ?? "";
-        } else if (options.fetch) {
-            const res = await options.fetch(url, {
-                method,
-                headers: effectiveReqHeaders,
-                body: serializedReq.raw !== undefined && method !== "GET" && method !== "HEAD" ? (serializedReq.raw as BodyInit) : undefined,
-            });
-            upStatus = res.status;
-            upHeaders = normalizeHeaders(res.headers);
-            upRaw = new Uint8Array(await res.arrayBuffer());
-        }
+        const up = await upstream(effectiveReqHeaders);
+        const upStatus = up.status;
+        const upHeaders = up.headers;
+        const upRaw = up.body;
 
         if (upStatus >= 300 && upStatus < 400) {
             return makeResult(reqModified ? "modified" : "passthrough", upStatus, upHeaders, upRaw, effectiveReqHeaders);
@@ -967,18 +1067,15 @@ export async function loadTweak(source: TweakSource, options: LoadTweakOptions =
     }
 
     async function openPage(urlInput: string | URL, pageOpts: OpenPageOptions = {}): Promise<TestPage> {
-        if (typeof window === "undefined" || typeof document === "undefined") {
-            throw new Error(
-                'openPage() requires a DOM environment. Add `// @vitest-environment happy-dom` at the top of your test file (or set `environment: "happy-dom"` in vitest.config.ts).'
-            );
-        }
-        const win = window as Window & typeof globalThis;
-        const doc = document;
         let currentUrl = new URL(String(urlInput), "https://localhost/").href;
+        // each tab its own document, like a browser tab
+        const happy = new HappyWindow({ url: currentUrl, settings: { disableCSSFileLoading: true, disableJavaScriptFileLoading: true, disableIframePageLoading: true } });
+        const win = happy as unknown as Window & typeof globalThis;
+        const doc = win.document;
         let currentPhase: DocumentWhen = pageOpts.phase ?? "document_end";
         const tabId = pageOpts.tabId ?? 1;
         knownTabIds.add(tabId);
-        const pageId = `${tabId}:p_${Math.random().toString(36).slice(2, 8)}`;
+        const pageId = `${tabId}.0.p_${Math.random().toString(36).slice(2, 8)}`;
         const useShadow = pageOpts.shadow !== false;
 
         setWindowUrl(win, currentUrl);
@@ -987,8 +1084,6 @@ export async function loadTweak(source: TweakSource, options: LoadTweakOptions =
         }
 
         // Intercept page fetch through `simulate()` so UI + API rewrites test together seamlessly
-        const prevWinFetch = win.fetch;
-        const prevGlobalFetch = globalThis.fetch;
         if (pageOpts.interceptFetch !== false) {
             const pageFetchShim = async (input: RequestInfo | URL, rinit?: RequestInit): Promise<Response> => {
                 const wireReq = await toWireRequest(input, rinit ?? {}, currentUrl);
@@ -1010,7 +1105,18 @@ export async function loadTweak(source: TweakSource, options: LoadTweakOptions =
                 });
             };
             win.fetch = pageFetchShim as typeof fetch;
-            globalThis.fetch = pageFetchShim as typeof fetch;
+        }
+
+        // the tab's worlds: one DOM, separate JavaScript globals (§6.7 of the plan)
+        const siteScope = pageScope(win, { label: "site" });
+        const isoScope = windowScope(win, { label: "iso" });
+        pageOpts.setup?.(win);
+        // MV2/Firefox inject onSite with eval: a page CSP without 'unsafe-eval' sends it to the isolated world (hook.ts)
+        const cspNoEval = browser !== "chrome" && pageOpts.csp !== undefined && !cspAllowsEval(pageOpts.csp);
+        if (cspNoEval && entryScripts.some((s) => (compiledMap.get(s.id)?.meta.routes || []).some((r) => r.kind === "onDocument" && pageWorld(r) === "page"))) {
+            const line = "page CSP blocks eval in the page world — running onSite handlers in the isolated world instead";
+            logSink(primaryScript.name, "info", "", line);
+            pageWarnings.add(line);
         }
 
         // SiteStoreHost <-> SiteMirrors (async message hop matching window.postMessage)
@@ -1095,6 +1201,7 @@ export async function loadTweak(source: TweakSource, options: LoadTweakOptions =
                 hostEl: HTMLElement;
                 doc: Document;
                 win: Window & typeof globalThis;
+                scope: ScriptScope;
                 onSiteDown: (m: SiteDown) => void;
                 shortcutIds: Map<string, string>;
             };
@@ -1208,9 +1315,11 @@ export async function loadTweak(source: TweakSource, options: LoadTweakOptions =
                             },
                         });
                     const shim = makeSiteShim(undefined, undefined, true);
-                    const requireFrom = makeLibRequire(libs, (lib, req, mod) => scriptFunction(lib.src!, lib.name)(shim.host, consoleSite, wrapReq(req), mod, mod.exports), { builtin: siteBuiltin, onSite: true });
-                    const mod = { exports: {} as any };
-                    shim.top(() => scriptFunction(src, s.name)(shim.host, consoleSite, wrapReq(requireFrom(s.name)), mod, mod.exports));
+                    inScope(cspNoEval ? isoScope : siteScope, () => {
+                        const requireFrom = makeLibRequire(libs, (lib, req, mod) => scriptFunction(lib.src!, lib.name)(shim.host, consoleSite, wrapReq(req), mod, mod.exports), { builtin: siteBuiltin, onSite: true });
+                        const mod = { exports: {} as any };
+                        shim.top(() => scriptFunction(src, s.name)(shim.host, consoleSite, wrapReq(requireFrom(s.name)), mod, mod.exports));
+                    });
                     st.sitePending = domHandlersFor(shim.dom, currentUrl, st.siteExposer);
                     st.siteExposer.done();
                     st.siteGen = g;
@@ -1242,8 +1351,11 @@ export async function loadTweak(source: TweakSource, options: LoadTweakOptions =
                         hostEl.setAttribute("data-tangitweak-overlay-host", s.name);
                         doc.documentElement.appendChild(hostEl);
                         hostEl.attachShadow({ mode: "closed" });
-                        const ovDoc = doc.implementation.createHTMLDocument(`tt-overlay-${s.name}`);
-                        const ovWin = win;
+                        // the overlay's frame: its own window, document and globals
+                        const ovWin = new HappyWindow({ url: "about:blank" }) as unknown as Window & typeof globalThis;
+                        const ovDoc = ovWin.document;
+                        ovDoc.title = `tt-overlay-${s.name}`;
+                        const ovScope = windowScope(ovWin, { label: "overlay" });
 
                         const [frameEp, bridgeEp] = endpointPair();
                         owner.attach(bridgeEp, { all: false });
@@ -1306,16 +1418,20 @@ export async function loadTweak(source: TweakSource, options: LoadTweakOptions =
                             shortcutReg.remove(s.id, regId);
                         });
 
-                        const rt = await startOverlay(frameEp, ovInit, {
-                            win: ovWin,
-                            doc: ovDoc,
-                            patchFetch: false,
-                            watchRects: false,
-                            trustedKey: () => true,
-                        });
-                        st.overlay = { rt, bridge: bridgeEp, hostEl, doc: ovDoc, win: ovWin, onSiteDown, shortcutIds };
+                        const rt = await inScope(ovScope, () =>
+                            startOverlay(frameEp, ovInit, {
+                                win: ovWin,
+                                doc: ovDoc,
+                                patchFetch: false,
+                                watchRects: false,
+                                trustedKey: () => true,
+                                hotKey: `${s.name}\u0000${pageId}`,
+                            })
+                        );
+                        st.overlay = { rt, bridge: bridgeEp, hostEl, doc: ovDoc, win: ovWin, scope: ovScope, onSiteDown, shortcutIds };
                     } else if (hot) {
-                        st.overlay.bridge.push("overlay.update", ovInit);
+                        const ov = st.overlay;
+                        inScope(ov.scope, () => ov.bridge.push("overlay.update", ovInit));
                     }
                 }
 
@@ -1379,13 +1495,16 @@ export async function loadTweak(source: TweakSource, options: LoadTweakOptions =
 
                     const codeOf = (importer: string) => (importer === s.name ? src : (libs.find((l) => l.name === importer)?.src ?? ""));
                     const shim = makeIsoShim(s.id, s.name, resolvedParams, true);
-                    const requireFrom = makeLibRequire(
-                        libs,
-                        (lib, req, mod) => scriptFunction(lib.src!, lib.name)(shim.host, consoleIso, wrapReq(req), mod, mod.exports),
-                        { builtin: scriptBuiltin(codeOf, hotRegistry(s.name).begin()) }
-                    );
-                    const mod = { exports: {} as any };
-                    shim.top(() => scriptFunction(src, s.name)(shim.host, consoleIso, wrapReq(requireFrom(s.name)), mod, mod.exports));
+                    const requireFrom = inScope(isoScope, () => {
+                        const req = makeLibRequire(
+                            libs,
+                            (lib, r, mod) => scriptFunction(lib.src!, lib.name)(shim.host, consoleIso, wrapReq(r), mod, mod.exports),
+                            { builtin: scriptBuiltin(codeOf, hotRegistry(`${s.name}\u0000${pageId}`).begin()) }
+                        );
+                        const mod = { exports: {} as any };
+                        shim.top(() => scriptFunction(src, s.name)(shim.host, consoleIso, wrapReq(req(s.name)), mod, mod.exports));
+                        return req;
+                    });
                     st.setIsoReact(() => {
                         try {
                             return reactOf(wrapReq(requireFrom(s.name)));
@@ -1409,7 +1528,7 @@ export async function loadTweak(source: TweakSource, options: LoadTweakOptions =
         await runScriptsOnPage(false);
 
         let closed = false;
-        const pageObj: TestPage & { _hotUpdate(): Promise<void> } = {
+        const pageObj: OpenPage = {
             get url() {
                 return currentUrl;
             },
@@ -1470,6 +1589,14 @@ export async function loadTweak(source: TweakSource, options: LoadTweakOptions =
             async _hotUpdate(): Promise<void> {
                 await runScriptsOnPage(true);
             },
+            _store(id: StoreIdentity, initial: object): object {
+                const owner = primaryScript.id;
+                if (id.kind === "globalStore") return isoHub.store(owner, id.id, initial, false);
+                const name = `${id.file}#${id.n}`;
+                if (id.kind === "tabStore") return isoHub.tabStore(owner, name, initial, tabScopeOfPage(pageId));
+                if (id.kind === "pageStore") return isoHub.pageStore(owner, name, initial, pageId);
+                return siteHost.store(owner, name, initial);
+            },
             async pressKey(combo: string, target?: EventTarget): Promise<boolean> {
                 const ev = new win.KeyboardEvent("keydown", buildKeyboardEventInit(combo));
                 const ok = (target ?? doc.activeElement ?? doc.body ?? win).dispatchEvent(ev);
@@ -1494,16 +1621,14 @@ export async function loadTweak(source: TweakSource, options: LoadTweakOptions =
                         st.overlay.rt.stop();
                         st.overlay.bridge.close("page closed");
                         st.overlay.hostEl.remove();
+                        await (st.overlay.win as any).happyDOM.close();
                     }
                 }
                 isoClientEp.close("page closed");
                 isoOwnerEp.close("page closed");
                 owner.dropPage(pageId);
-                if (pageOpts.interceptFetch !== false) {
-                    win.fetch = prevWinFetch;
-                    globalThis.fetch = prevGlobalFetch;
-                }
                 await flushAsync(4, false);
+                await happy.happyDOM.close();
             },
             async [Symbol.asyncDispose](): Promise<void> {
                 await pageObj.close();
@@ -1551,7 +1676,7 @@ export async function loadTweak(source: TweakSource, options: LoadTweakOptions =
             return [...currentErrors];
         },
         get warnings() {
-            return [...currentWarnings];
+            return [...currentWarnings, ...pageWarnings];
         },
         logs,
         storage: {
@@ -1606,6 +1731,22 @@ export async function loadTweak(source: TweakSource, options: LoadTweakOptions =
             await tweak.dispose();
         },
     };
+    const access: LoaderAccess = {
+        store(id, initial, page) {
+            if (page) {
+                const open = [...openPages].find((p) => p === page);
+                if (!open) throw new Error("tweak.store(store, page): that page is closed");
+                return open._store(id, initial);
+            }
+            const owner = primaryScript.id;
+            if (id.kind === "globalStore") return bgHub.store(owner, id.id, initial, false);
+            const name = `${id.file}#${id.n}`;
+            if (id.kind === "tabStore") return bgHub.tabStore(owner, name, initial, tabScope(1));
+            if (id.kind === "pageStore") return bgHub.pageStore(owner, name, initial, "tab:1");
+            throw new Error("a siteStore lives in a page: pass the page (tweak.store(store, page))");
+        },
+    };
+    Object.defineProperty(tweak, LOADER, { value: access });
 
     return tweak;
 }

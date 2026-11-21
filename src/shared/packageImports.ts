@@ -7,6 +7,7 @@
  * nested specifier rules, typings paths and the runtime loader.
  */
 import type { PackageFn } from "./siteCode";
+import { scriptScope } from "./scriptScope";
 
 export const PACKAGE_ORIGIN = "https://unpkg.com/";
 /** where package typings live: Monaco's `file:///<root>/…` and the synced folder's `<root>/…` */
@@ -467,9 +468,14 @@ export function requireTarget(mod: PackageModule, spec: string, fb?: Record<stri
     return (range !== undefined && mod.requires[fallbackKey(spec, range)]) || to;
 }
 
-const evalPackage = (url: string, js: string): PackageFn =>
+const evalPackage = (url: string, js: string, scope = scriptScope()): PackageFn => {
+    const params = ["require", "module", "exports", "process", "global", "__ttStyle"];
+    const body = `${js}\n//# sourceURL=${url}`;
     // eslint-disable-next-line no-new-func
-    new Function("require", "module", "exports", "process", "global", "__ttStyle", `${js}\n//# sourceURL=${url}`) as PackageFn;
+    if (!scope) return new Function(...params, body) as PackageFn;
+    // eslint-disable-next-line no-new-func
+    return new Function("__ttScope", `with (__ttScope) return function (${params.join(", ")}) {${body}\n}`)(scope.vars) as PackageFn;
+};
 const noEval = (url: string): never => {
     throw new Error(`cannot run ${url} here`);
 };
@@ -505,7 +511,9 @@ export function makePackageLoader(
     opts?: { style?: (css: string, url: string) => void; shared?: string; compile?: (url: string, js: string) => PackageFn }
 ): (url: string, deps?: Record<string, string>) => any {
     const style = opts?.style ?? (() => {});
-    const compile = opts?.compile ?? (__NO_EVAL__ ? noEval : evalPackage);
+    const scope = scriptScope();
+    const compile = opts?.compile ?? (__NO_EVAL__ ? noEval : (url: string, js: string) => evalPackage(url, js, scope));
+    const shared = opts?.shared && scope ? `${opts.shared} ${scope.key}` : opts?.shared;
     const cache = new Map<string, { exports: any }>();
     const run = (url: string, fb: Record<string, string> | undefined, fbKey: string): any => {
         const key = fbKey + url;
@@ -513,7 +521,7 @@ export function makePackageLoader(
         if (hit) return hit.exports;
         const mod = pkgs?.modules[url];
         if (!mod) throw new Error(`cannot import "${url}": it wasn't downloaded`);
-        const kept = opts?.shared ? sharedModules.get(opts.shared + " " + key) : undefined;
+        const kept = shared ? sharedModules.get(shared + " " + key) : undefined;
         if (kept && kept.js === mod.js) {
             cache.set(key, kept);
             return kept.exports;
@@ -530,13 +538,13 @@ export function makePackageLoader(
         };
         try {
             const fn = compile(url, mod.js);
-            fn.call(module.exports, require, module, module.exports, PROCESS, globalThis, style);
+            fn.call(module.exports, require, module, module.exports, PROCESS, scope?.global ?? globalThis, style);
         } catch (e) {
             cache.delete(key);
             throw e;
         }
         markPackageExports(module.exports);
-        if (opts?.shared) sharedModules.set(opts.shared + " " + key, { js: mod.js, exports: module.exports });
+        if (shared) sharedModules.set(shared + " " + key, { js: mod.js, exports: module.exports });
         return module.exports;
     };
     return (spec, deps) => {

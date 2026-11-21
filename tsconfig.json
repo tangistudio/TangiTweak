@@ -11,7 +11,8 @@
         "jsx": "react-jsx",
         "jsxImportSource": "react",
         "lib": ["ES2020", "DOM", "DOM.Iterable", "WebWorker"],
-        "types": ["chrome"]
+        "types": ["chrome"],
+        "paths": { "tangitweak/test": ["./src/testing/test.ts"] }
     },
     "include": ["src/**/*.ts", "src/**/*.tsx", "test/**/*.ts", "test/**/*.tsx"]
 }

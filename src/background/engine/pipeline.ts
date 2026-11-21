@@ -31,7 +31,7 @@ import { bypassed } from "./bypass";
 import { prepareStores, storeOwner } from "./stores";
 import { ensureBuiltins, needsReact } from "../../shared/builtins";
 import { missedLine } from "../../shared/netTypes";
-import { binaryOptedOut, frameHasHook as pingHook, isLoopbackUrl, missedReason, missedWhat, routeProblem, MISSED_SKIP_TYPES } from "../../shared/missedTap";
+import { binaryOptedOut, debuggerMissedLine, frameHasHook as pingHook, isLoopbackUrl, missedReason, missedWhat, routeProblem, MISSED_SKIP_TYPES } from "../../shared/missedTap";
 import { resolveParamValues } from "../../shared/scriptDef";
 import { shippedLibIds, type ShippedLib } from "../../shared/scriptImports";
 import { effectiveStrategy, hookCanSee, isNetKind, pageWorld, routeLabel, routeMatches, takesBinary, type RouteMeta, type Strategy } from "../../shared/route";
@@ -376,10 +376,9 @@ export function createPipeline(
                 setTimeout(() => {
                     if (cdp.wasPaused(d.tabId, d.url) || renavigated.has(`${d.tabId}|${d.url}`)) return;
                     const what = d.type === "main_frame" ? "page load" : d.type;
-                    const hint = __MV3__ ? "Reload the tab (it stays attached from now on)." : "Reload the tab within a few seconds (the debugger detaches when the page goes idle).";
                     cdpWarned.add(`${d.tabId}|${d.url}`);
                     setTimeout(() => cdpWarned.delete(`${d.tabId}|${d.url}`), 10000);
-                    log(d.tabId, `[debugger] ${what} ${d.url}${d.fromCache ? " (from cache)" : ""} was NOT intercepted by ${names.map((n) => `"${n}"`).join(", ")} — it loaded before the debugger attached to this tab. ${hint}`, "warn");
+                    log(d.tabId, debuggerMissedLine(what, d.url, names, __MV3__, d.fromCache), "warn");
                 }, 300);
             },
             { urls: ["<all_urls>"] }

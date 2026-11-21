@@ -3,7 +3,7 @@ import { fireEvent } from "@testing-library/react";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { loadTweak } from "../src/testing/index";
+import { loadTweak } from "tangitweak/test";
 import { pickStart } from "../src/shared/packageSource";
 
 describe("@tangitweak/test harness", () => {
@@ -288,13 +288,15 @@ describe("@tangitweak/test harness", () => {
             }
         );
 
-        (window as any).__pageToken = "tok123";
-        (window as any).__ttSiteVersion = () => "orig";
-        document.title = "Pull Request #9";
-
         const page = await t.openPage("https://github.com/org/repo/pull/9", {
             html: `<header class="pr-toolbar"><span class="native">Files changed</span></header>`,
+            setup(win) {
+                (win as any).__pageToken = "tok123";
+                (win as any).__ttSiteVersion = () => "orig";
+                win.document.title = "Pull Request #9";
+            },
         });
+        const { window, document } = page;
 
         // Closed shadow root: page DOM cannot reach inside host.shadowRoot, while page.mountFor() can!
         const hostEl = page.mounts[0]?.host;
@@ -381,9 +383,9 @@ describe("@tangitweak/test harness", () => {
         });
         expect(t.errors).toEqual([]);
         expect(await (await t.simulate("https://api.example.com/x")).json()).toEqual({ n: 1 });
-        (window as any).__tok = "tok";
-        const page = await t.openPage("https://example.com/");
+        const page = await t.openPage("https://example.com/", { setup: (win) => ((win as any).__tok = "tok") });
         await page.flush();
+        const { document } = page;
         expect(document.querySelector("output")!.textContent).toBe("tok/1/1/1");
         expect(document.body.dataset.lib).toBe("1");
         // an unnamed store: its file + position among the file's tab/page/site stores

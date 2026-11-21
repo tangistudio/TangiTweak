@@ -5,6 +5,7 @@
  * (tweakApi.ts).
  */
 import { explainRemovedTt, scriptUrl } from "./scriptError";
+import { scriptScope } from "./scriptScope";
 import { tweakRequire, type TweakHost } from "./tweakApi";
 
 export type ScriptFn = (host: TweakHost, console: any, require: any, module: any, exports: any) => void;
@@ -13,8 +14,13 @@ export type RawScriptFn = (console: any, require: any, module: any, exports: any
 
 /** `name` labels the script's stack frames (scriptError.ts) and is the file its `tweak` belongs to */
 export function scriptFunction(js: string, name: string): ScriptFn {
+    const tail = `\n${js}\n//# sourceURL=${scriptUrl(name)}`;
+    const scope = scriptScope();
     // body keeps "use strict" on line 1 — stack line offsets rely on it
-    return withTweak(new Function("console", "require", "module", "exports", `"use strict";\n${js}\n//# sourceURL=${scriptUrl(name)}`) as RawScriptFn, name);
+    if (!scope) return withTweak(new Function("console", "require", "module", "exports", `"use strict";${tail}`) as RawScriptFn, name);
+    // `with` is sloppy-mode only: it wraps the strict function, which can still redeclare a global (`const document = …`)
+    const outer = new Function("__ttScope", `with (__ttScope) return function (console, require, module, exports) {"use strict";${tail}\n}`);
+    return withTweak(outer(scope.vars) as RawScriptFn, name);
 }
 
 /** `fn` (file `name`'s code) with `require("tangitweak")` giving the file's `tweak` from `host` */

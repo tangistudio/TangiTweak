@@ -1,0 +1,10 @@
+{
+    "name": "palette-tweak",
+    "version": "1.0.0",
+    "tangitweak": { "displayName": "Palette Tweak", "connect": ["app.example.com"] },
+    "dependencies": {
+        "events": "^3.3.0",
+        "shout": "npm:tiny-greet@~1.0.0",
+        "tiny-greet": "^1.2.0"
+    }
+}
