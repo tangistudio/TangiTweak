@@ -7,14 +7,17 @@ its section below.
 
 ## [Unreleased]
 
+## [0.40.0-alpha] - 2026-11-21
+
 ### Added
 
-- **`import { tweak } from "tangitweak"`**, the imported authoring API that replaces `tt`. It works in every world (network handlers, `onSite`, `onPage`, `onOverlay`, `@tangitweak/test`) and in imported files, with full typings in the Editor and in Folder Sync. `tweak.globalStore(id, …)` takes a file-name-safe ID (lowercase letters, digits, `-`, `_`, `.`); `tweak.tabStore`, `tweak.pageStore` and `tweak.siteStore` take no name.
+- **`import { tweak } from "tangitweak"`**, the imported authoring API that replaces `tt`. It works in every world (network handlers, `onSite`, `onPage`, `onOverlay`, tests) and in imported files, with full typings in the Editor and in Folder Sync. `tweak.globalStore(id, …)` takes a file-name-safe ID (lowercase letters, digits, `-`, `_`, `.`); `tweak.tabStore`, `tweak.pageStore` and `tweak.siteStore` take no name.
 - **Tweaks are folders with a `package.json`** that has a `"tangitweak"` block (`displayName`, `icon`, `connect`, `updateURL`, `minTangiTweakVersion`); `name`, `version`, `description`, `author`, `license` and `homepage` are the standard fields. The entry is `main`, else `index.ts`, else `index.tsx`: it owns the enable switch, params and stores, and the modules it imports register handlers, params and stores for it. A store ID can be declared once per tweak ([docs](docs/packages.md#packagejson)).
 - **`dependencies.tangitweak`** sets the oldest TangiTweak a tweak runs on (`^0.40.0-alpha` → 0.40.0 or newer; only `major.minor.patch` is compared). On an older TangiTweak the tweak doesn't run and says which version it needs; the install page warns and auto-updates wait for review.
 - **New Tweak…** in the Explorer creates a folder with `package.json` (its `"tangitweak"` block and `"dependencies": { "tangitweak": "^<version>" }`), `tsconfig.json` (`{ "extends": "tangitweak/tsconfig.json" }`), an example `index.ts` and a `.gitignore`.
-- **Bare imports from `dependencies`**: `import dayjs from "dayjs"` downloads the package the tweak's `package.json` lists from unpkg. npm aliases (`"path": "npm:path-browserify@^1.0.1"`) work in a tweak's dependencies and in a package's own. A package that `require`s a Node.js built-in (`events`, `buffer`, `node:events`, …) it doesn't depend on gets the tweak's own dependency of that name, and the error says which line to add ([docs](docs/scripting.md#packages-from-unpkg)).
-- Folder Sync writes the running build's SDK to `.tangitweak/sdk/tangitweak/` (`package.json`, `index.d.ts`, `tsconfig.json`) and lists it as the root `package.json`'s `tangitweak` devDependency, so a tweak's `tsconfig.json` and its `"tangitweak"` import resolve after `npm install`. A tweak's own `package.json`, `tsconfig.json` and `.gitignore` sync as its data files.
+- **Bare imports from `dependencies`**: `import dayjs from "dayjs"` downloads the package the tweak's `package.json` lists from unpkg. npm aliases (`"path": "npm:path-browserify@^1.0.1"`) work in a tweak's dependencies and in a package's own. A package that `require`s a Node.js built-in (`events`, `buffer`, `node:events`, …) it doesn't depend on gets the tweak's own dependency of that name (each tweak its own), and the error says which line to add ([docs](docs/scripting.md#packages-from-unpkg)).
+- **The `tangitweak` npm package** (the SDK): `npm install --save-dev tangitweak vitest react react-dom valtio` gives a tweak's tests `tangitweak/test`, the `tweak` API's typings, and the `tsconfig.json` a tweak extends (React, ReactDOM, valtio and Vitest are optional peers, so type-checking alone needs only `tangitweak`). Its version is the extension's. Each GitHub release attaches it as `tangitweak-sdk-v<version>.tgz` too ([docs](docs/testing.md#setup)).
+- **Folder Sync writes the same SDK** to `.tangitweak/sdk/tangitweak/` and lists it as the root `package.json`'s `tangitweak` devDependency, so `npm install` in a synced folder sets up tests and type-checking without the npm registry. A tweak's own `package.json`, `tsconfig.json` and `.gitignore` sync as its data files.
 - **A tweak's data folder**, `.tweak` by default: `.tweak/settings.json` holds its enable switch and the params you changed from their defaults, and `.tweak/stores/<id>.json` holds each persisted `tweak.globalStore("<id>", …)`. The Explorer lists them inside the tweak's folder and Folder Sync mirrors them both ways; an invalid file is reported and neither applied nor overwritten ([docs](docs/editor.md#a-tweaks-data-folder)).
 - **Settings → Tweaks → Tweak data folder** (`"dataFolder"` in `settings.json`) names that folder; changing it renames it in every tweak.
 - **`"tangitweak/test"`**, replacing `@tangitweak/test`: Vitest's `test` with `page`, `browser`, `net`, `tweak` and `mount` fixtures, and `createTweakTest({ params, entry, browser, realLimits, mocks })` for others. A test finds its tweak from the nearest `package.json` with a `"tangitweak"` block, and each test gets its own copy of the tweak and its stores (so `test.concurrent` works), each tab its own document. `mount("features/x/Panel")` renders one component through TangiTweak's compiler; `renderTweak(<Panel />, { stores })` is React Testing Library's `render` with store seeds and a reset after each test ([docs](docs/testing.md)).
@@ -31,6 +34,7 @@ its section below.
 - Installing or updating a tweak never takes a package's data folder (or any dot folder) and never overwrites the tweak's settings or saved stores.
 - A synced folder's root `package.json` and `tsconfig*.json`, and `package-lock.json` / `jsconfig.json` anywhere, are left alone; Folder Sync's typings for downloaded packages skip `.tangitweak/sdk/`.
 - `loadTweak`'s `simulate` follows the strategies' real limits by default (`realLimits: false` for the old single chain), and `openPage` takes `setup(window)` for the website's own globals instead of the test setting them on a shared window.
+- In tests, a `tweak.tabStore` survives a reload of its tab, as in the browser. It used to be per page.
 
 ### Removed
 
@@ -40,11 +44,7 @@ its section below.
 - **`tt.metadata(…)`**: metadata comes from the tweak's `package.json`.
 - **`tt.defineParam(…)`**: use `tweak.params({ … })`, which may be called more than once.
 - **The root `stores.json`** and **`settings.json`'s `"scripts"` key**: each tweak's settings and stores are in its data folder. A `stores.json` left in a synced folder is now an ordinary data file, and a `"scripts"` key is ignored.
-
-### Fixed
-
-- A package's Node.js built-in fallback (`"events": "npm:events@^3"` in a tweak's dependencies) is resolved per tweak: two tweaks mapping the same built-in to different packages each get their own, instead of the first one's.
-- In tests, a `tweak.tabStore` survives a reload of its tab; it was per page.
+- **`@tangitweak/test` and `#tangitweak/test`**: use `tangitweak/test`. Folder Sync deletes the old `.tangitweak/test/` folder and its two entries in the root `package.json`, and releases no longer attach `tangitweak-test.tgz`.
 
 ## [0.37.0-alpha] - 2026-11-15
 
@@ -1136,7 +1136,8 @@ Before `0.0.1-alpha` was tagged, the extension grew from an initial TypeScript p
 - Built the initial TypeScript script engine (in-browser Sucrase transpilation, `res.onRequest` / `res.onDom` / `res.log`, script `console.*` capture), embedded Monaco editor with bundled API typings, movable log panel, popup with per-tab active-script badge, sample scripts, and bundle import/export.
 - Implemented three initial interception tiers (`MAIN`-world `fetch`/XHR hook, MV2 blocking `webRequest`, and `chrome.debugger` `Fetch` for main-frame HTML and subresources with adaptive idle detach), two-way local folder sync via the File System Access API, and the headless Chromium E2E suite.
 
-[Unreleased]: https://github.com/tangistudio/TangiTweak/compare/v0.37.0-alpha...HEAD
+[Unreleased]: https://github.com/tangistudio/TangiTweak/compare/v0.40.0-alpha...HEAD
+[0.40.0-alpha]: https://github.com/tangistudio/TangiTweak/compare/v0.37.0-alpha...v0.40.0-alpha
 [0.37.0-alpha]: https://github.com/tangistudio/TangiTweak/compare/v0.36.1-alpha...v0.37.0-alpha
 [0.36.1-alpha]: https://github.com/tangistudio/TangiTweak/compare/v0.36.0-alpha...v0.36.1-alpha
 [0.36.0-alpha]: https://github.com/tangistudio/TangiTweak/compare/v0.35.0-alpha...v0.36.0-alpha
