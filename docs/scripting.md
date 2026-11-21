@@ -321,7 +321,7 @@ A tweak's description, version, icon and the rest come from its
 `package.json` (see [package.json](packages.md#packagejson)).
 
 `tweak.params` declares typed knobs the user changes from the popup's ⚙
-dialog, the Editor or `settings.json` without touching the script:
+dialog, the Editor or the tweak's [`.tweak/settings.json`](editor.md#a-tweaks-data-folder) without touching the script:
 
 ```ts
 const cfg = tweak.params({
@@ -344,7 +344,7 @@ the UI lists params in call order, and defining the same name twice is an
 error.
 
 Large parameter sets can be grouped into collapsible sections by nesting
-plain objects inside `tweak.params` (and nested maps in `settings.json`):
+plain objects inside `tweak.params` (and nested maps in `.tweak/settings.json`):
 
 ```ts
 const cfg = tweak.params({
@@ -379,7 +379,7 @@ textarea), `enum` (dropdown of `choices`), `stringList` (add/remove list),
 Every param type accepts an optional `parse` function that turns the raw
 value into something more convenient for the script. The param's type
 becomes the parser's return type; the ⚙ dialog, the Editor and
-`settings.json` keep editing (and storing) the raw value, and `parse` re-runs
+`.tweak/settings.json` keep editing (and storing) the raw value, and `parse` re-runs
 on every change:
 
 ```ts
@@ -421,7 +421,7 @@ tweak.onOverlay("*://app.example.com/*", (ctx) => {
 The new value is checked against the param's type: a wrong type, an
 unknown choice or an unknown name throws. The code sees it right away, and
 it's saved like a change in the ⚙ dialog: the Log shows
-`param enabled = false (set by the script)`, `settings.json` gets it, and
+`param enabled = false (set by the script)`, `.tweak/settings.json` gets it, and
 the script hot-reloads with it (what you keep with `ctx.once` stays).
 Changes made in one go are saved once per param, with the last value.
 
@@ -430,7 +430,7 @@ Changes made in one go are saved once per param, with the last value.
 - Not from onSite code: it runs in the site's world, where the site's own
   code could reach the setter.
 - A param with `parse` can't be assigned; change it in ⚙ or
-  `settings.json`.
+  `.tweak/settings.json`.
 ## Modules and recipes
 
 A tweak's files other than its entry are **modules**: they run only when the
@@ -469,7 +469,7 @@ handler or a timer) registers nothing. The Problems panel names them like
 "onPage #2 (mocks)".
 
 Modules may declare params too. They're the tweak's params, edited in the
-popup, the Editor and `settings.json` with the entry's own. A store ID
+popup, the Editor and the tweak's `.tweak/settings.json` with the entry's own. A store ID
 (`tweak.globalStore("id", …)`) can be declared once per tweak: two files of
 one tweak declaring the same ID is an error.
 
@@ -667,7 +667,7 @@ read or write goes in `tweak.siteStore`; everything else goes in the other three
 
 ### Lifetime & persistence
 
-| Store | Scope (one copy per) | Page reload / navigation | Tab closed | Browser restart | Saved in `stores.json` | Site JS can read/forge? |
+| Store | Scope (one copy per) | Page reload / navigation | Tab closed | Browser restart | Saved in `.tweak/stores/<id>.json` | Site JS can read/forge? |
 |---|---|---|---|---|---|---|
 | `tweak.globalStore` | Entire browser (all tabs) | **Kept** | **Kept** | **Kept** (`persist: false` resets) | **Yes** (when persisted) | No |
 | `tweak.tabStore` | Browser tab (`tabId`) | **Kept** | Dropped | Dropped | No | No |
@@ -704,8 +704,8 @@ tweak.onRequest({ url: "*://api.example.com/*", strategy: "helper" }, (ctx) => {
 
 - **Lifetime.** Shared across every tab and page; survives reloads,
   navigations, closing tabs, script saves, and — with `{ persist: true }`
-  (default) or `{ persist: ["mocking"] }` — browser restarts (editable in
-  `stores.json`). With `{ persist: false }`, kept in memory/session until
+  (default) or `{ persist: ["mocking"] }` — browser restarts (editable in the tweak's
+  [`.tweak/stores/<id>.json`](editor.md#a-tweaks-data-folder)). With `{ persist: false }`, kept in memory/session until
   the browser quits.
 - **Handlers.** Every network handler (`rules`, `page`, `debugger`,
   `extension`, `helper` — both before and after `await`), `tweak.onPage`,
@@ -756,7 +756,7 @@ tweak.onOverlay("https://example.com/*", (ctx) => {
 - **Lifetime.** One copy per browser tab (`tabId`); subframes share their
   top tab's copy. **Survives page reloads, cross-page navigations, and
   script saves** in that tab; dropped when the tab closes or the browser
-  quits (never saved to disk or `stores.json`).
+  quits (never saved to disk or a store file).
 - **Handlers.** Every network handler (`rules`, `page`, `debugger`,
   `extension`, `helper`), `tweak.onPage`, and `tweak.onOverlay`. In network
   handlers, **read/write before the first `await`** (after `await` the
@@ -800,7 +800,7 @@ tweak.onOverlay("https://example.com/*", (ctx) => {
 - **Lifetime.** One copy per top-frame document load (subframes share their
   top page's copy). Survives in-page SPA route changes and script saves;
   **resets to `initial` on reload or navigation**, and drops when the page
-  unloads or the tab closes (never saved to disk or `stores.json`).
+  unloads or the tab closes (never saved to disk or a store file).
 - **Handlers.** Network handlers on `page`, `debugger`, `extension`, and
   `helper` (**before the first `await`**), `tweak.onPage`, and `tweak.onOverlay`.
   **Not available** in `strategy: "rules"` (throws — use `tweak.tabStore` for
@@ -1582,7 +1582,7 @@ Click it and press the new keys to change them (Esc cancels). **×**
 removes the shortcut and **↺** puts the default back. A recorded `Mod`
 means ⌘ on macOS and Ctrl elsewhere, so the setting works on both. The
 value is the keys as a string, or `""` once removed, and
-`ctx.shortcut("")` adds nothing. In `settings.json` you can type the
+`ctx.shortcut("")` adds nothing. In `.tweak/settings.json` you can type the
 keys yourself; keys that aren't a shortcut are flagged and ignored. A
 `default` that isn't a shortcut is a script error.
 

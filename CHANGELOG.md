@@ -15,6 +15,9 @@ its section below.
 - **New Tweak…** in the Explorer creates a folder with `package.json` (its `"tangitweak"` block and `"dependencies": { "tangitweak": "^<version>" }`), `tsconfig.json` (`{ "extends": "tangitweak/tsconfig.json" }`), an example `index.ts` and a `.gitignore`.
 - **Bare imports from `dependencies`**: `import dayjs from "dayjs"` downloads the package the tweak's `package.json` lists from unpkg. npm aliases (`"path": "npm:path-browserify@^1.0.1"`) work in a tweak's dependencies and in a package's own. A package that `require`s a Node.js built-in (`events`, `buffer`, `node:events`, …) it doesn't depend on gets the tweak's own dependency of that name, and the error says which line to add ([docs](docs/scripting.md#packages-from-unpkg)).
 - Folder Sync writes the running build's SDK to `.tangitweak/sdk/tangitweak/` (`package.json`, `index.d.ts`, `tsconfig.json`) and lists it as the root `package.json`'s `tangitweak` devDependency, so a tweak's `tsconfig.json` and its `"tangitweak"` import resolve after `npm install`. A tweak's own `package.json`, `tsconfig.json` and `.gitignore` sync as its data files.
+- **A tweak's data folder**, `.tweak` by default: `.tweak/settings.json` holds its enable switch and the params you changed from their defaults, and `.tweak/stores/<id>.json` holds each persisted `tweak.globalStore("<id>", …)`. The Explorer lists them inside the tweak's folder and Folder Sync mirrors them both ways; an invalid file is reported and neither applied nor overwritten ([docs](docs/editor.md#a-tweaks-data-folder)).
+- **Settings → Tweaks → Tweak data folder** (`"dataFolder"` in `settings.json`) names that folder; changing it renames it in every tweak.
+- **Export…** has **Include my settings and saved data**, off by default, to add each tweak's data folder to the zip; **Import…** lists a zip's data folder files in their tweak's folder.
 
 ### Changed
 
@@ -22,6 +25,7 @@ its section below.
 - The built-in samples, new-script templates, quick fixes, completions, hover docs, Problems and log messages all use `tweak`.
 - **Install, update and Export Package…** read a tweak's `package.json`: its name, version and `updateURL` (in the `"tangitweak"` block). Installing a `.ts` URL installs the tweak whose `package.json` is next to it, and a folder, gist or zip installs its `package.json`'s tweak.
 - **New Script…** and **Install Script…** are now **New Tweak…** and **Install Tweak…**.
+- Installing or updating a tweak never takes a package's data folder (or any dot folder) and never overwrites the tweak's settings or saved stores.
 - A synced folder's root `package.json` and `tsconfig*.json`, and `package-lock.json` / `jsconfig.json` anywhere, are left alone; Folder Sync's typings for downloaded packages skip `.tangitweak/sdk/`.
 
 ### Removed
@@ -31,6 +35,11 @@ its section below.
 - **Make Package…**: make a tweak with **New Tweak…** instead.
 - **`tt.metadata(…)`**: metadata comes from the tweak's `package.json`.
 - **`tt.defineParam(…)`**: use `tweak.params({ … })`, which may be called more than once.
+- **The root `stores.json`** and **`settings.json`'s `"scripts"` key**: each tweak's settings and stores are in its data folder. A `stores.json` left in a synced folder is now an ordinary data file, and a `"scripts"` key is ignored.
+
+### Fixed
+
+- A package's Node.js built-in fallback (`"events": "npm:events@^3"` in a tweak's dependencies) is resolved per tweak: two tweaks mapping the same built-in to different packages each get their own, instead of the first one's.
 
 ## [0.37.0-alpha] - 2026-11-15
 

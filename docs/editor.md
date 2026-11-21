@@ -11,7 +11,7 @@ searchable list of all of them):
 | Shortcut | Action |
 | --- | --- |
 | ⌘S | Save and hot apply the script (or save the data file) |
-| ⌘P | Quick-open a script, data file, settings.json or stores.json by path (cursor position is remembered per file) |
+| ⌘P | Quick-open a script, data file, settings.json or a tweak's data folder file by path (cursor position is remembered per file) |
 | ⌘⇧E | Focus the explorer |
 | ⌘B | Show/hide the explorer |
 | ⌘J or ⌘` | Show/hide the Problems/Log/Network/Preview views |
@@ -79,7 +79,9 @@ struck through, ● for unsaved changes, ⚠ for errors) and one `name.json` row
 per [data file](scripting.md#imports-folders-and-data-files) (`{}` icon,
 red when its JSON is invalid; ◈ for an `.svg`). Each folder lists its subfolders
 (alphabetical), then its scripts (in stacking order), then its data files
-(alphabetical); ⚙ **settings.json** stays at the top. Scripts without a
+(alphabetical); ⚙ **settings.json** stays at the top. A tweak's folder
+also lists its [data folder](#a-tweaks-data-folder) files (`.tweak/settings.json`,
+`.tweak/stores/<id>.json`) right below it. Scripts without a
 folder sit at the root, as before. Which folders are collapsed is remembered.
 Click the **TangiTweak** header to collapse the whole tree.
 
@@ -443,8 +445,8 @@ update only adds documentation for settings it doesn't mention yet.
 
 Sync is two-way and watches the folder for **creates, renames/moves and
 deletes** too: a new `.ts`/`.tsx` file becomes a script, deleting a file removes its
-script, renaming or moving a file renames the script (its `settings.json`
-section moves with it); the same goes for `.json`/`.svg` files and data files, and
+script, renaming or moving a file renames the script (a tweak's
+[data folder](#a-tweaks-data-folder) moves with its folder); the same goes for `.json`/`.svg` files and data files, and
 for subfolders and folders. If a file and its script both change before a sync, the file wins
 and the script's version goes to `.tangitweak-backup/`. Saving in the Editor
 over a script that changed elsewhere shows a diff to overwrite or take theirs. The folder choice is remembered —
@@ -455,15 +457,14 @@ notice or **Reconnect**).
 The folder button next to **Save** shows the sync state: no badge (off), a
 green dot (connected), a triangle moving up **▲** (writing a change made in the
 extension to the folder) or down **▼** (picking up a change from it), and a yellow **!** (disconnected — needs
-a re-grant). A change picked up from the folder is never sent back: updating
-`settings.json` and its schema to match (e.g. commenting out the section of a
-script whose file was deleted) is part of the **▼**. Clicking it reconnects when disconnected; otherwise it opens
+a re-grant). A change picked up from the folder is never sent back. Deleting a tweak's
+entry file on disk leaves its data folder alone. Clicking it reconnects when disconnected; otherwise it opens
 **Settings → Synced folder**.
 
 ## Appearance
 
 Settings (⚙ in the explorer header, or ⌘,) is split into Appearance,
-Synced folder, Import / Export, Strategy, Local helper, Logging,
+Synced folder, Tweaks, Import / Export, Local helper, Logging,
 Network, Advanced and About — pick one on the left to jump to it.
 
 **Settings → Appearance → Theme** picks *System* (follows the OS), *Dark*
@@ -515,8 +516,10 @@ text.
 **Settings → Export…** downloads a zip (`tangitweak-export.zip`) laid out
 like the [synced folder](#synced-folder): scripts as `.ts`/`.tsx`
 files and data files at their paths, empty folders as folders, and
-`settings.json` at the root with the global settings and the exported
-scripts' `enabled` state and params. **Import…** takes such a zip — or a
+`settings.json` at the root with the global settings. Each tweak's
+[data folder](#a-tweaks-data-folder) (its `enabled` state, changed params
+and saved stores) goes in only when **Include my settings and saved data**
+is ticked. **Import…** takes such a zip — or a
 zip of a synced scripts folder (its `tt-api.d.ts`, `tsconfig.json` and
 `settings.schema.json` are skipped).
 
@@ -525,11 +528,10 @@ folder (its box shows when only some of its files are ticked). The filter
 box narrows the tree to paths containing what you type, and **Select
 all**/**None** act on what it shows. On import each row says whether it's
 **new** or **replaces existing** (a script at the same path is overwritten
-rather than duplicated). Untick `settings.json` to leave settings, params
-and `enabled` state alone. When any script has persisted `tweak.globalStore`
-state, **Export…** also lists `stores.json` (unticked by default, marked
-`opt-in`) so you can include persisted store data when needed; **Import…**
-applies `stores.json` when present and ticked. If a picked script imports a module or data
+rather than duplicated). Untick `settings.json` to leave the global settings
+alone. A zip's data folder files are listed in their tweak's folder; ticked,
+they set that tweak's `enabled` state, params or store (an invalid one is
+skipped and reported). If a picked script imports a module or data
 file that isn't picked, the dialog warns and **Add them** ticks the missing
 ones.
 
@@ -545,9 +547,9 @@ folder it doesn't run.
 
 The Explorer always has a ⚙ **settings.json** entry at the top (no folder needed; no
 toggle, not deletable). Like VS Code's `settings.json`, it stores only
-non-default overrides (`{}` when everything is at its default): global settings
-at the top level and per-script `enabled` / `tweak.params` overrides under
-`"scripts"`. Omitting any key — or clearing the file to `{}` — resets it to its
+non-default overrides of TangiTweak's global settings (`{}` when everything is
+at its default); each tweak's own settings are in its
+[data folder](#a-tweaks-data-folder). Omitting any key — or clearing the file to `{}` — resets it to its
 default. With a synced folder connected, `settings.json` syncs two-way on disk
 alongside a generated `settings.schema.json` (which Monaco's built-in JSON
 worker also uses in the Editor for completions, hover descriptions, and
@@ -556,12 +558,7 @@ validation).
 ```json
 {
   "logLevel": "debug",
-  "scripts": {
-    "Debug header.ts": {
-      "enabled": false,
-      "level": "trace"
-    }
-  }
+  "dataFolder": ".tweak"
 }
 ```
 
@@ -569,14 +566,43 @@ validation).
 Content-Types `onResponseBody` gets as text and replaces the defaults
 ([binary bodies](scripting.md#binary-bodies)).
 
-## `stores.json`
+## A tweak's data folder
 
-Right below `settings.json`, the Explorer has a **stores.json** entry holding
-the persisted `tweak.globalStore` data of your scripts (`{ "<script file>": { "<store name>": { … } } }`, e.g. `"mock-users.ts"` or `"bonsai/index.tsx"`).
-Stores declared in a tweak's modules belong to the tweak's entry file, matching `settings.json`.
-As scripts update their persisted global stores, `stores.json` updates live;
-editing and saving it in the Code view (or in `stores.json` at the root of your
-synced folder) updates open tabs and overlays immediately without reloading.
-Removing a store entry (or clearing the file to `{}`) clears its persisted
-storage and resets active pages to the script's `initial` defaults.
+Each tweak keeps your settings and saved data for it in a data folder
+inside its folder, `.tweak` by default:
 
+```
+atlas/
+  index.ts
+  package.json
+  .tweak/
+    settings.json        { "enabled": false, "params": { "level": "trace" } }
+    stores/cart.json     the data of tweak.globalStore("cart", …)
+```
+
+- `settings.json` holds the tweak's enable switch and only the params you
+  changed from their defaults. Leaving a param out, or deleting the file,
+  puts it back to its default (and the tweak back on).
+- `stores/<id>.json` holds one persisted `tweak.globalStore("<id>", …)`
+  store, named by its ID. It updates live as the tweak changes the store;
+  editing and saving it updates open tabs and overlays without reloading.
+  Deleting it deletes the store, so pages go back to its `initial` value.
+  `tweak.storage` has no file.
+
+The Explorer lists these files right inside the tweak's folder. You can open,
+edit and save them, copy their path, or delete them (**Delete (Back to
+Defaults)**); they aren't scripts, modules or data files, so they can't be
+renamed or moved. With a synced folder connected they sync two-way like
+everything else: a change in the extension writes the file, and an edit on
+disk is checked and applied. An invalid file (bad JSON, an unknown param, a
+value of the wrong type) is reported in the log and left as it is, neither
+applied nor overwritten, until you fix it.
+
+The data folder is yours, not the tweak's code: **Export Package…** and
+tests leave it out, **Export…** leaves it out unless you tick **Include my
+settings and saved data**, and installing or updating a tweak never takes a
+package's own data folder (or any dot folder) or touches yours.
+**Settings → Tweaks → Tweak data folder** names it (`dataFolder` in
+`settings.json`): one folder name of letters, digits, `.`, `-` and `_`,
+not `node_modules`. Changing it renames the folder in every tweak; it's
+refused when a tweak already has a file or folder at the new name.

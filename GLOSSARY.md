@@ -32,6 +32,10 @@ _Avoid_: `tt` (the global it replaced, removed in 0.40)
 A JSON, Markdown, SVG or image file (`.json`, `.md`, `.svg`, `.png`, …) in the explorer that scripts import; it never runs.
 _Avoid_: fixture, asset, JSON script
 
+**Data folder**:
+The folder inside a tweak (`.tweak` by default, the **Tweak data folder** setting) holding the user's own state for it: `settings.json` (enable switch and changed params) and `stores/<id>.json` (one per persisted global store). Never code or data files: exports leave it out unless asked, and installs and tests never read it.
+_Avoid_: config folder, state folder, `stores.json` (the root file it replaced)
+
 **Package import**:
 An import of an npm package: by name, from the tweak's `package.json` `dependencies` (`import dayjs from "dayjs"`), or by its pinned unpkg.com URL (`https://unpkg.com/dayjs@1.11.13`); TangiTweak downloads the package, its dependencies and its typings from unpkg when the file is saved.
 _Avoid_: CDN import, remote import, external library
