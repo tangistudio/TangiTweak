@@ -491,6 +491,8 @@ export interface CrawledPackage {
 
 export const MAX_FILES = 200;
 export const MAX_BYTES = 5 * 1024 * 1024;
+const TSCONFIG = "tsconfig.json";
+const GITIGNORE = ".gitignore";
 
 /** the paths a relative import may name, in TypeScript's order */
 export function candidates(path: string): string[] {
@@ -567,6 +569,11 @@ export async function crawl(start: string, read: (path: string) => Promise<strin
             else missing.push({ from: start, spec: manifest.icon! });
             filesDone++;
             report(entries.length > 0);
+        }
+        // the tweak's own tooling files travel with it when it has them
+        for (const own of [TSCONFIG, GITIGNORE]) {
+            const t = files[dir + own] === undefined ? await get(dir + own) : null;
+            if (t !== null) files[dir + own] = t;
         }
     }
     const queue = [...entries];

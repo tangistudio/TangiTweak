@@ -98,6 +98,10 @@ describe("crawl", () => {
         "repo/plain/package.json": JSON.stringify({ name: "plain" }),
         "repo/plain/index.ts": "",
         "repo/lone/a.ts": "",
+        "repo/cfg/package.json": pkg("cfg"),
+        "repo/cfg/index.ts": "export {};",
+        "repo/cfg/tsconfig.json": `{"extends":"tangitweak/tsconfig.json"}`,
+        "repo/cfg/.gitignore": "node_modules/\n.tweak/\n",
         "repo/dot/package.json": pkg("dot"),
         "repo/dot/index.ts": `import s from "./.tweak/stores/cart.json";`,
         "repo/dot/.tweak/stores/cart.json": `{"n":1}`,
@@ -116,6 +120,9 @@ describe("crawl", () => {
         expect(c.entries).toEqual(["index.ts"]);
         await expect(crawl("repo/lone/a.ts", read)).rejects.toThrow(/isn't in a tweak.*single-file scripts no longer install/);
         await expect(crawl("repo/plain/index.ts", read)).rejects.toThrow(/isn't in a tweak/);
+    });
+    it("brings the tweak's own tsconfig.json and .gitignore when it has them", async () => {
+        expect(Object.keys((await crawl("repo/cfg/package.json", read)).files).sort()).toEqual([".gitignore", "index.ts", "package.json", "tsconfig.json"]);
     });
     it("the entry is main, else index.ts, else index.tsx", async () => {
         expect((await crawl("repo/main/package.json", read)).entries).toEqual(["src/app.tsx"]);
