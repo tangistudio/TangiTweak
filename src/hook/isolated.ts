@@ -223,16 +223,15 @@ import { FrameShortcuts } from "../shared/shortcut";
 
     function exec(init: IsoInit, hot: boolean): void {
         const gen = life.begin();
-        const shimFor = (storeOwnerId: string, name: string, params: Record<string, any>, mine: boolean) =>
+        const makeShim = () =>
             makePageShim({
-                params,
+                params: init.params || {},
                 world: "isolated",
-                lib: mine ? undefined : name,
-                stores: { store: (n, initial, persist) => stores().store(storeOwnerId, n, initial, persist), tabStore: (n, initial) => stores().tabStore(storeOwnerId, n, initial, tabScopeOfPage(page)), pageStore: (n, initial) => stores().pageStore(storeOwnerId, n, initial, page) },
-                siteStore: mine ? (n, initial) => siteStores().store(s, n, initial) : undefined,
-                exposer: mine ? exposer : undefined,
-                call: mine ? handle(gen) : undefined,
-                log: (source, ...args) => log("info", scriptLogLine(name, source, formatLogArgs(args))),
+                stores: { store: (n, initial, persist) => stores().store(s, n, initial, persist), tabStore: (n, initial) => stores().tabStore(s, n, initial, tabScopeOfPage(page)), pageStore: (n, initial) => stores().pageStore(s, n, initial, page) },
+                siteStore: (n, initial) => siteStores().store(s, n, initial),
+                exposer,
+                call: handle(gen),
+                log: (source, ...args) => log("info", scriptLogLine(init.name, source, formatLogArgs(args))),
                 storage: {
                     get: (key: string) => linkUp().then((ep) => ep.call("storage.get", { key }, s)).then((r) => r.value, () => undefined),
                     set: (key: string, value: any) => linkUp().then((ep) => ep.call("storage.set", { key, value }, s)).then(() => null, () => null),
@@ -243,13 +242,14 @@ import { FrameShortcuts } from "../shared/shortcut";
         let dom: PageDocumentHandler[];
         try {
             const codeOf = (importer: string) => (importer === init.name ? init.src : (init.libs.find((l) => l.name === importer)?.src ?? ""));
+            const shim = makeShim();
+            // the tweak's modules run with its `tweak`: their handlers, params and stores are its own
             const requireFrom = makeLibRequire(
                 init.libs,
-                (lib, require, moduleObj) => scriptFunction(lib.src!, lib.name)(shimFor(lib.id ?? s, lib.name, lib.params || {}, false).host, consoleProxy, require, moduleObj, moduleObj.exports),
+                (lib, require, moduleObj) => scriptFunction(lib.src!, lib.name)(shim.host, consoleProxy, require, moduleObj, moduleObj.exports),
                 { builtin: scriptBuiltin(codeOf, hotRegistry(init.name).begin()) }
             );
             const moduleObj = { exports: {} as any };
-            const shim = shimFor(s, init.name, init.params || {}, true);
             shim.top(() => scriptFunction(init.src, init.name)(shim.host, consoleProxy, requireFrom(init.name), moduleObj, moduleObj.exports));
             dom = shim.dom;
             reactDom = () => reactOf(requireFrom(init.name));

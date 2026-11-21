@@ -29,10 +29,10 @@ describe("compileManyWithLibs", () => {
         expect(many.get("c")!.deps.sort()).toEqual(["base", "lib"]);
     });
 
-    it("runs a shared library once", () => {
+    it("runs a shared module once per tweak (with that tweak's `tweak`)", () => {
         (globalThis as any).__libRuns = 0;
         compileManyWithLibs(["a", "c"], scripts, {});
-        expect((globalThis as any).__libRuns).toBe(1);
+        expect((globalThis as any).__libRuns).toBe(2);
     });
 
     it("skips ids it doesn't have", () => {

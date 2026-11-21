@@ -1,7 +1,7 @@
 /**
  * The install flow: read a package (a URL, a folder, a zip, or a drop of any of
  * them), show what it does, install it; or review a held update. The Editor
- * shows it in its Install Script dialog (dialogs/InstallDialog); install.html
+ * shows it in its Install Tweak dialog (dialogs/InstallDialog); install.html
  * shows it as a page, for a *.tangitweak.ts URL (the background sends such tabs
  * there, like GreaseMonkey's .user.js) and `?update=<package id>`.
  */
@@ -10,10 +10,11 @@ import type { Analysis } from "../../background/engine/packages";
 import { describeCapabilities } from "../../shared/packageCaps";
 import type { PackageStatus } from "../../shared/packageImports";
 import { entryIds, packageName, resolvePackageIcon, updateSource, type InstalledPackage, type PackageVersion } from "../../shared/packageModel";
-import { compareVersions, isManifestPath, MANIFEST_FILE } from "../../shared/packageMetadata";
+import { compareVersions, MANIFEST_FILE } from "../../shared/packageMetadata";
 import { parseSource, readPackageBrowserFile, sourceLabel, sourcePageUrl, type DownloadProgress } from "../../shared/packageSource";
 import { isPackageFile, localPackage, startsIn, unzipPackage } from "../../shared/localPackage";
-import { isDataSpec, isImageDataPath, packageUrls } from "../../shared/scriptImports";
+import { importSpecs, isDataSpec, isImageDataPath, packageUrls } from "../../shared/scriptImports";
+import { bareImportUrls, dataReader } from "../../shared/tweakBundle";
 import { diffHunks, lineDiff } from "../../shared/lineDiff";
 import { fetchFrom, installedTexts, packagesApi, type Fetched } from "./api";
 import { useInstallDrop, type Dropped } from "./drop";
@@ -73,7 +74,9 @@ export function InstallFlow({ request, host }: { request: InstallRequest; host: 
     useEffect(() => () => void runSeq.current++, []);
 
     async function analyzeWithProgress(fetched: Fetched, myRun: number, updateOf?: string, wasDownloading = false): Promise<Analysis> {
-        const urls = [...new Set(Object.entries(fetched.files).filter(([p]) => !isDataSpec(p)).flatMap(([, code]) => packageUrls(code)))];
+        const read = dataReader(Object.entries(fetched.files).map(([path, text]) => ({ path, text })));
+        const code = Object.entries(fetched.files).filter(([p]) => !isDataSpec(p));
+        const urls = [...new Set(code.flatMap(([p, text]) => [...packageUrls(text), ...bareImportUrls(p, importSpecs(text), read)]))];
         let timer: ReturnType<typeof setInterval> | undefined;
         try {
             if (urls.length) {
@@ -180,13 +183,11 @@ export function InstallFlow({ request, host }: { request: InstallRequest; host: 
     }, []);
 
     async function pickLocal(label: string, files: Record<string, string>, myRun = ++runSeq.current) {
-        const entries = startsIn(Object.keys(files));
-        if (!entries.length) return setState({ phase: "pick", error: `${label} has no script or ${MANIFEST_FILE} to install.` });
+        const entries = startsIn(Object.keys(files), (p) => files[p]);
+        if (!entries.length) return setState({ phase: "pick", error: `${label} has no tweak to install — a tweak is a folder with a ${MANIFEST_FILE} that has a "tangitweak" block.` });
         const top = entries.filter((e) => e.split("/").length === entries[0].split("/").length);
-        // a metadata.json at the top is the bundle to install
-        const bundle = top.find(isManifestPath);
-        if (top.length > 1 && !bundle) return setState({ phase: "pick", local: { label, files, entries } });
-        await installLocal(files, bundle ?? entries[0], myRun);
+        if (top.length > 1) return setState({ phase: "pick", local: { label, files, entries } });
+        await installLocal(files, entries[0], myRun);
     }
 
     async function installLocal(files: Record<string, string>, start: string, myRun = ++runSeq.current) {
@@ -350,9 +351,9 @@ function Picker(props: {
     const { local, error } = props.state;
     return (
         <main>
-            {!props.embedded && <h1>Install a script</h1>}
+            {!props.embedded && <h1>Install a tweak</h1>}
             <p className="dim">
-                A script's URL (<code>.ts</code>), a bundle's <code>{MANIFEST_FILE}</code>, a <code>.zip</code>, a GitHub repository or folder, or a gist. It installs with the files it imports and can keep itself up to date.
+                A tweak's <code>{MANIFEST_FILE}</code> URL, a <code>.zip</code>, a GitHub repository or folder, or a gist. It installs with the files it imports and can keep itself up to date.
             </p>
             <form
                 className="row"
@@ -361,14 +362,14 @@ function Picker(props: {
                     if (url.trim()) props.onUrl(url.trim());
                 }}
             >
-                <input id="install-url" autoFocus placeholder="https://github.com/you/scripts/blob/main/dark.tangitweak.ts" value={url} onChange={(e) => setUrl(e.target.value)} />
+                <input id="install-url" autoFocus placeholder="https://github.com/you/tweaks/tree/main/dark" value={url} onChange={(e) => setUrl(e.target.value)} />
                 <button className="primary" type="submit">
                     Read
                 </button>
             </form>
             <div id="install-drop" className="drop-zone">
                 <svg viewBox="0 0 16 16" width="28" height="28" aria-hidden="true"><path fill="none" stroke="currentColor" strokeWidth="1" strokeLinejoin="round" d="M8 1.5l5.5 3v7L8 14.5l-5.5-3v-7zM2.5 4.5L8 7.5l5.5-3M8 7.5v7" /></svg>
-                <div>Drop a script, a folder, a <code>.zip</code> or a link here</div>
+                <div>Drop a tweak's folder, a <code>.zip</code> or a link here</div>
                 <div className="row">
                     <label className="button">
                         Choose a folder…
@@ -381,12 +382,12 @@ function Picker(props: {
                 </div>
             </div>
             <p className="dim small">
-                Scripts from a folder or zip update themselves only when their metadata has an <code>updateURL</code>.
+                Tweaks from a folder or zip update themselves only when their <code>{MANIFEST_FILE}</code> has a <code>tangitweak.updateURL</code>.
             </p>
             {error && <p className="err">{error}</p>}
             {local && (
                 <div>
-                    <p>{local.label} has more than one script (and no {MANIFEST_FILE} listing them) — which one?</p>
+                    <p>{local.label} holds more than one tweak — which one?</p>
                     <ul className="entries">
                         {local.entries.map((e) => {
                             return (
@@ -501,7 +502,7 @@ function Warnings(props: { analysis: Analysis; fetched?: Fetched; modified?: str
     if (analysis.versionWarning) items.push(analysis.versionWarning);
     if (analysis.error) items.push(`It doesn't compile: ${analysis.error.split("\n")[0]}`);
     for (const m of fetched?.missing ?? []) items.push(`${m.from} imports "${m.spec}", which isn't in the package.`);
-    for (const b of fetched?.bare ?? []) items.push(`${b.from} imports "${b.spec}" from your own scripts (it resolves from the Explorer's root) — the package doesn't bring it.`);
+    for (const b of fetched?.bare ?? []) items.push(`${b.from} imports "${b.spec}", which isn't in its package.json's "dependencies" — it won't load until it's added there.`);
     if (props.modified?.length) items.push(`You changed ${props.modified.join(", ")} since it was installed — updating replaces your changes (Roll back brings them back).`);
     if (!items.length) return null;
     return (

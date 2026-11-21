@@ -536,15 +536,15 @@ import type { RanApi } from "../shared/netTypes";
             try {
                 // page-side require over the shipped library sources and data files
                 const codeOf = (importer: string) => (importer === h.name ? h.src : (libSources.find((l) => l.name === importer)?.src ?? ""));
+                const shim = shimFor(h.scriptId, h.name, h.params || {}, exposer, h.scriptId, h.scriptId, gen);
+                // the tweak's modules run with its `tweak`: their handlers, params and stores are its own
                 const requireFrom = makeLibRequire(
                     libSources,
-                    (lib, require, moduleObj) =>
-                        scriptFunction(lib.src!, lib.name)(shimFor(null, lib.name, lib.params || {}, undefined, lib.id ?? h.scriptId, h.scriptId).host, consoleProxy, require, moduleObj, moduleObj.exports),
+                    (lib, require, moduleObj) => scriptFunction(lib.src!, lib.name)(shim.host, consoleProxy, require, moduleObj, moduleObj.exports),
                     // the built-ins: isolated code all of them, the onSite fallback valtio's core
                     world === "isolated" ? { builtin: scriptBuiltin(codeOf, hotRegistry(h.scriptId).begin()) } : { builtin: siteBuiltin, onSite: true }
                 );
                 const moduleObj = { exports: {} as any };
-                const shim = shimFor(h.scriptId, h.name, h.params || {}, exposer, h.scriptId, h.scriptId, gen);
                 shim.top(() => scriptFunction(h.src, h.name)(shim.host, consoleProxy, requireFrom(h.name), moduleObj, moduleObj.exports));
                 dom = shim.dom;
                 if (world === "isolated") reactDoms.set(h.scriptId, () => reactOf(requireFrom(h.name)));

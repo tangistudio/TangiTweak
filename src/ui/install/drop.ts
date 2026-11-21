@@ -4,7 +4,7 @@ import { isPackageFile, readPackageBrowserFile } from "../../shared/packageSourc
 
 export type Dropped = { url: string } | { zip: File } | { label: string; files: Record<string, string> } | { error: string };
 
-const NOTHING = "Drop a script (.ts), a metadata.json, a folder, a .zip, or a link to one.";
+const NOTHING = "Drop a tweak's folder (with its package.json), a .zip, or a link to one.";
 
 /** a drag that can install: files, or a link (rows dragged inside the Explorer carry only text/plain) */
 export const isInstallDrag = (dt: DataTransfer | null): boolean => !!dt && Array.from(dt.types || []).some((t) => t === "Files" || t === "text/uri-list");

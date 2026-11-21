@@ -23,22 +23,24 @@ const later = (f: () => void) => setTimeout(f, Math.random() * 5);
 };
 
 const { saveScript, setParamFromCode, loadAllParamValues } = await import("../src/background/engine/scriptStore");
+const { seedBundle } = await import("./bundleHelper");
 
 const CODE = `import { tweak } from "tangitweak"; const cfg = tweak.params({ on: { type: "boolean", default: true }, hits: { type: "stringList", default: [] } });`;
 
 describe("setParamFromCode", () => {
-    beforeEach(() => {
+    beforeEach(async () => {
         for (const k of Object.keys(store)) delete store[k];
+        await seedBundle("s");
     });
 
     it("two params set at once both persist", async () => {
-        await saveScript({ id: "s", name: "s.tangitweak", code: CODE });
+        await saveScript({ id: "s", name: "s/index", code: CODE });
         await Promise.all([setParamFromCode("s", "on", false), setParamFromCode("s", "hits", ["page"])]);
         expect((await loadAllParamValues()).s).toEqual({ on: false, hits: ["page"] });
     });
 
     it("a quick flip back isn't skipped as unchanged", async () => {
-        await saveScript({ id: "s", name: "s.tangitweak", code: CODE });
+        await saveScript({ id: "s", name: "s/index", code: CODE });
         await Promise.all([setParamFromCode("s", "on", false), setParamFromCode("s", "on", true)]);
         expect((await loadAllParamValues()).s).toEqual({ on: true });
     });

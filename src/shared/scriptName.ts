@@ -56,19 +56,25 @@ export function scriptNameProblem(name: string): string {
 }
 
 /**
- * JSON files that configure tooling rather than hold data: package.json,
- * package-lock.json, tsconfig*.json and jsconfig.json anywhere, and the
- * settings.schema.json TangiTweak keeps at the root of the synced folder.
- * They are never data files (folder sync skips them).
+ * JSON files that configure tooling rather than hold data: package-lock.json
+ * and jsconfig.json anywhere; package.json and tsconfig*.json at the root
+ * (Folder Sync writes those); and the settings.schema.json TangiTweak keeps
+ * at the root of the synced folder. They are never data files (folder sync
+ * skips them). A tweak bundle's own package.json and tsconfig.json, in its
+ * folder, are data files.
  */
 export function isConfigJsonPath(path: string): boolean {
     const base = path.slice(path.lastIndexOf("/") + 1);
-    return /^(package\.json|package-lock\.json|tsconfig.*\.json|jsconfig\.json)$/i.test(base) || /^(settings\.json|settings\.schema\.json|stores\.json)$/i.test(path);
+    return /^(package-lock\.json|jsconfig\.json)$/i.test(base) || /^(package\.json|tsconfig.*\.json|settings\.json|settings\.schema\.json|stores\.json)$/i.test(path);
 }
+
+/** a tweak bundle's .gitignore: the one dot-file kept as a data file */
+export const isGitignorePath = (path: string): boolean => /(^|\/)\.gitignore$/.test(path);
 
 /** why a data file path (`mock/rate-limits.json`, `README.md`, `icons/logo.svg`, `icons/logo.png`) can't be used, or "" */
 export function dataFilePathProblem(path: string): string {
     if (!path) return "path is empty";
+    if (isGitignorePath(path)) return path === ".gitignore" ? "a .gitignore belongs in a tweak's folder" : pathProblem(path.slice(0, -".gitignore".length) + "gitignore", false);
     if (!/\.(json|svg|md|png|jpe?g|gif|webp|ico|avif)$/i.test(path)) return "data files are .json, .md, .svg or image (.png, .jpg, .webp, .gif, .ico, .avif) files";
     const justExt = /(?:^|\/)(\.(?:json|svg|md|png|jpe?g|gif|webp|ico|avif))$/i.exec(path);
     if (justExt) return `data file names can't be just ${justExt[1]}`;

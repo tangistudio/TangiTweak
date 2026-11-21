@@ -2,7 +2,8 @@
  * Support files folder sync keeps in the scripts folder for VS Code:
  * tt-api.d.ts (typings), tsconfig.json, package.json and settings.schema.json, plus the
  * package imports' and the built-in modules' (valtio, React) typings under
- * .tangitweak/types/. TangiTweak owns them:
+ * .tangitweak/types/, and the SDK (the `tangitweak` module's typings and the
+ * tsconfig tweaks extend) under .tangitweak/sdk/tangitweak/. TangiTweak owns them:
  * they are rewritten whenever sync starts (every browser start and
  * extension update) if their content differs, so edits don't stick.
  */
@@ -13,6 +14,8 @@ import { packagePaths, TYPINGS_ROOT } from "./packageImports";
 export const BUILTIN_TYPINGS_ROOT = `${TYPINGS_ROOT}/builtin`;
 /** local test harness synced into the scripts folder (lib/tangitweak-test.json keys go under it) */
 export const TEST_PKG_ROOT = ".tangitweak/test";
+/** the SDK, laid out like the npm package `tangitweak`: the root package.json links it, so `npm install` makes tweaks' `"extends": "tangitweak/tsconfig.json"` resolve */
+export const SDK_ROOT = ".tangitweak/sdk/tangitweak";
 
 export const API_DTS_FILE = "tt-api.d.ts";
 export const TSCONFIG_FILE = "tsconfig.json";
@@ -47,6 +50,7 @@ export function packageJsonText(existing?: Record<string, any>): string {
                 },
                 devDependencies: {
                     "@tangitweak/test": `file:${TEST_PKG_ROOT}`,
+                    tangitweak: `file:${SDK_ROOT}`,
                     ...prevDevDeps,
                 },
             },
@@ -56,22 +60,52 @@ export function packageJsonText(existing?: Record<string, any>): string {
     );
 }
 
+const baseCompilerOptions = {
+    target: "esnext",
+    lib: ["esnext", "dom", "dom.iterable"],
+    // tt-api.d.ts declares web APIs (URLPattern…) that newer TS libs may also have
+    skipLibCheck: true,
+    module: "esnext",
+    moduleResolution: "bundler",
+    allowImportingTsExtensions: true,
+    // `import x from "./mock/data.json"` (data files)
+    resolveJsonModule: true,
+    // .tsx files: the automatic runtime, the built-in React by default
+    jsx: "react-jsx",
+    noEmit: true,
+};
+
+/**
+ * The SDK's files (under SDK_ROOT): a package.json, the `tangitweak`
+ * module's typings and the tsconfig.json a tweak's own extends.
+ */
+export function sdkFiles(dts: string, version: string): Record<string, string> {
+    const pkg = {
+        $comment: GENERATED_NOTE,
+        name: "tangitweak",
+        version,
+        types: "index.d.ts",
+        exports: { ".": { types: "./index.d.ts" }, "./tsconfig.json": "./tsconfig.json" },
+    };
+    const tsconfig = {
+        compilerOptions: {
+            ...baseCompilerOptions,
+            // relative to this file: the built-ins' typings Folder Sync keeps in .tangitweak/types/builtin
+            paths: builtinPaths(`../../types/builtin`),
+        },
+    };
+    return {
+        "package.json": JSON.stringify(pkg, null, 2) + "\n",
+        "index.d.ts": apiDtsText(dts),
+        "tsconfig.json": `// ${GENERATED_NOTE}\n${JSON.stringify(tsconfig, null, 2)}\n`,
+    };
+}
+
 /** tsconfig.json (TypeScript and VS Code read it as JSON with comments) */
 export function tsconfigText(): string {
     const config = {
         compilerOptions: {
-            target: "esnext",
-            lib: ["esnext", "dom", "dom.iterable"],
-            // tt-api.d.ts declares web APIs (URLPattern…) that newer TS libs may also have
-            skipLibCheck: true,
-            module: "esnext",
-            moduleResolution: "bundler",
-            allowImportingTsExtensions: true,
-            // `import x from "./mock/data.json"` (data files)
-            resolveJsonModule: true,
-            // .tsx scripts: the automatic runtime, the built-in React by default
-            jsx: "react-jsx",
-            noEmit: true,
+            ...baseCompilerOptions,
             // local test harness, package imports (`https://unpkg.com/x@1.2.3`) → their downloaded typings
             // and the built-ins (`valtio`, `react`, `react-dom/client`…) → the extension's typings of them
             paths: {

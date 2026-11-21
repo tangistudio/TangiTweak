@@ -501,9 +501,9 @@ describe("tweak.pageStore", () => {
         expect(t.owner.get("s1", "ps", "p1")).toBeUndefined();
     });
 
-    it("a global store's ID is used once per script; unnamed stores never clash with one", () => {
+    it("a global store's ID is used once per tweak; unnamed stores never clash with one", () => {
         const d = compileScript(`import { tweak } from "tangitweak"; tweak.globalStore("x", { n: 1 }); tweak.globalStore("x", { n: 1 });`);
-        expect(String(d.error)).toMatch(/already has a store named "x"/);
+        expect(String(d.error)).toMatch(/a store ID is used once per tweak/);
         expect(compileScript(`import { tweak } from "tangitweak"; tweak.globalStore("x", { n: 1 }); tweak.pageStore({ n: 1 }); tweak.pageStore({ n: 1 });`).error).toBeNull();
     });
 

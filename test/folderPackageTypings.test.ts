@@ -84,7 +84,7 @@ function tree(d: Dir, prefix = ""): Record<string, string> {
     }
     return out;
 }
-const typingsOnDisk = () => Object.fromEntries(Object.entries(tree(root)).filter(([p]) => p.startsWith(".tangitweak/")));
+const typingsOnDisk = () => Object.fromEntries(Object.entries(tree(root)).filter(([p]) => p.startsWith(".tangitweak/") && !p.startsWith(".tangitweak/sdk/")));
 
 describe("folder sync package typings", () => {
     it("mirrors the stored typings under .tangitweak/types and removes stale ones", async () => {
@@ -120,10 +120,11 @@ describe("folder sync package typings", () => {
             ".tangitweak/types/unpkg.com/a@1.0.0/index.d.ts": "export declare const a: string;\n",
         });
 
-        // nothing left → the folder goes
+        // nothing left → the folder goes (the SDK next to it stays)
         chrome.storage.local.set({ [PACKAGE_TYPINGS_KEY]: { files: {}, tops: {} } });
         await sync.flush();
-        expect(root.entries.has(".tangitweak")).toBe(false);
+        expect(typingsOnDisk()).toEqual({});
+        expect((root.entries.get(".tangitweak") as any).dir.entries.has("types")).toBe(false);
         expect(root.entries.has("tsconfig.json")).toBe(true);
         sync.halt();
     });

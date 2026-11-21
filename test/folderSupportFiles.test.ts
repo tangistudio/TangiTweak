@@ -115,13 +115,19 @@ describe("folder sync support files", () => {
         expect(files.get(".tangitweak/test/index.mjs")?.text).toContain("loadTweak");
         expect(files.get(".tangitweak/test/index.d.ts")?.text).toContain("loadTweak");
 
+        // the SDK, which the root package.json links and tweaks' tsconfig.json extends
+        expect(JSON.parse(files.get(".tangitweak/sdk/tangitweak/package.json")!.text)).toMatchObject({ name: "tangitweak", types: "index.d.ts" });
+        expect(files.get(".tangitweak/sdk/tangitweak/index.d.ts")?.text).toContain("v1: true");
+        const sdkTs = files.get(".tangitweak/sdk/tangitweak/tsconfig.json")!.text;
+        expect(JSON.parse(sdkTs.slice(sdkTs.indexOf("\n") + 1)).compilerOptions).toMatchObject({ jsx: "react-jsx", paths: { react: ["../../types/builtin/@types/react/index.d.ts"] } });
+
         const pkg = JSON.parse(files.get("package.json")!.text);
         expect(pkg.$comment).toContain(GENERATED_NOTE);
         expect(pkg).toMatchObject({
             private: true,
             type: "module",
             imports: { "#tangitweak/test": "./.tangitweak/test/index.mjs" },
-            devDependencies: { "@tangitweak/test": "file:.tangitweak/test" },
+            devDependencies: { "@tangitweak/test": "file:.tangitweak/test", tangitweak: "file:.tangitweak/sdk/tangitweak" },
         });
         expect(JSON.parse(files.get("settings.schema.json")!.text).$comment).toBe(GENERATED_NOTE);
         const stamps = ["tt-api.d.ts", "tsconfig.json", "package.json", "settings.schema.json", ".tangitweak/test/index.mjs"].map((f) => files.get(f)!.t);
@@ -157,6 +163,7 @@ describe("folder sync support files", () => {
             vitest: "^2.1.4",
             "happy-dom": "^21.0.0",
             "@tangitweak/test": "file:.tangitweak/test",
+            tangitweak: "file:.tangitweak/sdk/tangitweak",
         });
 
         // Temporarily broken JSON in package.json is left untouched rather than clobbered

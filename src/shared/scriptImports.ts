@@ -12,6 +12,7 @@ import { builtinSpec, jsxImportSource, usesJsx } from "./builtinSpecs";
 import { scriptFrame } from "./scriptError";
 import { isUrlSpec, makePackageLoader, PACKAGE_ORIGIN, parsePackageUrl, type PackageModule, type PackageModules, type PackageStatus } from "./packageImports";
 import type { PackageFn } from "./siteCode";
+import { bareImport, dataReader } from "./tweakBundle";
 
 const IMPORT_RE = /(?:\bfrom\s*|\bimport\s*\(?\s*|\brequire\s*\(\s*)["']([^"'\n]+)["']/g;
 
@@ -415,13 +416,18 @@ export function makeLibRequire<L extends ShippedLib>(libs: L[], run: (lib: L, re
         scriptLibs.filter((l) => l.json === undefined).map((l) => l.name),
         scriptLibs.filter((l) => l.json !== undefined).map((l) => l.name)
     );
+    const read = dataReader(scriptLibs.filter((l) => l.json !== undefined).map((l) => ({ path: l.name, text: l.json! })));
     const modules = new Map<string, any>();
     const requireFrom =
         (importer: string) =>
         (spec: string): any => {
             const r = isUrlSpec(spec) ? null : resolve(importer, spec);
             if (!r && builtinSpec(spec)) return builtin ? builtin(spec, importer, loadPackage) : pageBuiltin(spec);
-            if (isUrlSpec(spec)) {
+            // a bundle's bare import: its package.json dependency's download
+            const bare = r ? undefined : bareImport(importer, spec, read);
+            if (bare && "error" in bare) throw new Error(bare.error);
+            if (bare || isUrlSpec(spec)) {
+                if (bare) spec = bare.url;
                 if (!opts.onSite) return loadPackage(spec);
                 try {
                     return loadPackage(spec);

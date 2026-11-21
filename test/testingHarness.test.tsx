@@ -5,23 +5,22 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadTweak } from "../src/testing/index";
 import { pickStart } from "../src/shared/packageSource";
-import { makeFolderPackagePlan } from "../src/shared/makePackage";
 
 describe("@tangitweak/test harness", () => {
-    it("loads single scripts and multi-script bundles from disk while ignoring co-located test/config files", async () => {
+    it("loads tweak folders from disk (their package.json's entry and what it imports) while ignoring co-located test/config files", async () => {
         const dir = mkdtempSync(join(tmpdir(), "tt-test-pkg-"));
         try {
-            mkdirSync(join(dir, "shared"), { recursive: true });
-            mkdirSync(join(dir, "tool"), { recursive: true });
+            mkdirSync(join(dir, "tool/shared"), { recursive: true });
             mkdirSync(join(dir, "tool/__tests__"), { recursive: true });
 
-            writeFileSync(join(dir, "shared/fmt.ts"), `export const badge = (n: number) => \`[\${n}]\`;\n`);
+            writeFileSync(join(dir, "tool/package.json"), JSON.stringify({ name: "tool", main: "main.ts", tangitweak: {} }));
+            writeFileSync(join(dir, "tool/shared/fmt.ts"), `export const badge = (n: number) => \`[\${n}]\`;\n`);
             writeFileSync(join(dir, "tool/config.json"), JSON.stringify({ prefix: "PR" }));
             writeFileSync(join(dir, "tool/icon.svg"), `<svg viewBox="0 0 8 8"><circle cx="4" cy="4" r="3"/></svg>`);
             writeFileSync(
                 join(dir, "tool/main.ts"),
                 `import { tweak } from "tangitweak"; 
-                import { badge } from "../shared/fmt";
+                import { badge } from "./shared/fmt";
                 import cfg from "./config.json";
                 import icon from "./icon.svg";
                 export function formatTitle(n: number) {
@@ -34,33 +33,23 @@ describe("@tangitweak/test harness", () => {
             writeFileSync(join(dir, "tool/__tests__/smoke.ts"), `export {};\n`);
             writeFileSync(join(dir, "tool/vitest.config.ts"), `export default {};\n`);
 
-            expect(pickStart(["main.ts", "main.test.ts", "__tests__/smoke.ts", "vitest.config.ts"], "tool", "pick one")).toBe("main.ts");
-            const planned = makeFolderPackagePlan("tool", {
-                "tool/main.ts": "import { tweak } from 'tangitweak'; tweak.onPage('*://example.com/*', () => {});",
-                "tool/main.test.ts": "import { loadTweak } from '@tangitweak/test';",
-                "tool/__tests__/smoke.ts": "export {};",
-                "tool/vitest.config.ts": "export default {};",
-            });
-            expect(planned.scripts).toEqual(["tool/main.ts"]);
+            expect(pickStart(["main.ts", "main.test.ts", "__tests__/smoke.ts", "vitest.config.ts", "package.json"], "tool")).toBe("package.json");
+            expect(() => pickStart(["main.ts"], "tool")).toThrow(/no package\.json in tool/);
 
-            // Folder load auto-picks main.ts AND resolves ../shared/fmt + JSON + SVG imports
+            // Folder load starts at package.json's main AND resolves ./shared/fmt + JSON + SVG imports
             const single = await loadTweak(join(dir, "tool"));
-            expect(single.metadata).toBeUndefined(); // a script outside a bundle has no package metadata
+            expect(single.manifest?.packageName).toBe("tool");
             expect(single.exports.formatTitle(42)).toBe("PR [42] ok");
             await single.dispose();
 
-            // Multi-script bundle via metadata.json
+            // The entry (index.ts) imports modules whose handlers are the tweak's
             const bundleDir = join(dir, "bundle");
             mkdirSync(bundleDir, { recursive: true });
             writeFileSync(
-                join(bundleDir, "metadata.json"),
-                JSON.stringify({
-                    name: "Dev Suite",
-                    version: "2.1.0",
-                    connect: ["api.example.com"],
-                    scripts: ["headers.ts", "body.ts"],
-                })
+                join(bundleDir, "package.json"),
+                JSON.stringify({ name: "dev-suite", version: "2.1.0", tangitweak: { displayName: "Dev Suite", connect: ["api.example.com"] } })
             );
+            writeFileSync(join(bundleDir, "index.ts"), `import "./headers";\nimport "./body";\n`);
             writeFileSync(
                 join(bundleDir, "headers.ts"),
                 `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*://api.example.com/*", strategy: "helper" }, () => ({ headers: { set: { "x-suite": "1" } } }));\n`
@@ -73,7 +62,7 @@ describe("@tangitweak/test harness", () => {
             const bundle = await loadTweak(bundleDir);
             expect(bundle.manifest?.name).toBe("Dev Suite");
             expect(bundle.metadata?.version).toBe("2.1.0");
-            expect(bundle.scripts.map((s) => s.name)).toEqual(["headers", "body"]);
+            expect(bundle.scripts.map((s) => s.name)).toEqual(["index"]); // the one tweak; its modules run as part of it
             expect(bundle.capabilities.connect).toContain("api.example.com");
 
             const res = await bundle.simulate("https://api.example.com/items", {

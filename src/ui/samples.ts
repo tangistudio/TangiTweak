@@ -1,4 +1,4 @@
-/** Bundled sample scripts, offered as one-click inserts. */
+/** Bundled sample tweaks, offered as one-click inserts (each becomes a tweak folder: package.json + index.ts). */
 
 export interface SampleScript {
     name: string;

@@ -1,6 +1,6 @@
 /**
- * Installed packages: a script, or a bundle of scripts (a folder with a
- * metadata.json listing them), with the files they import — installed from
+ * Installed packages: a tweak bundle (a folder whose package.json has a
+ * "tangitweak" block), its entry and the files it imports — installed from
  * a URL, a GitHub repository, a gist or a local folder and recorded so it
  * updates, all files together, from where it came from. The files themselves are ordinary
  * scripts and data files; the record maps each package file to the store
@@ -18,7 +18,7 @@ export const PACKAGES_KEY = "wtPackages"; // the extension's former name (Wiretr
 /** what a package is at one revision: its files' texts */
 export interface PackageVersion {
     revision: string;
-    /** its entries' paths among `files` (a bundle: its metadata.json's scripts) */
+    /** its entry's path among `files` (package.json's `main`, else index.ts / index.tsx) */
     entries: string[];
     files: Record<string, string>;
     metadata: PackageMetadata;
@@ -130,8 +130,14 @@ export function modifiedFiles(pkg: Pick<InstalledPackage, "files">, current: (f:
     return out.sort();
 }
 
+/** a bundle's entry script: its `main`, else index.ts, else index.tsx */
+function entryScriptOf<S>(folder: string, manifest: { main?: string; scripts: string[] }, byKey: Map<string, S>): S | undefined {
+    const at = (rel: string) => byKey.get(scriptFileKey(storeItemOf(folder, rel).name));
+    return at(manifest.scripts[0]) ?? (manifest.main ? undefined : at("index.tsx"));
+}
+
 /**
- * For each bundle (`<folder>/metadata.json`) or installed folder package
+ * For each bundle (`<folder>/package.json`) or installed folder package
  * (`pkg.folder !== ""`) with a single entry script, map that script's id to
  * the bundle's display name (and description fallback) for the popup menu.
  */
@@ -154,8 +160,7 @@ export function singleScriptBundles(
         } catch {
             continue;
         }
-        if (manifest.scripts.length !== 1) continue;
-        const s = byKey.get(scriptFileKey(storeItemOf(folder, manifest.scripts[0]).name));
+        const s = entryScriptOf(folder, manifest, byKey);
         if (!s) continue;
         out.set(s.id, { name: manifest.name || folder, description: manifest.description });
     }
@@ -172,7 +177,7 @@ export function singleScriptBundles(
 /**
  * Resolved `<img src>` icon URLs for scripts (`scriptIcons`: script id → src)
  * and package/bundle folders (`folderIcons`: folder path → src), from
- * `<folder>/metadata.json`'s `icon` and installed packages' metadata.
+ * `<folder>/package.json`'s `tangitweak.icon` and installed packages' metadata.
  */
 export function resolveWorkspaceIcons(
     scripts: readonly { id: string; meta: { name: string } }[],
@@ -192,10 +197,8 @@ export function resolveWorkspaceIcons(
         } catch {
             continue;
         }
-        const entryScripts = manifest.scripts.flatMap((rel) => {
-            const s = byKey.get(scriptFileKey(storeItemOf(folder, rel).name));
-            return s ? [s] : [];
-        });
+        const entry = entryScriptOf(folder, manifest, byKey);
+        const entryScripts = entry ? [entry] : [];
         const bundleIcon = resolveIconSrc(manifest.icon, folder, dataFiles);
         if (bundleIcon) {
             folderIcons.set(folder, bundleIcon);

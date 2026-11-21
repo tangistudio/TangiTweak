@@ -320,7 +320,7 @@ describe("overlay runtime", () => {
         expect(Array.isArray(h.rects[0])).toBe(true);
     });
 
-    it("attributes imported library tweak.globalStore and tweak.pageStore to the library's scriptId, not the importer's", async () => {
+    it("a module's tweak.globalStore and tweak.pageStore are its tweak's (the entry's scriptId)", async () => {
         const libSrc = `import { tweak } from "tangitweak"; export const shared = tweak.globalStore("shared", { count: 1 }, { persist: true }); export const perTab = tweak.pageStore({ tab: "init" });`;
         const h = await start(
             `import { tweak } from "tangitweak"; 
@@ -343,19 +343,18 @@ describe("overlay runtime", () => {
             { id: "libB", name: "lib/B.ts" },
         ]);
         expect(exported).toEqual({
-            "lib/B.ts": {
+            "demo.tsx": {
                 shared: { count: 42 },
             },
         });
-        expect(exported["demo.tsx"]).toBeUndefined();
 
         const [bgSide, ownerSide] = endpointPair();
         h.owner.attach(ownerSide, { all: true });
         const bgHub = new ReplicaHub({ ctx: "bg" });
-        bgHub.prime(await h.owner.init(["libB"], { page: "p1" }));
+        bgHub.prime(await h.owner.init(["s1"], { page: "p1" }));
         bgHub.attach(bgSide);
-        const bgShared = bgHub.store("libB", "shared", { count: 0 }, true) as { count: number };
-        const bgTab = bgHub.pageStore("libB", "lib/B#0", { tab: "" }, "p1") as { tab: string };
+        const bgShared = bgHub.store("s1", "shared", { count: 0 }, true) as { count: number };
+        const bgTab = bgHub.pageStore("s1", "lib/B#0", { tab: "" }, "p1") as { tab: string };
         await settle();
         expect(bgShared.count).toBe(42);
         expect(bgTab.tab).toBe("tab-1");

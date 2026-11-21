@@ -692,7 +692,7 @@ declare namespace TangiTweak {
     // ---- tweak.params: typed, user-adjustable parameters ----
 
     /** An on/off switch — a checkbox in the ⚙ dialog. */
-    /** a bundle's metadata.json fields (besides `scripts`) */
+    /** a tweak's package.json fields as TangiTweak reads them (`name` is `tangitweak.displayName`, else the npm name) */
     interface Metadata {
         /** shown when installing and in the Explorer (default: the file name) */
         name?: string;
@@ -710,7 +710,7 @@ declare namespace TangiTweak {
         license?: string;
         /**
          * Where updates come from, instead of where it was installed from: a
-         * script, metadata.json or .zip URL, a GitHub file or folder
+         * package.json or .zip URL, a GitHub file or folder
          * (`github.com/o/r/tree/main/dir`), a gist (`gist.github.com/u/id`) or a
          * gist's raw file URL. A copy installed from a folder or zip updates
          * from it too. An update that changes it waits for review.

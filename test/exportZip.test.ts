@@ -171,20 +171,24 @@ describe("settings.json in the zip", () => {
         const ss = await import("../src/background/engine/scriptStore");
         const sf = await import("../src/background/settingsFile");
         const code = `import { tweak } from "tangitweak"; tweak.params({ level: { type: "string", default: "warn" } });\ntweak.onRequest({ url: "*", strategy: "extension" }, () => {});\n`;
+        const { seedBundle } = await import("./bundleHelper");
+        await seedBundle("untouched");
+        await seedBundle("dbg");
         const untouchedId = ss.newId();
-        await ss.saveScript({ id: untouchedId, name: "Untouched", code });
+        await ss.saveScript({ id: untouchedId, name: "untouched/index", code });
         await ss.setEnabled(untouchedId, false);
 
+        const settings = renderSettings(G, [script("dbg/index.ts", false, { level: "debug" }), script("Other.ts", true, { level: "trace" })]);
         const zip = buildExportZip({
-            settings: settingsForScripts(SETTINGS, ["Debug header"]),
-            scripts: [{ name: "Debug header", code }],
+            settings: settingsForScripts(settings, ["dbg/index"]),
+            scripts: [{ name: "dbg/index", code }],
             dataFiles: [],
         });
         const z = await readExportZip(buf(zip));
         const id = ss.newId();
-        await ss.saveScript({ id, name: "Debug header", code: z.scripts[0].code });
+        await ss.saveScript({ id, name: "dbg/index", code: z.scripts[0].code });
         expect((await ss.getScript(id))!.enabled).toBe(true);
-        expect(await sf.applySettingsDoc(importedSettingsDoc(z.settings!, ["Debug header"]))).toEqual({});
+        expect(await sf.applySettingsDoc(importedSettingsDoc(z.settings!, ["dbg/index"]))).toEqual({});
         expect((await ss.getScript(id))!.enabled).toBe(false);
         expect((await ss.getParamValues(id)).level).toBe("debug");
         expect((await ss.getScript(untouchedId))!.enabled).toBe(false); // unpicked script untouched!
@@ -200,13 +204,13 @@ describe("Import… of a package's new version", () => {
         folders: paths.filter((p) => p.endsWith("/")).map((p) => p.slice(0, -1)),
     });
 
-    it("its packages: the one folder everything is in (Export Package…), and folders with a metadata.json", () => {
+    it("its packages: the one folder everything is in (Export Package…), and folders with a package.json", () => {
         expect(packageRoots(zip(["kit/a.ts", "kit/lib/b.ts"]))).toEqual(["kit"]);
         expect(packageRoots(zip(["kit/a.ts", "x.ts"]))).toEqual([]);
         expect(packageRoots(zip(["kit/a.ts"], "globals: {}"))).toEqual([]);
-        expect(packageRoots(zip(["a/metadata.json", "a/x.ts", "b/y.ts", "metadata.json"]))).toEqual(["a"]);
+        expect(packageRoots(zip(["a/package.json", "a/x.ts", "b/y.ts", "package.json"]))).toEqual(["a"]);
         // one inside another counts as the outer one
-        expect(packageRoots(zip(["kit/metadata.json", "kit/sub/metadata.json", "kit/sub/x.ts"]))).toEqual(["kit"]);
+        expect(packageRoots(zip(["kit/package.json", "kit/sub/package.json", "kit/sub/x.ts"]))).toEqual(["kit"]);
     });
 
     it("existing files in those packages that the zip doesn't have (any case), and nothing outside them", () => {

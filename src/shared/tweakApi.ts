@@ -79,6 +79,9 @@ export interface StoreRun {
 
 export const storeRun = (stores: NamedStores): StoreRun => ({ stores, counts: new Map() });
 
+// each tweak's global store IDs (its run: every file of a bundle runs with its entry's): the file that declared each
+const globalIds = new WeakMap<StoreRun, Map<string, string>>();
+
 /**
  * `tweak`'s stores for `file`. `tabStore` / `pageStore` / `siteStore` take
  * no name: a store is named after its file and its position among those
@@ -101,7 +104,15 @@ export function tweakStores(file: string, own: StoreRun, run: () => StoreRun | u
     };
     return {
         globalStore: (id: string, initial: object, opts?: unknown) => {
-            if (!isStub(id)) checkStoreId(id);
+            if (!isStub(id)) {
+                checkStoreId(id);
+                let ids = globalIds.get(own);
+                if (!ids) globalIds.set(own, (ids = new Map()));
+                const had = ids.get(id);
+                if (had !== undefined)
+                    throw new Error(`tweak.globalStore("${id}"): a store ID is used once per tweak — ${had === file ? "this file" : `"${had}"`} already declares it (declare it once, in one module, and import it)`);
+                ids.set(id, file);
+            }
             return own.stores.globalStore(id, initial, opts);
         },
         tabStore: unnamed("tabStore"),

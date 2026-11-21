@@ -9,11 +9,11 @@ export type Strategy = "rules" | "page" | "debugger" | "helper" | "extension";
 export type DocumentWhen = "document_start" | "document_end" | "document_idle";
 
 export interface InlineTweakSource {
-    /** Entry script TypeScript / TSX source code (optional when `files["metadata.json"]` is provided). */
+    /** Entry script TypeScript / TSX source code (optional when `files["package.json"]` is provided: its entry runs). */
     code?: string;
     /** Entry script name or path (defaults to `"script"`). */
     name?: string;
-    /** Companion scripts, `metadata.json`, or data files (`path -> content`). */
+    /** Companion scripts, a `package.json`, or data files (`path -> content`). */
     files?: Record<string, string>;
 }
 
@@ -206,7 +206,7 @@ export interface LoadedTweak {
 }
 
 /**
- * Load a TangiTweak script file (`"./dark.ts"`), bundle (`"./metadata.json"` or folder),
+ * Load a tweak (`"./dark"`, its folder, or `"./dark/package.json"`),
  * or inline `{ code, files }` definition for unit and DOM/React testing.
  */
 export declare function loadTweak(source: TweakSource, options?: LoadTweakOptions): Promise<LoadedTweak>;

@@ -105,8 +105,36 @@ export function isNodeBuiltin(spec: string): boolean {
     return spec.startsWith("node:") || BUILTINS.has(spec.split("/")[0]);
 }
 
+// each Node.js built-in's browser version on npm (none: it can't work in a browser)
+const BROWSER_BUILTINS: Record<string, string> = {
+    events: "events",
+    buffer: "buffer",
+    util: "util",
+    process: "process",
+    assert: "assert",
+    url: "url",
+    string_decoder: "string_decoder",
+    punycode: "punycode",
+    path: "path-browserify",
+    crypto: "crypto-browserify",
+    stream: "stream-browserify",
+    os: "os-browserify",
+    http: "stream-http",
+    https: "https-browserify",
+    zlib: "browserify-zlib",
+    querystring: "querystring-es3",
+    timers: "timers-browserify",
+    tty: "tty-browserify",
+    vm: "vm-browserify",
+    constants: "constants-browserify",
+};
+
+/** why a Node.js built-in can't be imported, and the tweak's dependency that would provide it */
 export function builtinMessage(spec: string): string {
-    return `"${spec}" is a Node.js built-in — not available in TangiTweak scripts`;
+    const name = splitBare(spec.replace(/^node:/, "")).name;
+    const pkg = BROWSER_BUILTINS[name];
+    const fix = pkg ? ` — add "${name}": "${pkg === name ? "latest" : `npm:${pkg}`}" to the tweak's package.json "dependencies" to use npm's browser version` : "";
+    return `"${spec}" is a Node.js built-in — not available in tweaks${fix}`;
 }
 
 /** a bare specifier's package name and path inside it (`@s/x/a/b` → `@s/x`, `a/b`) */
@@ -133,8 +161,15 @@ export function classifyNested(spec: string, from: string): { url: string } | { 
     return { bare: name, sub };
 }
 
-/** `https://unpkg.com/<name>@<range>[/sub]` for a dependency range; null for non-registry ranges (`npm:`, git, `file:`, …) */
+/** the package a dependency names: an `npm:` alias's target ("path": "npm:path-browserify@^1" → path-browserify, ^1), else itself */
+export function aliasTarget(name: string, range: string | undefined): { name: string; range: string | undefined } {
+    const m = /^npm:((?:@[^/@\s]+\/)?[^/@\s]+)(?:@(.*))?$/.exec((range ?? "").trim());
+    return m ? { name: m[1], range: m[2] || "latest" } : { name, range };
+}
+
+/** `https://unpkg.com/<name>@<range>[/sub]` for a dependency range (`npm:<name>@<range>` aliases followed); null for non-registry ranges (git, `file:`, …) */
 export function rangeUrl(name: string, range: string | undefined, sub: string): string | null {
+    ({ name, range } = aliasTarget(name, range));
     const r = (range ?? "").trim() || "latest";
     if (/[:/]/.test(r) || /^[\w.-]+\/[\w.-]+/.test(r)) return null;
     return `${PACKAGE_ORIGIN}${name}@${encodeURIComponent(r === "*" ? "latest" : r)}${sub ? `/${sub}` : ""}`;
@@ -476,7 +511,8 @@ export function makePackageLoader(
     };
     return (spec) => {
         const p = parsePackageUrl(spec);
-        if (typeof p === "string") throw new PackageImportError(p);
+        // a dependency's range URL (a bundle's bare import) loads through its download's alias
+        if (typeof p === "string" && !finalUrl(pkgs, spec) && pkgs?.failed?.[spec] === undefined) throw new PackageImportError(p);
         const failed = pkgs?.failed?.[spec];
         if (failed !== undefined) throw new PackageImportError(`cannot import "${spec}": ${failed}`);
         const url = finalUrl(pkgs, spec);

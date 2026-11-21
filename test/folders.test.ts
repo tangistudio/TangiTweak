@@ -167,7 +167,13 @@ describe("names are paths", () => {
         expect(dataFilePathProblem("mock/rate-limits")).toMatch(/\.json/);
         expect(dataFilePathProblem("mock/.json")).toMatch(/just/);
         expect(dataFilePathProblem("package.json")).toMatch(/reserved/);
-        expect(dataFilePathProblem("a/tsconfig.base.json")).toMatch(/reserved/);
+        expect(dataFilePathProblem("tsconfig.base.json")).toMatch(/reserved/);
+        expect(dataFilePathProblem("a/package-lock.json")).toMatch(/reserved/);
+        // a tweak's own package.json, tsconfig.json and .gitignore are in its folder
+        expect(dataFilePathProblem("a/package.json")).toBe("");
+        expect(dataFilePathProblem("a/tsconfig.json")).toBe("");
+        expect(dataFilePathProblem("a/.gitignore")).toBe("");
+        expect(dataFilePathProblem(".gitignore")).toMatch(/tweak's folder/);
         expect(dataFilePathProblem("settings.schema.json")).toMatch(/reserved/);
         expect(dataFilePathProblem("a/settings.schema.json")).toBe("");
         expect(folderPathProblem("mock/api")).toBe("");

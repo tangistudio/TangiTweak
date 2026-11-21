@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import { pathDir, seedBundle } from "./bundleHelper";
 
 // in-memory chrome.storage + directory handle
 const store: Record<string, any> = {};
@@ -17,25 +18,7 @@ const store: Record<string, any> = {};
 };
 const files = new Map<string, { text: string; t: number }>();
 let clock = 1;
-const dir = {
-    name: "d",
-    async *values() {
-        for (const [name, f] of files) yield { kind: "file", name, getFile: async () => ({ lastModified: f.t, size: f.text.length, text: async () => f.text }) };
-    },
-    async getFileHandle(name: string, o?: any) {
-        if (!files.has(name)) {
-            if (!o?.create) throw new Error("nf");
-            files.set(name, { text: "", t: clock++ });
-        }
-        return {
-            getFile: async () => ({ lastModified: files.get(name)!.t, size: files.get(name)!.text.length, text: async () => files.get(name)!.text }),
-            createWritable: async () => ({ write: async (t: string) => files.set(name, { text: t, t: clock++ }), close: async () => {} }),
-        };
-    },
-    async removeEntry(n: string) {
-        files.delete(n);
-    },
-};
+const dir = pathDir(files, { tick: () => clock++ });
 vi.mock("../src/shared/folderSync", async (orig) => ({ ...(await orig<any>()), loadSavedHandle: async () => dir, saveHandle: async () => {}, clearSavedHandle: async () => {} }));
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -49,10 +32,11 @@ describe("settings.json folder sync", () => {
     it("exports sparse overrides, applies external edits, resets omitted entries, and never rewrites a stable file", async () => {
         const sync = await import("../src/background/folderSync");
         const ss = await import("../src/background/engine/scriptStore");
+        await seedBundle("s");
         const id = ss.newId();
         await ss.saveScript({
             id,
-            name: "S",
+            name: "s/index",
             code: `import { tweak } from "tangitweak"; tweak.params({ n: { type: "number", default: 1 } });`,
         });
         await sync.startFromStoredHandle();
@@ -67,10 +51,10 @@ describe("settings.json folder sync", () => {
         // GUI-side change → non-default value written
         await ss.setParamValue(id, "n", 7);
         await sleep(800);
-        expect(JSON.parse(files.get("settings.json")!.text)).toEqual({ scripts: { "S.ts": { n: 7 } } });
+        expect(JSON.parse(files.get("settings.json")!.text)).toEqual({ scripts: { "s/index.ts": { n: 7 } } });
 
         // external edit: the whole file applies to storage
-        const hand = JSON.stringify({ logLevel: "warn", scripts: { "S.ts": { n: 9 } } }, null, 2) + "\n";
+        const hand = JSON.stringify({ logLevel: "warn", scripts: { "s/index.ts": { n: 9 } } }, null, 2) + "\n";
         files.set("settings.json", { text: hand, t: clock++ });
         await sleep(1500);
         expect((await ss.getParamValues(id)).n).toBe(9);
@@ -82,7 +66,7 @@ describe("settings.json folder sync", () => {
         // popup-side change updates the JSON cleanly
         await ss.setParamValue(id, "n", 5);
         await sleep(800);
-        expect(JSON.parse(files.get("settings.json")!.text)).toEqual({ logLevel: "warn", scripts: { "S.ts": { n: 5 } } });
+        expect(JSON.parse(files.get("settings.json")!.text)).toEqual({ logLevel: "warn", scripts: { "s/index.ts": { n: 5 } } });
 
         // malformed JSON → error logged, neither storage nor the broken disk file overwritten
         files.set("settings.json", { text: "{ broken\n", t: clock++ });
@@ -96,11 +80,12 @@ describe("settings.json folder sync", () => {
         const sync = await import("../src/background/folderSync");
         const ss = await import("../src/background/engine/scriptStore");
         const { applySettingsText } = await import("../src/background/settingsFile");
+        await seedBundle("s");
         const id = ss.newId();
-        await ss.saveScript({ id, name: "S", code: `import { tweak } from "tangitweak"; tweak.params({ n: { type: "number", default: 1 } });` });
+        await ss.saveScript({ id, name: "s/index", code: `import { tweak } from "tangitweak"; tweak.params({ n: { type: "number", default: 1 } });` });
         await sync.startFromStoredHandle();
         await sleep(600);
-        const edited = JSON.stringify({ logLevel: "error", scripts: { "S.ts": { n: 3 } } }, null, 2) + "\n";
+        const edited = JSON.stringify({ logLevel: "error", scripts: { "s/index.ts": { n: 3 } } }, null, 2) + "\n";
         expect((await applySettingsText(edited)).error).toBeUndefined();
         await sync.exportSettingsFrom();
         expect(files.get("settings.json")!.text).toBe(edited);
@@ -114,10 +99,11 @@ describe("settings.json folder sync", () => {
     it("omits removed tweak.params keys from settings.json while keeping schema updated", async () => {
         const sync = await import("../src/background/folderSync");
         const ss = await import("../src/background/engine/scriptStore");
+        await seedBundle("s");
         const id = ss.newId();
         await ss.saveScript({
             id,
-            name: "S",
+            name: "s/index",
             code: `import { tweak } from "tangitweak"; tweak.params({ n: { type: "number", default: 1 } });`,
         });
         await sync.startFromStoredHandle();
@@ -126,16 +112,16 @@ describe("settings.json folder sync", () => {
 
         await ss.setParamValue(id, "n", 7);
         await sleep(800);
-        expect(JSON.parse(files.get("settings.json")!.text)).toEqual({ scripts: { "S.ts": { n: 7 } } });
+        expect(JSON.parse(files.get("settings.json")!.text)).toEqual({ scripts: { "s/index.ts": { n: 7 } } });
 
         await ss.saveScript({
             id,
-            name: "S",
+            name: "s/index",
             code: `import { tweak } from "tangitweak"; tweak.params({ extra: { type: "string", default: "x", description: "Extra knob" } });`,
         });
         await sleep(800);
         expect(files.get("settings.json")!.text).toBe("{}\n");
-        expect(JSON.parse(files.get("settings.schema.json")!.text).properties.scripts.properties["S.ts"].properties.extra).toMatchObject({ type: "string", default: "x" });
+        expect(JSON.parse(files.get("settings.schema.json")!.text).properties.scripts.properties["s/index.ts"].properties.extra).toMatchObject({ type: "string", default: "x" });
         expect((await ss.getParamValues(id)).n).toBe(7);
         await sync.stop();
     }, 15000);

@@ -14,7 +14,7 @@
  * onPage code and back go through shared/rpc.ts, and the frame reports
  * its visible areas so the bridge lets clicks through everywhere else.
  */
-import { compileScript, type ResApiOverrides } from "../shared/compile";
+import { compileScript, runInTweak, type ResApiOverrides } from "../shared/compile";
 import { messagePortEndpoint, type Endpoint, type OverlayInit } from "../shared/wire";
 import { ReplicaHub } from "../shared/storeReplica";
 import { tabScopeOfPage } from "../shared/storeOps";
@@ -192,6 +192,7 @@ export async function startOverlay(ep: Endpoint, init: OverlayInit, env: Overlay
         const requireFrom = makeLibRequire(
             next.libs,
             (lib, require, moduleObj) => {
+                if (runInTweak(lib.src!, lib.name, require, moduleObj, common.logSink)) return;
                 const libId = lib.id ?? s;
                 const c = compileScript(lib.src!, {
                     ...common,

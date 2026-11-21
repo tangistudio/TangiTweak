@@ -16,7 +16,8 @@ import { storeRun, tweakHost, tweakStores, type NamedStores, type StoreRun, type
 import { inertRemote, NO_SITE_STORE, REMOTE_FROM_BACKGROUND, SITE_NO_HANDLES, SITE_NO_STORES, unusableStore } from "./remote";
 import { scriptEnv } from "./scriptEnv";
 import { dataFileValue, importLine, importPath, importResolver, isDataSpec } from "./scriptImports";
-import { isUrlSpec, makePackageLoader, PackageImportError, type PackageModules } from "./packageImports";
+import { builtinMessage, finalUrl, isNodeBuiltin, isUrlSpec, makePackageLoader, PackageImportError, type PackageModules } from "./packageImports";
+import { bareImport, bundleOf, dataReader, type Bundle } from "./tweakBundle";
 import { builtinModule } from "./builtins";
 import { builtinSpec } from "./builtinSpecs";
 import { proxy } from "valtio/vanilla";
@@ -197,7 +198,7 @@ export function compileScript(code: string, overrides?: ResApiOverrides): Compil
             : (spec: string) => {
                   throw new Error(`cannot import "${spec}" here — imports resolve in the background/hook contexts`);
               };
-        withCollector(store, { name: overrides?.name ?? "", remote: overrides?.remote, run: shim.run }, () => fn(shim.host, makeForwardingConsole(overrides?.logSink), requireShim, moduleObj, moduleObj.exports));
+        withCollector(store, { name: overrides?.name ?? "", remote: overrides?.remote, run: shim.run, host: shim.host }, () => fn(shim.host, makeForwardingConsole(overrides?.logSink), requireShim, moduleObj, moduleObj.exports));
         meta.routes = routesOf(store);
         finishMeta(meta);
         return { meta, handlers: store, error: null, code, paramDefs: owner.defs, exports: moduleObj.exports };
@@ -210,6 +211,19 @@ export function compileScript(code: string, overrides?: ResApiOverrides): Compil
         const error = at ? `SyntaxError: ${String(syntax.message).replace(/\s*\(\d+:\d+\)$/, "")} (line ${at})` : e && e.stack ? e.stack : String(e);
         return { meta, handlers: emptyHandlers(), error, code, paramDefs: owner.defs };
     }
+}
+
+/**
+ * Run a tweak's module (a file its entry imports) with the `tweak` of the
+ * tweak whose top level is running, so what it registers, its params and
+ * its stores are that tweak's; false when no top level is running.
+ */
+export function runInTweak(code: string, name: string, require: (spec: string) => any, moduleObj: { exports: any }, logSink?: ResApiOverrides["logSink"]): boolean {
+    const top = collectors[collectors.length - 1];
+    const host = top && collectorOf.get(top)?.host;
+    if (!host) return false;
+    scriptFunction(runnableOf(code).js, name)(host, makeForwardingConsole(logSink), require, moduleObj, moduleObj.exports);
+    return true;
 }
 
 const stubs = new WeakSet<object>();
@@ -259,6 +273,11 @@ export function withData(stored: DataFileSource[], extra: DataFileSource[] | und
  * line (`(line N)`, rewritten at each level as it propagates).
  */
 class DataFileImportError extends Error {
+    fatalImport = true;
+}
+
+/** an import that leaves the importer's bundle: never stubbed */
+class BundleImportError extends Error {
     fatalImport = true;
 }
 
@@ -374,8 +393,19 @@ export function makeModuleResolver(
     overridesFor: (s: { id: string; name: string; code: string }) => ResApiOverrides,
     opts?: { stubUnresolved?: boolean; dataFiles?: DataFileSource[]; packages?: PackageModules }
 ): { resolve: (spec: string) => any; resolveFrom: (importer: string) => (spec: string) => any; deps: Set<string> } {
-    const cache = new Map<string, any>();
-    const compiling = new Set<string>();
+    // a bundle's modules run once per entry run, with the entry's `tweak`: their
+    // registrations, params and stores are the entry's (so a module cached
+    // for another run would miss them); outside a run (a late import), once
+    const shared = { cache: new Map<string, any>(), compiling: new Set<string>() };
+    const perRun = new WeakMap<ScriptHandlers, typeof shared>();
+    const runOf = (): { modules: typeof shared; host?: TweakHost } => {
+        const top = collectors[collectors.length - 1];
+        const host = top && collectorOf.get(top)?.host;
+        if (!host) return { modules: shared };
+        let m = perRun.get(top);
+        if (!m) perRun.set(top, (m = { cache: new Map(), compiling: new Set() }));
+        return { modules: m, host };
+    };
     const deps = new Set<string>();
     // what each library imports, transitively: a second importer of a cached
     // library gets its deps too (callers clear `deps` between scripts)
@@ -386,6 +416,12 @@ export function makeModuleResolver(
         for (const f of loading) f.add(d);
     };
     const dataFiles = opts?.dataFiles || [];
+    const read = dataReader(dataFiles);
+    const bundles = new Map<string, Bundle | undefined>();
+    const bundleFor = (name: string) => {
+        if (!bundles.has(name)) bundles.set(name, bundleOf(name, read));
+        return bundles.get(name);
+    };
     const lookup = importResolver(
         scripts.map((s) => s.name),
         dataFiles.map((d) => d.path)
@@ -426,6 +462,14 @@ export function makeModuleResolver(
             addDep(spec);
             return loadPackage(spec);
         }
+        const bare = bareImport(importer, spec, read);
+        if (bare) {
+            addDep(bare.pkgPath);
+            if ("error" in bare) throw new PackageImportError(bare.error);
+            addDep(bare.url);
+            if (!finalUrl(opts?.packages, bare.url) && !opts?.packages?.failed?.[bare.url]) throw new PackageImportError(`cannot import "${spec}": not downloaded yet — save the tweak to download it`);
+            return loadPackage(bare.url);
+        }
         const found = lookup(importer, spec);
         if (!found) {
             if (isDataSpec(spec)) {
@@ -433,13 +477,22 @@ export function makeModuleResolver(
                 throw new DataFileImportError(`cannot import "${spec}": ${path ? `no data file "${path}"` : "the path goes above the root folder"}`);
             }
             if (opts?.stubUnresolved) return makeStubModule();
+            const home = bundleFor(importer);
+            if (home && !/^[./]/.test(spec))
+                throw new Error(isNodeBuiltin(spec) ? builtinMessage(spec) : `cannot import "${spec}": add it to the "dependencies" in ${home.pkgPath}`);
             throw new Error(`unknown module "${spec}" — no script named "${spec.replace(/^\.\//, "").replace(/\.(ts|js)$/, "")}"`);
         }
+        const home = bundleFor(importer);
+        const target = found.kind === "data" ? found.path : found.name;
+        if (home && !target.toLowerCase().startsWith(home.root.toLowerCase()))
+            throw new BundleImportError(`cannot import "${spec}": "${target}" is outside the tweak's folder${home.root ? ` (${home.root})` : ""} — a tweak imports its own files, built-ins and its package.json dependencies`);
         if (found.kind === "data") {
             addDep(found.path);
             return parseDataFile(spec, dataFiles.find((d) => d.path === found.path)!);
         }
         const key = found.name;
+        const { modules, host } = runOf();
+        const { cache, compiling } = modules;
         if (cache.has(key)) {
             addDep(key);
             for (const d of libDeps.get(key) ?? []) addDep(d);
@@ -461,16 +514,19 @@ export function makeModuleResolver(
         // calls register into the importer's collector
         loading.push(own);
         try {
-            const shim = makeShim(createOwner(libOverrides.paramValues), libOverrides, lib.name);
-            withCollector(createCollector(), { name: lib.name, remote: libOverrides.remote, run: shim.run }, () =>
-                scriptFunction(js, lib.name)(
-                    shim.host,
-                    makeForwardingConsole(libOverrides.logSink),
-                    resolveFrom(lib.name),
-                    moduleObj,
-                    moduleObj.exports
-                )
-            );
+            if (host) scriptFunction(js, lib.name)(host, makeForwardingConsole(libOverrides.logSink), resolveFrom(lib.name), moduleObj, moduleObj.exports);
+            else {
+                const shim = makeShim(createOwner(libOverrides.paramValues), libOverrides, lib.name);
+                withCollector(createCollector(), { name: lib.name, remote: libOverrides.remote, run: shim.run }, () =>
+                    scriptFunction(js, lib.name)(
+                        shim.host,
+                        makeForwardingConsole(libOverrides.logSink),
+                        resolveFrom(lib.name),
+                        moduleObj,
+                        moduleObj.exports
+                    )
+                );
+            }
         } catch (e) {
             loading.splice(loading.indexOf(own), 1);
             compiling.delete(key);
@@ -585,7 +641,7 @@ function makeForwardingConsole(sink?: ResApiOverrides["logSink"]): Console {
  */
 const collectors: ScriptHandlers[] = [];
 /** a collector's script: its name, its handles (`remote`), its stores, and its handler and store names (one numbering per script run) */
-type CollectorOwner = { name: string; remote?: ResApiOverrides["remote"]; run: StoreRun };
+type CollectorOwner = { name: string; remote?: ResApiOverrides["remote"]; run: StoreRun; host?: TweakHost };
 const collectorOf = new WeakMap<ScriptHandlers, CollectorOwner & { keyOf: ReturnType<typeof placeKeyer> }>();
 
 function withCollector<T>(c: ScriptHandlers, owner: CollectorOwner, run: () => T): T {
@@ -753,7 +809,7 @@ function makeShim(owner: ReturnType<typeof createOwner>, overrides: ResApiOverri
         const top = collectors[collectors.length - 1];
         return top && collectorOf.get(top);
     };
-    const register = (kind: RouteKind, api?: PlaceApi) => (route: unknown, fn: unknown) => {
+    const register = (kind: RouteKind, api?: PlaceApi, file?: string) => (route: unknown, fn: unknown) => {
         const name = api || kind;
         const top = collectors[collectors.length - 1];
         const c = top && collectorOf.get(top);
@@ -785,18 +841,19 @@ function makeShim(owner: ReturnType<typeof createOwner>, overrides: ResApiOverri
                 r.n = k.n;
             } else if (api !== "onOverlay" && k.n !== r.index) r.n = k.n;
         }
+        if (lib === undefined && file !== undefined && file !== module) r.file = file;
         list.push({ fn: fn as HandlerFn, route: r });
         return remote(r);
     };
     const run = storeRun(makeStores(overrides));
     const host = tweakHost((file) => ({
-        onRequest: register("onRequest"),
-        onResponseHeaders: register("onResponseHeaders"),
-        replaceResponse: register("replaceResponse"),
-        onResponseBody: register("onResponseBody"),
-        onSite: register(placeKind("onSite"), "onSite"),
-        onPage: register(placeKind("onPage"), "onPage"),
-        onOverlay: register(placeKind("onOverlay"), "onOverlay"),
+        onRequest: register("onRequest", undefined, file),
+        onResponseHeaders: register("onResponseHeaders", undefined, file),
+        replaceResponse: register("replaceResponse", undefined, file),
+        onResponseBody: register("onResponseBody", undefined, file),
+        onSite: register(placeKind("onSite"), "onSite", file),
+        onPage: register(placeKind("onPage"), "onPage", file),
+        onOverlay: register(placeKind("onOverlay"), "onOverlay", file),
         params: (defs: ParamTree) => {
             const r = owner.declare(defs, "tweak.params");
             if (isStub(r)) return r;
@@ -967,9 +1024,12 @@ export function siteProblems(code: string, routes: RouteMeta[]): string[] {
     if (!uses.length) return net;
     const names = (n: string[]) => n.map((x) => `\`${x}\``).join(", ");
     const out: string[] = [...net];
+    // the code's own calls, in order (a module's, run with its tweak, are numbered with them)
+    let nth = 0;
     for (const r of routes) {
-        if (r.kind !== "onDocument" || placeOf(r) !== "onSite" || r.lib !== undefined) continue;
-        const u = uses.find((u) => u.nth === (r.n ?? r.index));
+        if (r.kind !== "onDocument" || placeOf(r) !== "onSite" || r.lib !== undefined || r.file !== undefined) continue;
+        const i = nth++;
+        const u = uses.find((u) => u.nth === i);
         if (!u) continue;
         const at = `${routeLabel(r)}: `;
         const stores = [...u.pageStore, ...(u.tabStore ?? []), ...u.globalStore];

@@ -1,4 +1,4 @@
-/* the install flow (install/InstallPage): install.html's page, and the Editor's Install Script dialog */
+/* the install flow (install/InstallPage): install.html's page, and the Editor's Install Tweak dialog */
 body.install-body {
     margin: 0;
     background: var(--bg);

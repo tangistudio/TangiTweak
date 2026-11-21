@@ -11,7 +11,7 @@ export const STORES_ID = "__stores__";
 export const isVirtualRootId = (id: string | null | undefined): boolean => id === SETTINGS_ID || id === STORES_ID;
 
 export type ExplorerScript = Script & Partial<ScriptHealthInput> & { routeWarnings?: string[] };
-export type NewKind = "script" | "data" | "folder";
+export type NewKind = "script" | "data" | "folder" | "tweak";
 export type MenuItem = { label: string; key?: string; run: () => void } | null;
 
 /** the inline name input: renaming a row, or naming a new item in `folder` */
@@ -202,7 +202,7 @@ export function startRename(id: string, refocusList = false): void {
 }
 
 /**
- * New Script / New JSON File / New Folder: an inline name input in `folder`
+ * New Tweak / New Module / New JSON File / New Folder: an inline name input in `folder`
  * (default: the focused folder, or the focused file's folder), as in VS Code.
  */
 export function startCreate(kind: NewKind, folder = targetFolder(treeRow(cursorId()))): void {

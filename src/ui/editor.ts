@@ -9,10 +9,9 @@ import { API_TYPINGS_URI } from "./apiLinks";
 import { NavHistory } from "./navHistory";
 import type { SampleScript } from "./samples";
 import { badPackageImports, folderOf, imageDataUrlToBytes, isImageDataPath, isMarkdownPath, isSvgPath, missingImports } from "../shared/scriptImports";
-import { makeFolderPackagePlan, makePackagePlan } from "../shared/makePackage";
+import { newTweakFiles } from "../shared/newTweak";
 import { highestVersion, isManifestPath, MANIFEST_FILE, minTangiTweakProblem, parseManifest } from "../shared/packageMetadata";
-import { manifestScriptCompletions, manifestScriptProblems } from "./manifestAssist";
-import { entryStem } from "../shared/packageModel";
+import { bundleOf, dataReader, entryName } from "../shared/tweakBundle";
 import { localPackage } from "../shared/localPackage";
 import { writeZip } from "../shared/zip";
 import { buildExportZip, emptyFolders, EXPORT_ZIP_NAME, filesGoneFrom, importedSettingsDoc, parseExportedStores, readExportZip, settingsForScripts, STORES_FILE, storesForScripts, type ExportContents } from "../shared/exportZip";
@@ -158,34 +157,6 @@ async function loadStoresModel(force = false): Promise<void> {
     }
 }
 
-function registerManifestAssist(): void {
-    const monaco = (window as any).monaco;
-    // a package's metadata.json: "scripts" completes the .ts/.tsx files in its folder
-    monaco.languages.registerCompletionItemProvider("json", {
-        triggerCharacters: ['"', "/"],
-        provideCompletionItems(model: any, position: any) {
-            const path = decodeURIComponent(model.uri.path).replace(/^\//, "");
-            if (baseName(path) !== MANIFEST_FILE) return { suggestions: [] };
-            const folder = path.slice(0, path.length - MANIFEST_FILE.length).replace(/\/$/, "");
-            const r = manifestScriptCompletions(model.getValue(), model.getOffsetAt(position), folder, scripts.map((s) => scriptFileName(s.meta.name)));
-            if (!r) return { suggestions: [] };
-            const a = model.getPositionAt(r.replaceFrom);
-            const b = model.getPositionAt(r.replaceTo);
-            const range = { startLineNumber: a.lineNumber, startColumn: a.column, endLineNumber: b.lineNumber, endColumn: b.column };
-            return {
-                suggestions: r.paths.map((p, i) => ({
-                    label: p,
-                    kind: monaco.languages.CompletionItemKind.File,
-                    insertText: r.inString ? p : JSON.stringify(p),
-                    filterText: r.inString ? p : JSON.stringify(p),
-                    detail: "script in this package's folder",
-                    sortText: String(i).padStart(4, "0"),
-                    range,
-                })),
-            };
-        },
-    });
-}
 
 async function selectSettings(): Promise<void> {
     // back from the typings: settings.json's unsaved edits are still in its model
@@ -367,6 +338,12 @@ function focusExplorer(): void {
 
 /** why `path` can't be the new path of a `kind` item (other than `selfId`), or "" */
 function itemPathProblem(kind: NewKind, path: string, selfId?: string): string {
+    if (kind === "tweak") {
+        const problem = folderPathProblem(path);
+        if (problem) return problem;
+        if (everyFolder().some((f) => f.toLowerCase() === path.toLowerCase())) return `the folder "${path}" already exists`;
+        return scripts.some((s) => s.meta.name.toLowerCase() === path.toLowerCase()) ? `a script named "${path}" already exists` : "";
+    }
     if (kind === "script") {
         const problem = scriptNameProblem(path);
         if (problem) return problem;
@@ -437,9 +414,9 @@ function download(name: string, data: BlobPart, type: string): void {
 }
 
 /**
- * Explorer → Export Package…: a script (or a bundle's metadata.json, at
- * `start`) and every file it brings, as saved — one file as itself, more as
- * a .zip of a folder named after the package (Install Script… takes either).
+ * Explorer → Export Package…: a tweak (its package.json, at `start`) and
+ * every file it brings, as saved — a .zip of a folder named after it
+ * (Install… takes it).
  */
 async function exportPackage(start: string): Promise<void> {
     const { files } = userFiles();
@@ -450,7 +427,7 @@ async function exportPackage(start: string): Promise<void> {
         return void status(`can't export "${start}": ${e?.message || e}`, "error");
     }
     const paths = Object.keys(pkg.files);
-    const stem = (pkg.manifest ? baseName(folderOf(start)) : entryStem(pkg.entries[0])) || "package";
+    const stem = baseName(folderOf(start)) || "tweak";
     if (paths.length === 1) download(baseName(paths[0]), isImageDataPath(paths[0]) ? (imageDataUrlToBytes(pkg.files[paths[0]]) as BlobPart) : pkg.files[paths[0]], "text/plain");
     else download(`${stem}.zip`, writeZip(Object.fromEntries(paths.map((p) => [`${stem}/${p}`, isImageDataPath(p) ? imageDataUrlToBytes(pkg.files[p]) : pkg.files[p]]))) as BlobPart, "application/zip");
     const warn = [
@@ -461,11 +438,6 @@ async function exportPackage(start: string): Promise<void> {
     status(`exported "${stem}" — ${paths.length === 1 ? baseName(paths[0]) : `${stem}.zip, ${paths.length} files`}${dirtyNote}${warn.length ? ` · ${warn.join(" · ")}` : ""}`, warn.length ? "dirty" : undefined);
 }
 
-const pathList = (paths: string[]): string => paths.map((p) => `  ${p}`).join("\n");
-const bareNote = (bare: { spec: string }[]): string =>
-    bare.length ? `\nImports by bare name resolve from the root of the installer's scripts, not the package: ${[...new Set(bare.map((b) => `"${b.spec}"`))].join(", ")} — use a relative path ("./…") to take the file along.` : "";
-const missingNote = (missing: { from: string; spec: string }[]): string => (missing.length ? `\nImports that point at no file: ${missing.map((m) => `"${m.spec}" in ${m.from}`).join(", ")}` : "");
-
 /** save through the background; false (and a status) when it failed — a compile error still saves */
 async function saveQuietly(msg: Record<string, unknown>, path: string): Promise<boolean> {
     const r = await send(msg);
@@ -474,70 +446,7 @@ async function saveQuietly(msg: Record<string, unknown>, path: string): Promise<
 }
 
 /**
- * Explorer → Make Package… on a script: move it and the files it imports
- * into a folder of their own with a metadata.json (copying those other
- * scripts use too) and rewrite their imports (shared/makePackage).
- */
-async function makePackage(id: string): Promise<void> {
-    const s = scripts.find((x) => x.id === id);
-    if (!s) return;
-    const { files, owner } = userFiles();
-    const plan = makePackagePlan(scriptFileName(s.meta.name), files, everyFolder());
-    const changed = [...plan.files.filter((f) => !f.copy && (f.to !== f.from || f.text !== files[f.from])).map((f) => f.from), ...plan.edits.map((e) => e.path)];
-    const open = changed.map((p) => owner.get(p)?.script?.id ?? owner.get(p)?.data?.id).find((x) => x === selectedId);
-    if (open && dirty) return void status(`save "${treeRow(open)?.path ?? ""}" first — making the package changes it`, "error");
-    const moved = plan.files.filter((f) => !f.copy && f.to !== f.from);
-    const copied = plan.files.filter((f) => f.copy);
-    const lines = [
-        plan.inPlace
-              ? `"${plan.folder}/" holds this script and what it imports: make it a package with a ${MANIFEST_FILE}?`
-              : `Make "${scriptFileName(s.meta.name)}" a package in the folder "${plan.folder}/" (with a ${MANIFEST_FILE})?`,
-        moved.length ? `\nMoves:\n${pathList(moved.map((f) => `${f.from} → ${f.to}`))}` : "",
-        copied.length ? `\nCopies (other scripts use them too):\n${pathList(copied.map((f) => `${f.from} → ${f.to}`))}` : "",
-        plan.edits.length ? `\nUpdates the imports in:\n${pathList(plan.edits.map((e) => e.path))}` : "",
-        bareNote(plan.bare),
-        missingNote(plan.missing),
-    ];
-    if (!confirm(lines.filter(Boolean).join("\n"))) return;
-    let ok = true;
-    // what's imported first, the script last: each compiles against files in their new places
-    for (const f of [...plan.files].reverse()) {
-        const o = owner.get(f.from)!;
-        if (o.data) ok = (f.copy ? await saveQuietly({ type: "saveDataFile", path: f.to, text: f.text }, f.to) : f.to === f.from || (await saveQuietly({ type: "renameDataFile", id: o.data.id, path: f.to }, f.to))) && ok;
-        else if (f.copy) ok = (await saveQuietly({ type: "saveScript", id: uuid(), code: f.text, name: scriptNameFromFile(f.to) }, f.to)) && ok;
-        else if (f.to !== f.from || f.text !== files[f.from]) ok = (await saveQuietly({ type: "saveScript", id: o.script!.id, code: f.text, ...(f.to !== f.from ? { name: scriptNameFromFile(f.to) } : {}) }, f.to)) && ok;
-    }
-    for (const e of plan.edits) ok = (await saveQuietly({ type: "saveScript", id: owner.get(e.path)!.script!.id, code: e.text }, e.path)) && ok;
-    ok = (await saveQuietly({ type: "saveDataFile", path: plan.manifest.path, text: plan.manifest.text }, plan.manifest.path)) && ok;
-    await refresh();
-    revealInExplorer(plan.manifest.path);
-    const m = dataFiles.find((d) => d.path === plan.manifest.path);
-    await select(m?.id ?? id);
-    if (ok) status(`"${plan.folder}/" is a package — fill in its ${MANIFEST_FILE}, then share the folder (or Export Package…)`);
-}
-
-/** Explorer → Make Package… on a folder: a metadata.json listing its scripts (shared/makePackage) */
-async function makeFolderPackage(folder: string): Promise<void> {
-    const { files } = userFiles();
-    const plan = makeFolderPackagePlan(folder, files);
-    if (!plan.scripts.length) return void status(`"${folder}/" holds no script to package`, "error");
-    const lines = [
-        `Make "${folder}/" a package? It gets a ${MANIFEST_FILE} listing its scripts:\n${pathList(plan.scripts)}`,
-        plan.outside.length ? `\nImports of files outside the folder can't come along — move those files in first: ${plan.outside.map((m) => `"${m.spec}" in ${m.from}`).join(", ")}` : "",
-        bareNote(plan.bare),
-        missingNote(plan.missing),
-    ];
-    if (!confirm(lines.filter(Boolean).join("\n"))) return;
-    const ok = await saveQuietly({ type: "saveDataFile", path: plan.manifest.path, text: plan.manifest.text }, plan.manifest.path);
-    await refresh();
-    revealInExplorer(plan.manifest.path);
-    const m = dataFiles.find((d) => d.path === plan.manifest.path);
-    if (m) await select(m.id);
-    if (ok) status(`"${folder}/" is a package — fill in its ${MANIFEST_FILE}, then share the folder (or Export Package…)`);
-}
-
-/**
- * New Script / New JSON File / New Folder: shows the explorer, then an inline
+ * New Tweak / New Module / New JSON File / New Folder: shows the explorer, then an inline
  * name input in `folder` (default: the focused folder, or the focused file's folder).
  */
 function startCreate(kind: NewKind, folder?: string): void {
@@ -554,7 +463,18 @@ async function createItem(kind: NewKind, path: string): Promise<void> {
         return;
     }
     revealInExplorer(path);
-    if (kind === "script") {
+    if (kind === "tweak") {
+        // the data files first: the entry compiles as the tweak its package.json makes it
+        const files = newTweakFiles(path);
+        let ok = true;
+        for (const d of files.data) ok = (await saveQuietly({ type: "saveDataFile", path: d.path, text: d.text }, d.path)) && ok;
+        const id = uuid();
+        ok = (await saveQuietly({ type: "saveScript", id, code: files.entry.code, name: files.entry.name }, files.entry.name)) && ok;
+        await refresh();
+        select(id);
+        editor?.focus();
+        if (ok) status(`"${path}/" is a new tweak — its package.json names it; share the folder (or Export Package…)`);
+    } else if (kind === "script") {
         const id = uuid();
         await send({ type: "saveScript", id, code: STARTER_TEMPLATE, name: path });
         await refresh();
@@ -901,7 +821,7 @@ function disposeStaleDeclModels(changedUris: string[], shown: any): void {
     }
 }
 
-/** a package's metadata.json: an error on each "scripts" entry that names no script */
+/** a tweak's package.json: an error when its entry (`main`, else index.ts) isn't there */
 const MANIFEST_OWNER = "tt-manifest";
 let manifestMarkerTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -910,15 +830,22 @@ function scheduleManifestMarkers(): void {
     manifestMarkerTimer = setTimeout(() => {
         manifestMarkerTimer = null;
         const monaco = (window as any).monaco;
-        const files = scripts.map((s) => scriptFileName(s.meta.name));
+        const names = new Set(scripts.map((s) => s.meta.name.toLowerCase()));
         for (const d of dataFiles) {
             const m = dataModels.get(d.id);
             if (!m || m.isDisposed() || baseName(d.path) !== MANIFEST_FILE) continue;
-            const markers = manifestScriptProblems(m.getValue(), d.path.slice(0, -MANIFEST_FILE.length), files).map((p) => {
-                const a = m.getPositionAt(p.start);
-                const b = m.getPositionAt(p.end);
-                return { severity: monaco.MarkerSeverity.Error, message: p.message, source: MANIFEST_FILE, startLineNumber: a.lineNumber, startColumn: a.column, endLineNumber: b.lineNumber, endColumn: b.column };
-            });
+            const text = m.getValue();
+            const b = bundleOf(d.path, dataReader([{ path: d.path, text }]));
+            const entry = b && b.pkgPath.toLowerCase() === d.path.toLowerCase() ? entryName(b, (n) => names.has(n.toLowerCase())) : undefined;
+            const markers: any[] = [];
+            if (entry && !names.has(entry.toLowerCase())) {
+                const at = /"main"\s*:\s*"[^"]*"/.exec(text);
+                const a = m.getPositionAt(at ? at.index : 0);
+                const z = m.getPositionAt(at ? at.index + at[0].length : 1);
+                const file = entry.slice(b!.root.length);
+                const message = `this tweak's entry "${/\.tsx$/i.test(file) ? file : file + ".ts"}" isn't in its folder — it doesn't run until it is`;
+                markers.push({ severity: monaco.MarkerSeverity.Error, message, source: MANIFEST_FILE, startLineNumber: a.lineNumber, startColumn: a.column, endLineNumber: z.lineNumber, endColumn: z.column });
+            }
             if (markers.length || monaco.editor.getModelMarkers({ resource: m.uri, owner: MANIFEST_OWNER }).length) monaco.editor.setModelMarkers(m, MANIFEST_OWNER, markers);
         }
     }, 250);
@@ -1592,23 +1519,26 @@ function setupSettings(): void {
     });
 }
 
-/** a script name not taken yet: `base`, else `base 2`, `base 3`… */
-function freeScriptName(base: string, ext = ""): string {
-    const taken = new Set(scripts.map((s) => s.meta.name));
-    if (!taken.has(base + ext)) return base + ext;
+/** a folder name not taken yet (by a folder or a script): `base`, else `base 2`, `base 3`… */
+function freeFolderName(base: string): string {
+    const taken = new Set([...everyFolder(), ...scripts.map((s) => s.meta.name)].map((n) => n.toLowerCase()));
+    if (!taken.has(base.toLowerCase())) return base;
     let n = 2;
-    while (taken.has(`${base} ${n}${ext}`)) n++;
-    return `${base} ${n}${ext}`;
+    while (taken.has(`${base} ${n}`.toLowerCase())) n++;
+    return `${base} ${n}`;
 }
 
-/** add a sample as a new (enabled) script and open it; returns its id */
+/** add a sample as a new (enabled) tweak — its folder, package.json and index.ts — and open it; returns its entry's id */
 async function addSample(sample: SampleScript): Promise<string> {
+    const folder = freeFolderName(sample.name);
+    const files = newTweakFiles(folder);
+    for (const d of files.data) await send({ type: "saveDataFile", path: d.path, text: d.text });
     const id = newId();
-    const name = freeScriptName(sample.name, jsxElementAt(sample.code) >= 0 ? ".tsx" : "");
+    const name = files.entry.name + (jsxElementAt(sample.code) >= 0 ? ".tsx" : "");
     await send({ type: "saveScript", id, code: sample.code, name, enabled: true });
     await refresh();
     selectReal(id);
-    status(`sample "${name}" added ✓`);
+    status(`sample "${folder}" added ✓`);
     return id;
 }
 
@@ -2088,8 +2018,6 @@ async function main(): Promise<void> {
         select: (id: string) => void select(id),
         deleteRows: (rows: TreeRow[]) => void deleteRows(rows),
         moveRows,
-        makePackage: (id: string) => void makePackage(id),
-        makeFolderPackage: (folder: string) => void makeFolderPackage(folder),
         exportPackage: (start: string) => void exportPackage(start),
         itemPathProblem,
         createItem: (kind: NewKind, path: string) => void createItem(kind, path),
@@ -2179,7 +2107,6 @@ async function main(): Promise<void> {
         if ((problemMarkerKeys.get(m) ?? "[]") !== "[]") setProblemMarkers(m, []);
         scheduleProblems();
     });
-    registerManifestAssist();
     registerPinImportFix();
     registerPlaceFixes();
     registerTsxFix();

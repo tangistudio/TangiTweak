@@ -14,7 +14,7 @@ import { scriptFunction, withTweak, type RawScriptFn, type ScriptFn } from "../s
 import { siteUnits, type PackageFn } from "../shared/siteCode";
 import { makeLibRequire, type ShippedLib } from "../shared/scriptImports";
 import { routeMatches, takesBinary, type DocumentWhen, type RouteMeta } from "../shared/route";
-import { makePageShim, domHandlersFor, scheduleDocument, fireRun, type PageDocumentHandler } from "../shared/pageShim";
+import { makePageShim, domHandlersFor, scheduleDocument, fireRun, type PageDocumentHandler, type PageShim } from "../shared/pageShim";
 import { ScriptLife, type Generation } from "../shared/runLifecycle";
 import { CANCEL_FN, Exposer, isRpcCall, NOT_RUNNING, type RpcCall, type RpcResult } from "../shared/rpc";
 import { bodyKind, setTextTypes } from "../shared/bodyKind";
@@ -333,9 +333,12 @@ import { watchCall, type CallWatch } from "../shared/callWatch";
         // module registry over the shipped library sources and data files:
         // the page-side `require` backing ES imports ("./utils" → the script
         // named utils, "./a.json" → the data file)
+        // the tweak whose top level runs: its modules run with its `tweak` (their handlers, params and stores are its own)
+        let entry: { id: string; host: PageShim["host"] } | undefined;
         const requireFrom = makeLibRequire(
             libSources,
-            (lib, require, moduleObj) => scriptFn(lib.name, lib.src!, lib.fk)(makeDocumentShim(null, lib.name, lib.params || {}).host, scriptConsole(null, lib.name), require, moduleObj, moduleObj.exports),
+            (lib, require, moduleObj) =>
+                scriptFn(lib.name, lib.src!, lib.fk)(entry?.host ?? makeDocumentShim(null, lib.name, lib.params || {}).host, scriptConsole(entry?.id ?? null, lib.name), require, moduleObj, moduleObj.exports),
             { builtin: siteBuiltin, onSite: true, ...(__NO_EVAL__ ? { packageFn } : {}) }
         );
         const compiledDocument: { scriptId: string; name: string; when: DocumentWhen; d: PageDocumentHandler; exposer: Exposer; life: ScriptLife; gen: Generation }[] = [];
@@ -372,7 +375,12 @@ import { watchCall, type CallWatch } from "../shared/callWatch";
                 const fn = scriptFn(d.name, d.src, d.fk);
                 const moduleObj = { exports: {} as any };
                 const shim = makeDocumentShim(d.scriptId, d.name, d.params || {}, ex);
-                shim.top(() => fn(shim.host, scriptConsole(d.scriptId, d.name), requireFrom(d.name), moduleObj, moduleObj.exports));
+                entry = { id: d.scriptId, host: shim.host };
+                try {
+                    shim.top(() => fn(shim.host, scriptConsole(d.scriptId, d.name), requireFrom(d.name), moduleObj, moduleObj.exports));
+                } finally {
+                    entry = undefined;
+                }
                 if (gen) for (const h of domHandlersFor(shim.dom, location.href, ex)) compiledDocument.push({ scriptId: d.scriptId, name: d.name, when: h.when, d: h, exposer, life, gen });
             } catch (e: any) {
                 // the previous code keeps running (none: calls get `not running`)

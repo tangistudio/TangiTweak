@@ -58,8 +58,8 @@ describe("tweak.globalStore / tweak.fetch in the background shim", () => {
         expect(compileScript(`import { tweak } from "tangitweak"; tweak.globalStore("a", [1]);`).error).toMatch(/initial must be an object/);
     });
 
-    it("a name may be used once per script", () => {
-        expect(compileScript(`import { tweak } from "tangitweak"; tweak.globalStore("a", {}); tweak.globalStore("a", {});`).error).toMatch(/already has a store named "a"/);
+    it("a name may be used once per tweak", () => {
+        expect(compileScript(`import { tweak } from "tangitweak"; tweak.globalStore("a", {}); tweak.globalStore("a", {});`).error).toMatch(/a store ID is used once per tweak/);
         expect(compileScript(`import { tweak } from "tangitweak"; tweak.globalStore("a", {}); tweak.globalStore("b", {});`).error).toBeNull();
     });
 

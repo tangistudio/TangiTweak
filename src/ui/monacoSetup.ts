@@ -48,7 +48,7 @@ export function updateJsonSchemas(scripts: ScriptSettingsState[] = []): void {
     monacoApi?.languages.json?.jsonDefaults?.setDiagnosticsOptions({
         validate: true,
         schemas: [
-            { uri: "tangitweak://schema/metadata.json", fileMatch: ["**/" + MANIFEST_FILE], schema: MANIFEST_SCHEMA },
+            { uri: "tangitweak://schema/package.json", fileMatch: ["**/" + MANIFEST_FILE], schema: MANIFEST_SCHEMA },
             { uri: "tangitweak://schema/stores.json", fileMatch: ["stores.json", "**/stores.json"], schema: STORES_SCHEMA },
             { uri: "tangitweak://schema/settings.json", fileMatch: [SETTINGS_FILE, "**/" + SETTINGS_FILE], schema: buildSettingsSchema(scripts) },
         ],

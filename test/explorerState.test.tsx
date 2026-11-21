@@ -177,12 +177,12 @@ describe("explorer tree", () => {
         const enable = vi.spyOn(actions, "setScriptEnabled");
         act(() => void fireEvent.contextMenu(row("s_b"), { clientX: 10, clientY: 10 }));
         const items = () => [...document.querySelectorAll(".ctx-menu li")].map((l) => (l.classList.contains("sep") ? "-" : l.textContent));
-        expect(items()).toEqual(["OpenEnter", "-", "Disable", "-", "Make Package…", "Export Package…", "-", "New Script…", "New JSON File…", "New Folder…", "-", "Copy Path", "-", "Rename…F2", "DeleteDelete"]);
+        expect(items()).toEqual(["OpenEnter", "-", "Disable", "-", "New Tweak…", "New JSON File…", "New Folder…", "-", "Copy Path", "-", "Rename…F2", "DeleteDelete"]);
         act(() => void fireEvent.click([...document.querySelectorAll(".ctx-menu li")].find((l) => l.textContent === "Disable")!));
         expect(enable).toHaveBeenCalledWith("s_b", false);
         expect(document.querySelector(".ctx-menu")).toBeNull();
         act(() => void fireEvent.contextMenu(row("dir:mock")));
-        expect(items().slice(0, 6)).toEqual(["Expand AllCtrl+→", "Fold AllCtrl+←", "-", "Make Package…", "-", "New Script…"]);
+        expect(items().slice(0, 4)).toEqual(["Expand AllCtrl+→", "Fold AllCtrl+←", "-", "New Tweak…"]);
         act(() => void fireEvent.click([...document.querySelectorAll(".ctx-menu li")].find((l) => l.textContent?.startsWith("Fold All"))!));
         expect([...s.explorer.collapsed].sort()).toEqual(["mock", "mock/deep"]);
         expect(row("dir:empty").getAttribute("aria-expanded")).toBe("true");
@@ -258,10 +258,10 @@ describe("explorer tree", () => {
                 ...fixture,
                 scripts: [
                     script("s_a", "alpha", { meta: { name: "alpha", match: ["*://example.com/*"], active: true } }),
-                    script("s_b", "mock/beta"),
+                    script("s_b", "mock/index"),
                 ],
                 dataFiles: [
-                    { id: "d_m", path: "mock/metadata.json", text: JSON.stringify({ name: "Mock Kit", icon: "icon.svg", scripts: ["beta.ts"] }), savedAt: 1 },
+                    { id: "d_m", path: "mock/package.json", text: JSON.stringify({ name: "mock", tangitweak: { displayName: "Mock Kit", icon: "icon.svg" } }), savedAt: 1 },
                     { id: "d_i", path: "mock/icon.svg", text: '<svg viewBox="0 0 8 8"><rect width="8" height="8"/></svg>', savedAt: 1 },
                     { id: "d_readme", path: "README.md", text: "# Hello", savedAt: 1 },
                 ],

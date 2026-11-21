@@ -87,6 +87,8 @@ export interface RouteMeta {
     n?: number;
     /** a call in this library's code (a function it exports, called by the script): `n` counts that library's calls */
     lib?: string;
+    /** a call in one of the tweak's modules (its script name), run with the entry's `tweak` */
+    file?: string;
     /**
      * onSite / onPage / onOverlay: the handler's stable name, `"onPage:2"`
      * (its API and which of the source's calls to it it is): its handle's

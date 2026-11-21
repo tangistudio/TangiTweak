@@ -24,11 +24,11 @@ import { isInFolder } from "./folders";
 export const EXPORT_ZIP_NAME = "tangitweak-export.zip";
 export const STORES_FILE = "stores.json";
 
-const MANIFEST = "metadata.json";
+const MANIFEST = "package.json";
 
 /**
  * The package folders an Import… zip brings a version of: each folder with
- * a metadata.json, and the zip's one folder when everything is in it (what
+ * a package.json, and the zip's one folder when everything is in it (what
  * Export Package… makes).
  */
 export function packageRoots(zip: Pick<ExportContents, "settings" | "scripts" | "dataFiles" | "folders">): string[] {
@@ -124,7 +124,7 @@ export function parseExportedStores(text: string): Record<string, Record<string,
 
 /** what an export zip (or a zipped scripts folder) holds */
 export async function readExportZip(buf: ArrayBuffer): Promise<ExportContents> {
-    const skip = (p: string) => p.split("/").some((s) => s.startsWith(".") || s === "__MACOSX" || s === "node_modules" || s === "__tests__");
+    const skip = (p: string) => p.split("/").some((s, i, all) => (s.startsWith(".") && !(i === all.length - 1 && s === ".gitignore")) || s === "__MACOSX" || s === "node_modules" || s === "__tests__");
     const raw = await readZipEntries(buf, (p) => !skip(p));
     let files = raw.files;
     let dirs = raw.folders;

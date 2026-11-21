@@ -72,7 +72,7 @@ export interface Analysis {
     metadata: PackageMetadata;
     /** resolved `<img src>` URL when the script or bundle declares an icon */
     iconUrl?: string;
-    /** a bundle (a metadata.json lists its scripts) */
+    /** a bundle (a package.json with a "tangitweak" block): always, now */
     bundle: boolean;
     caps: Capabilities;
     /** an entry's compile error */
@@ -156,10 +156,11 @@ async function analyze(version: Pick<FetchedPackage, "entries" | "files">, pkg?:
         if (files[e] === undefined) throw new Error(`the package has no ${e}`);
         if (!SCRIPT_FILE_RE.test(e)) throw new Error(`${e}: a package's scripts are .ts or .tsx files`);
     }
-    const manifest = files[MANIFEST_FILE] !== undefined ? parseManifest(files[MANIFEST_FILE]) : undefined;
+    if (files[MANIFEST_FILE] === undefined) throw new Error(`the package has no ${MANIFEST_FILE} — a tweak is a folder with a package.json that has a "tangitweak" block`);
+    const manifest = parseManifest(files[MANIFEST_FILE]);
     const [scripts, dataFiles, folders] = await Promise.all([listScripts(), listDataFiles(), listFolders()]);
     const taken = [...scripts.map((s) => s.meta.name), ...dataFiles.map((d) => d.path), ...allFolders(folders, [])];
-    const folder = pkg ? pkg.folder : packageFolder({ entries, files, bundleName: manifest?.name }, taken);
+    const folder = pkg ? pkg.folder : packageFolder({ entries, files, bundleName: manifest.packageName ?? manifest.name }, taken);
     const items = layout(version, folder, pkg, scripts.map((s) => s.meta.name));
     const own = new Set(pkg ? Object.values(pkg.files).map((f) => f.id) : []);
     const idOf = (rel: string) => priorOf(pkg, version, rel)?.id ?? `pkg:${rel}`;
@@ -178,13 +179,9 @@ async function analyze(version: Pick<FetchedPackage, "entries" | "files">, pkg?:
     for (const e of entries) {
         const id = idOf(e);
         const libs = pkgScripts.filter((s) => s.rel !== e).map(({ id, name, code }) => ({ id, name, code }));
-        compiled.push({ e, c: await compileForStorage(files[e], items[e].name, values[id], { id, scripts: [...libs, ...others], paramValues: values, data }) });
+        compiled.push({ e, c: await compileForStorage(files[e], items[e].name, values[id], { id, scripts: [...libs, ...others], paramValues: values, data, anyVersion: true }) });
     }
-    let metadata: PackageMetadata = { connect: [] };
-    if (manifest) {
-        const { scripts: _, ...m } = manifest;
-        metadata = m;
-    }
+    const { scripts: _, main: _main, packageName: _name, dependencies: _deps, ...metadata } = manifest;
     const failed = compiled.find(({ c }) => c.error);
     const error = failed ? (entries.length > 1 ? `${failed.e}: ${failed.c.error}` : failed.c.error) : null;
     const versionWarning = minTangiTweakProblem(metadata.minTangiTweakVersion);
@@ -194,7 +191,7 @@ async function analyze(version: Pick<FetchedPackage, "entries" | "files">, pkg?:
         Object.keys(files).filter((rel) => !isDataPath(rel)).map((rel) => files[rel])
     );
     const iconUrl = resolvePackageIcon({ entries, files, metadata }, dataFiles);
-    return { name: packageName({ entries, metadata }), metadata, ...(iconUrl ? { iconUrl } : {}), bundle: !!manifest, caps, error, ...(versionWarning ? { versionWarning } : {}), folder, items };
+    return { name: packageName({ entries, metadata }), metadata, ...(iconUrl ? { iconUrl } : {}), bundle: true, caps, error, ...(versionWarning ? { versionWarning } : {}), folder, items };
 }
 
 const normSource = (u: string): string => stripInstallHash(u).replace(/\/+$/, "");
@@ -232,13 +229,12 @@ async function synthesizeFolderTarget(
     const mf = dirData.find((d) => d.path.slice(dir.length + 1).toLowerCase() === MANIFEST_FILE);
     if (mf) {
         try {
-            const parsed = parseManifest(mf.text);
-            const { scripts: sList, ...rest } = parsed;
+            const { scripts: sList, main: _main, packageName: _name, dependencies: _deps, ...rest } = parseManifest(mf.text);
             entries = sList;
             metadata = rest;
             hasValidManifest = true;
         } catch {
-            // malformed local metadata.json: fall back to discovered entries
+            // not a bundle's package.json: fall back to discovered entries
         }
     }
     if (!entries.length) {
@@ -251,24 +247,19 @@ async function synthesizeFolderTarget(
     const incomingByLower = new Map(Object.keys(incomingFiles).map((r) => [r.toLowerCase(), r]));
     const includedLower = new Set<string>(incomingByLower.keys());
     if (mf) includedLower.add(MANIFEST_FILE);
-    const readLocal = (useManifest: boolean) => async (p: string) => {
-        if (!useManifest && p.toLowerCase() === MANIFEST_FILE) return entries.length ? JSON.stringify({ scripts: entries }) : null;
+    const readLocal = async (p: string) => {
         const k = byLower.get(p.toLowerCase());
         return k !== undefined ? allTexts[k] : null;
     };
     let crawled = false;
-    for (const useManifest of hasValidManifest ? [true, false] : [false]) {
-        if (!useManifest && !entries.length) break;
+    if (hasValidManifest) {
         try {
-            const c = await crawl(MANIFEST_FILE, readLocal(useManifest));
-            for (const p of Object.keys(c.files)) {
-                if (!useManifest && p.toLowerCase() === MANIFEST_FILE) continue;
-                includedLower.add(p.toLowerCase());
-            }
+            const c = await crawl(MANIFEST_FILE, readLocal);
+            for (const p of Object.keys(c.files)) includedLower.add(p.toLowerCase());
+            entries = c.entries;
             crawled = true;
-            break;
         } catch {
-            // e.g. local manifest lists a missing script; retry from discovered entries
+            // e.g. its entry is missing: every file in the folder
         }
     }
     if (!crawled) for (const k of byLower.keys()) includedLower.add(k);
@@ -339,12 +330,13 @@ async function findExistingTarget(
     const liveIds = new Set([...scripts.map((s) => s.id), ...dataFiles.map((d) => d.id)]);
     const livePkgs = Object.values(allPkgs).filter((p) => Object.values(p.files).some((f) => liveIds.has(f.id)));
     const manifest = fetched.files[MANIFEST_FILE] !== undefined ? parseManifest(fetched.files[MANIFEST_FILE]) : undefined;
-    const wantFolder = naturalPackageFolder({ entries: fetched.entries, files: fetched.files, bundleName: manifest?.name });
+    const bundleName = manifest?.packageName ?? manifest?.name;
+    const wantFolder = naturalPackageFolder({ entries: fetched.entries, files: fetched.files, bundleName });
     const onlyEntry = fetched.entries[0] ?? "";
     const wantEntry = wantFolder ? "" : storeItemOf("", onlyEntry).name;
     const taken = [...scripts.map((s) => s.meta.name), ...dataFiles.map((d) => d.path), ...allFolders(folders, [])];
     const copyName = wantFolder
-        ? packageFolder({ entries: fetched.entries, files: fetched.files, bundleName: manifest?.name }, taken)
+        ? packageFolder({ entries: fetched.entries, files: fetched.files, bundleName }, taken)
         : uniqueEntryName(wantEntry, scripts.map((s) => s.meta.name));
 
     const srcKey = fetched.source ? normSource(fetched.source) : "";
@@ -377,7 +369,8 @@ async function findExistingTarget(
             const mf = dataFiles.find((df) => df.path.toLowerCase() === `${d.toLowerCase()}/${MANIFEST_FILE}`);
             if (!mf) return false;
             try {
-                return parseManifest(mf.text).name?.toLowerCase() === wantedName;
+                const m = parseManifest(mf.text);
+                return m.name?.toLowerCase() === wantedName || m.packageName?.toLowerCase() === wantedName;
             } catch {
                 return false;
             }

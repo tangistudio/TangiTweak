@@ -30,7 +30,7 @@ import type { RuleSpec } from "../shared/dnrRules";
 import { Exposer, isRpcCall, RpcClient } from "../shared/rpc";
 import { contentHash } from "../shared/folderSync";
 import { hotRegistry } from "../shared/hotRefresh";
-import type { Manifest, PackageMetadata } from "../shared/packageMetadata";
+import { parseManifest, type Manifest, type PackageMetadata } from "../shared/packageMetadata";
 import { ensurePackages, packagesSnapshot } from "../background/engine/packageImports";
 import { isUrlSpec, packageClosure, type PackageModules } from "../shared/packageImports";
 import { crawl, isPackageFile, pickStart } from "../shared/packageSource";
@@ -74,11 +74,11 @@ const mockRegistry: Map<string, any> = ((globalThis as any)[MOCK_GLOBAL] ??= new
 let nextMockSeq = 0;
 
 export interface InlineTweakSource {
-    /** Entry script TypeScript / TSX source code (optional when `files["metadata.json"]` is provided). */
+    /** Entry script TypeScript / TSX source code (optional when `files["package.json"]` is provided: its entry runs). */
     code?: string;
     /** Entry script name/path (defaults to `"script"`). */
     name?: string;
-    /** Companion scripts, `metadata.json`, or data files (`path -> content`). */
+    /** Companion scripts, a `package.json`, or data files (`path -> content`). */
     files?: Record<string, string>;
 }
 
@@ -314,8 +314,8 @@ interface RawWorkspace {
 async function loadRawWorkspace(source: TweakSource, opts: LoadTweakOptions): Promise<RawWorkspace> {
     if (typeof source === "object" && !(source instanceof URL)) {
         const files: Record<string, string> = { ...(source.files || {}) };
-        if (files["metadata.json"] && source.code === undefined) {
-            const crawled = await crawl("metadata.json", async (p) => files[p] ?? null);
+        if (files["package.json"] && source.code === undefined) {
+            const crawled = await crawl("package.json", async (p) => files[p] ?? null);
             const unmocked = crawled.missing.filter((m) => !opts.mocks || !(m.spec in opts.mocks));
             if (unmocked.length) throw new Error(`missing import "${unmocked[0].spec}" in ${unmocked[0].from}`);
             return crawledToWorkspace(crawled);
@@ -326,17 +326,11 @@ async function loadRawWorkspace(source: TweakSource, opts: LoadTweakOptions): Pr
         const dataFiles: { path: string; text: string }[] = [];
         let idx = 0;
         for (const [p, text] of Object.entries(files)) {
-            if (p === "metadata.json") continue;
             if (isDataSpec(p)) dataFiles.push({ path: p, text });
             else scripts.push({ id: `s${++idx}`, name: scriptNameOf(p), code: text });
         }
-        let manifest: Manifest | undefined;
-        if (files["metadata.json"]) {
-            const crawled = await crawl("metadata.json", async (p) => files[p] ?? null);
-            manifest = crawled.manifest;
-        }
-        const entryNames = manifest ? manifest.scripts.map(scriptNameOf) : [scriptNameOf(entryFile)];
-        return { manifest, entryNames, scripts, dataFiles };
+        const manifest = files["package.json"] ? parseManifest(files["package.json"]) : undefined;
+        return { manifest, entryNames: [scriptNameOf(entryFile)], scripts, dataFiles };
     }
 
     const abs = resolveTargetPath(source, opts.cwd);
@@ -348,20 +342,12 @@ async function loadRawWorkspace(source: TweakSource, opts: LoadTweakOptions): Pr
             .map((e) => e.name)
             .filter(isPackageFile);
         const candidates = topFiles.length ? topFiles : await listDirFiles(abs);
-        const picked = pickStart(candidates, abs, "pass the entry script path or add a metadata.json");
+        const picked = pickStart(candidates, abs);
         absEntry = nodePath.resolve(abs, ...picked.split("/"));
     }
-    let rootDir: string;
-    let startRel: string;
-    if (nodePath.basename(absEntry).toLowerCase() === "metadata.json") {
-        rootDir = nodePath.dirname(absEntry);
-        startRel = nodePath.basename(absEntry);
-    } else {
-        // Use filesystem root as virtual root for single-script files so `../shared/...` relative imports work cleanly
-        const parsed = nodePath.parse(absEntry);
-        rootDir = parsed.root;
-        startRel = nodePath.relative(parsed.root, absEntry).split(nodePath.sep).join("/");
-    }
+    // the tweak's folder: its package.json (or the one next to the file given)
+    const rootDir = nodePath.dirname(absEntry);
+    const startRel = nodePath.basename(absEntry);
 
     const crawled = await crawl(startRel, (rel) => {
         const target = nodePath.resolve(rootDir, ...rel.split("/"));
@@ -379,7 +365,6 @@ function crawledToWorkspace(crawled: Awaited<ReturnType<typeof crawl>>): RawWork
     const dataFiles: { path: string; text: string }[] = [];
     let idx = 0;
     for (const [p, text] of Object.entries(crawled.files)) {
-        if (p === "metadata.json") continue;
         if (isDataSpec(p)) dataFiles.push({ path: p, text });
         else scripts.push({ id: `s${++idx}`, name: scriptNameOf(p), code: text });
     }
@@ -494,7 +479,7 @@ function buildKeyboardEventInit(combo: string): KeyboardEventInit {
 }
 
 /**
- * Load a single TangiTweak script, a `metadata.json` bundle, or an inline
+ * Load a tweak (its folder or package.json, or a file in it), or an inline
  * `{ code, files }` definition for unit and integration testing.
  */
 export async function loadTweak(source: TweakSource, options: LoadTweakOptions = {}): Promise<LoadedTweak> {
@@ -577,12 +562,12 @@ export async function loadTweak(source: TweakSource, options: LoadTweakOptions =
 
     // Load unmocked https://unpkg.com / esm.sh packages if any script uses them
     const codesForPkgs = ws.scripts.map((s) => {
-        if (!mockObjs.size) return s.code;
+        if (!mockObjs.size) return { name: s.name, code: s.code };
         let filtered = s.code;
         for (const spec of mockObjs.keys()) {
             if (isUrlSpec(spec)) filtered = filtered.split(spec).join("__tt_mocked_pkg__");
         }
-        return filtered;
+        return { name: s.name, code: filtered };
     });
     await ensurePackages(codesForPkgs);
     const basePkgs = packagesSnapshot();
@@ -1222,14 +1207,9 @@ export async function loadTweak(source: TweakSource, options: LoadTweakOptions =
                                 },
                             },
                         });
-                    const requireFrom = makeLibRequire(
-                        libs,
-                        (lib, req, mod) =>
-                            scriptFunction(lib.src!, lib.name)(makeSiteShim(lib.name, lib.params, false).host, consoleSite, wrapReq(req), mod, mod.exports),
-                        { builtin: siteBuiltin, onSite: true }
-                    );
-                    const mod = { exports: {} as any };
                     const shim = makeSiteShim(undefined, undefined, true);
+                    const requireFrom = makeLibRequire(libs, (lib, req, mod) => scriptFunction(lib.src!, lib.name)(shim.host, consoleSite, wrapReq(req), mod, mod.exports), { builtin: siteBuiltin, onSite: true });
+                    const mod = { exports: {} as any };
                     shim.top(() => scriptFunction(src, s.name)(shim.host, consoleSite, wrapReq(requireFrom(s.name)), mod, mod.exports));
                     st.sitePending = domHandlersFor(shim.dom, currentUrl, st.siteExposer);
                     st.siteExposer.done();
@@ -1398,14 +1378,13 @@ export async function loadTweak(source: TweakSource, options: LoadTweakOptions =
                         });
 
                     const codeOf = (importer: string) => (importer === s.name ? src : (libs.find((l) => l.name === importer)?.src ?? ""));
+                    const shim = makeIsoShim(s.id, s.name, resolvedParams, true);
                     const requireFrom = makeLibRequire(
                         libs,
-                        (lib, req, mod) =>
-                            scriptFunction(lib.src!, lib.name)(makeIsoShim(lib.id ?? s.id, lib.name, lib.params || {}, false).host, consoleIso, wrapReq(req), mod, mod.exports),
+                        (lib, req, mod) => scriptFunction(lib.src!, lib.name)(shim.host, consoleIso, wrapReq(req), mod, mod.exports),
                         { builtin: scriptBuiltin(codeOf, hotRegistry(s.name).begin()) }
                     );
                     const mod = { exports: {} as any };
-                    const shim = makeIsoShim(s.id, s.name, resolvedParams, true);
                     shim.top(() => scriptFunction(src, s.name)(shim.host, consoleIso, wrapReq(requireFrom(s.name)), mod, mod.exports));
                     st.setIsoReact(() => {
                         try {

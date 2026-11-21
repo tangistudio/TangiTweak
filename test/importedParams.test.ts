@@ -26,6 +26,7 @@ const store: Record<string, any> = {};
 
 const { saveScript, listScripts, setParamValue } = await import("../src/background/engine/scriptStore");
 const { compileForStorage } = await import("../src/background/compileHost");
+const { seedBundle, bundleData } = await import("./bundleHelper");
 
 const UTILS = `
 export const envParam = { type: "stringList", default: ["dev", "staging"], description: "environments" } as const;
@@ -90,28 +91,29 @@ describe("imported param definitions", () => {
     });
 
     it("compileForStorage (MV2) captures imported defs when given the stored scripts", async () => {
-        const c = await compileForStorage(IMPORTER, "main.tangitweak", undefined, { id: "m", scripts: [{ id: "u", name: "utils", code: UTILS }] });
+        const c = await compileForStorage(IMPORTER, "t/index", undefined, { id: "m", scripts: [{ id: "u", name: "t/utils", code: UTILS }], data: bundleData("t") });
         expect(c.error).toBeNull();
         expect(c.paramDefs.intercept_environments?.type).toBe("stringList");
     });
 });
 
 describe("saveScript with imported params", () => {
-    beforeEach(() => {
+    beforeEach(async () => {
         for (const k of Object.keys(store)) delete store[k];
+        await seedBundle("t");
     });
 
     it("stores paramDefs from the imported def and no compile error", async () => {
-        await saveScript({ id: "u", name: "utils", code: UTILS });
-        const s = await saveScript({ id: "m", name: "main.tangitweak", code: IMPORTER });
+        await saveScript({ id: "u", name: "t/utils", code: UTILS });
+        const s = await saveScript({ id: "m", name: "t/index", code: IMPORTER });
         expect(s.error).toBeNull();
         expect(s.meta.active).toBe(true);
         expect(s.paramDefs?.intercept_environments).toMatchObject({ type: "stringList" });
     });
 
     it("saving the library refreshes the importers' paramDefs", async () => {
-        await saveScript({ id: "u", name: "utils", code: `export const envParam = { type: "boolean", default: true };` });
-        await saveScript({ id: "m", name: "main.tangitweak", code: IMPORTER });
+        await saveScript({ id: "u", name: "t/utils", code: `export const envParam = { type: "boolean", default: true };` });
+        await saveScript({ id: "m", name: "t/index", code: IMPORTER });
         await saveScript({ id: "u", code: UTILS });
         const main = (await listScripts()).find((x) => x.id === "m")!;
         expect(main.paramDefs?.intercept_environments).toMatchObject({ type: "stringList" });
@@ -119,16 +121,16 @@ describe("saveScript with imported params", () => {
     });
 
     it("a script saved before its library exists is fixed once the library is saved", async () => {
-        const first = await saveScript({ id: "m", name: "main.tangitweak", code: IMPORTER });
+        const first = await saveScript({ id: "m", name: "t/index", code: IMPORTER });
         expect(first.error).toBeNull();
-        await saveScript({ id: "u", name: "utils", code: UTILS });
+        await saveScript({ id: "u", name: "t/utils", code: UTILS });
         const main = (await listScripts()).find((x) => x.id === "m")!;
         expect(main.paramDefs?.intercept_environments).toMatchObject({ type: "stringList" });
     });
 
     it("param values of the importer apply to imported defs", async () => {
-        await saveScript({ id: "u", name: "utils", code: UTILS });
-        await saveScript({ id: "m", name: "main.tangitweak", code: `import { tweak } from "tangitweak"; import { envParam } from "./utils";\nconst p = tweak.params({ e: envParam });\nif (p.e.includes("prod")) tweak.onRequest({ url: "*://*/*", strategy: "helper" }, () => {});` });
+        await saveScript({ id: "u", name: "t/utils", code: UTILS });
+        await saveScript({ id: "m", name: "t/index", code: `import { tweak } from "tangitweak"; import { envParam } from "./utils";\nconst p = tweak.params({ e: envParam });\nif (p.e.includes("prod")) tweak.onRequest({ url: "*://*/*", strategy: "helper" }, () => {});` });
         await setParamValue("m", "e", ["prod"]);
         const main = (await listScripts()).find((x) => x.id === "m")!;
         expect(main.meta.active).toBe(true);

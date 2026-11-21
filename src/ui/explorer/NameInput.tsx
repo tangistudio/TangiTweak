@@ -3,9 +3,10 @@ import { cleanScriptName, MAX_PATH } from "../../shared/scriptName";
 import type { NewKind } from "../state/explorer";
 
 const KIND_TITLE: Record<NewKind, string> = {
-    script: 'The name is also the file name: any characters except < > : " \\ | ? * — a / puts the script in a folder (e.g. mock/helpers)',
+    script: 'A module of a tweak; the name is also the file name: any characters except < > : " \\ | ? * — a / puts it in a folder (e.g. lib/helpers)',
     data: "A .json, .md or .svg file — a / puts it in a folder (e.g. README.md or mock/users.json)",
     folder: "A folder — a / makes nested folders (e.g. mock/api)",
+    tweak: "A tweak: a folder with a package.json, tsconfig.json, index.ts and .gitignore — a / puts it in a folder (e.g. work/dark-mode)",
 };
 
 /**

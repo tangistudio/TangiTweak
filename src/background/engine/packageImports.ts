@@ -21,6 +21,7 @@ import {
     PACKAGE_MODULES_KEY,
     PACKAGE_ORIGIN,
     PACKAGE_TYPINGS_KEY,
+    aliasTarget,
     builtinMessage,
     classifyNested,
     declarationCandidates,
@@ -50,6 +51,8 @@ import {
     type PackageUrl,
     type StoredTypings,
 } from "../../shared/packageImports";
+import { bareImportUrls, dataReader, dependenciesOf } from "../../shared/tweakBundle";
+import { dataFilesSnapshot } from "./dataFiles";
 
 const TIMEOUT_MS = 15000;
 const MAX_FILE = 5 * 1024 * 1024;
@@ -139,15 +142,31 @@ export function packagesSig(): string {
     return sig;
 }
 
-/** the package URLs the code imports (valid or not; built-ins aside, plus a Preact file's compat layer for them) */
-export function packageUrlsIn(codes: Iterable<string>): Set<string> {
-    const out = new Set<string>();
-    for (const code of codes) {
+/** a script to scan for imports: its code, or its name and code (a bundle file: its bare imports name its package.json's dependencies) */
+export type ImportingScript = string | { name: string; code: string };
+
+/**
+ * The package URLs the code imports (valid or not; built-ins aside, plus a
+ * Preact file's compat layer for them), each with the dependencies of the
+ * tweak that imports it bare (where a Node.js built-in it needs comes from).
+ */
+function packageTops(items: Iterable<ImportingScript>, extraData?: { path: string; text: string }[]): Map<string, Record<string, string> | undefined> {
+    const out = new Map<string, Record<string, string> | undefined>();
+    const read = dataReader([...(extraData ?? []), ...dataFilesSnapshot()]);
+    for (const item of items) {
+        const code = typeof item === "string" ? item : item.code;
         const specs = importSpecs(code);
-        for (const s of specs) if (isUrlSpec(s) && !builtinSpec(s)) out.add(s);
-        for (const u of builtinDownloads(code, specs)) out.add(u);
+        for (const s of specs) if (isUrlSpec(s) && !builtinSpec(s) && !out.has(s)) out.set(s, undefined);
+        for (const u of builtinDownloads(code, specs)) if (!out.has(u)) out.set(u, undefined);
+        if (typeof item === "string") continue;
+        for (const u of bareImportUrls(item.name, specs, read)) if (!out.get(u)) out.set(u, dependenciesOf(item.name, read));
     }
     return out;
+}
+
+/** the package URLs the code imports (see packageTops) */
+export function packageUrlsIn(items: Iterable<ImportingScript>): Set<string> {
+    return new Set(packageTops(items).keys());
 }
 
 // ---- fetching ----
@@ -273,14 +292,17 @@ function toCommonJs(url: string, text: string): string {
     return transform(meta, { transforms: ["imports"], filePath: url }).code;
 }
 
-/** a nested require that failed and may work on another try (not a Node.js built-in) */
-function retriable(target: string): boolean {
-    return target.startsWith("!") && !target.includes("Node.js built-in");
+/** the tweak dependency a Node.js built-in falls back to (`node:events` → events) */
+const builtinName = (spec: string) => splitBare(spec.replace(/^node:/, "")).name;
+
+/** a nested require that failed and may work on another try (a Node.js built-in: once the tweak depends on it) */
+function retriable(spec: string, target: string, fallback?: Record<string, string>): boolean {
+    return target.startsWith("!") && (!target.includes("Node.js built-in") || fallback?.[builtinName(spec)] !== undefined);
 }
 
 /** does a stored package's module graph have a nested require to retry? */
-function hasRetriable(url: string): boolean {
-    for (const u of packageClosure(state, [url])) if (Object.values(state.modules[u].requires).some(retriable)) return true;
+function hasRetriable(url: string, fallback?: Record<string, string>): boolean {
+    for (const u of packageClosure(state, [url])) if (Object.entries(state.modules[u].requires).some(([s, t]) => retriable(s, t, fallback))) return true;
     return false;
 }
 
@@ -289,7 +311,7 @@ function hasRetriable(url: string): boolean {
  * only), and retry the failed nested requires of the stored modules it
  * loads (copies go into `into`); resolves to its final URL.
  */
-async function downloadGraph(top: string, into: { aliases: Record<string, string>; modules: Record<string, PackageModule> }): Promise<string> {
+async function downloadGraph(top: string, into: { aliases: Record<string, string>; modules: Record<string, PackageModule> }, fallback?: Record<string, string>): Promise<string> {
     let count = 0;
     let bytes = 0;
     let overCap = "";
@@ -326,15 +348,19 @@ async function downloadGraph(top: string, into: { aliases: Record<string, string
         return p;
     };
     const resolveNested = async (spec: string, from: string): Promise<string> => {
-        if (spec.startsWith("node:")) throw new Error(builtinMessage(spec));
-        const c = classifyNested(spec, from);
+        const c = classifyNested(spec.replace(/^node:/, ""), from);
         if ("error" in c) throw new Error(c.error);
         if ("url" in c) return fetchModule(c.url);
         const owner = parsePackageUrl(from);
         const own = typeof owner === "string" ? undefined : owner;
-        const range = own && own.name === c.bare ? own.version : own ? dependencyRange(await packageJson(own.name, own.version), c.bare) : undefined;
-        if (range === undefined && isNodeBuiltin(spec)) throw new Error(builtinMessage(spec));
-        const url = (c.sub && (await viaExports(c.bare, range, c.sub))) || rangeUrl(c.bare, range, c.sub);
+        let range = spec.startsWith("node:") ? undefined : own && own.name === c.bare ? own.version : own ? dependencyRange(await packageJson(own.name, own.version), c.bare) : undefined;
+        // a Node.js built-in the package doesn't depend on: the tweak's own dependency of that name (Browserify's convention)
+        if (range === undefined && isNodeBuiltin(spec)) {
+            range = fallback?.[c.bare];
+            if (range === undefined) throw new Error(builtinMessage(spec));
+        }
+        const dep = aliasTarget(c.bare, range);
+        const url = (c.sub && (await viaExports(dep.name, dep.range, c.sub))) || rangeUrl(dep.name, dep.range, c.sub);
         if (!url) throw new Error(`cannot import "${spec}": unsupported dependency range "${range}"`);
         return fetchModule(url);
     };
@@ -357,10 +383,10 @@ async function downloadGraph(top: string, into: { aliases: Record<string, string
     const final = await fetchModule(start);
     for (const u of packageClosure(state, [final])) {
         const stored = state.modules[u];
-        if (!Object.values(stored.requires).some(retriable)) continue;
+        if (!Object.entries(stored.requires).some(([s, t]) => retriable(s, t, fallback))) continue;
         const mod: PackageModule = { js: stored.js, requires: { ...stored.requires } };
         into.modules[u] = mod;
-        track(resolveRequires(u, mod, (spec) => retriable(mod.requires[spec] ?? "")));
+        track(resolveRequires(u, mod, (spec) => retriable(spec, mod.requires[spec] ?? "", fallback)));
     }
     while (pending.size) await Promise.all([...pending]);
     if (overCap) throw new Error(overCap);
@@ -374,15 +400,22 @@ async function downloadGraph(top: string, into: { aliases: Record<string, string
  * no-op when all are). Failed downloads are retried when `retry` is set
  * (a save) or a minute later. Resolves to whether anything changed.
  */
-export async function ensurePackages(codes: Iterable<string>, opts?: { retry?: boolean }): Promise<boolean> {
+export async function ensurePackages(items: Iterable<ImportingScript>, opts?: { retry?: boolean; data?: { path: string; text: string }[] }): Promise<boolean> {
     await loadPackages();
-    return ensureUrls([...packageUrlsIn(codes)].filter((u) => typeof parsePackageUrl(u) !== "string"), opts);
+    const found = packageTops(items, opts?.data);
+    // a URL import must be pinned; a bare import's dependency range is pinned by its download (the alias it leaves)
+    const tops = [...found].filter(([u, deps]) => typeof parsePackageUrl(u) !== "string" || (deps && u.startsWith(PACKAGE_ORIGIN)));
+    return ensureUrls(
+        tops.map(([u]) => u),
+        opts,
+        new Map(tops.filter(([, deps]) => deps) as [string, Record<string, string>][])
+    );
 }
 
 /** ensurePackages for valid package URLs (after loadPackages); what's due is `downloading` right away */
-async function ensureUrls(tops: string[], opts?: { retry?: boolean }): Promise<boolean> {
+async function ensureUrls(tops: string[], opts?: { retry?: boolean }, fallbacks?: Map<string, Record<string, string>>): Promise<boolean> {
     for (const u of tops) ensuredAt.set(u, Date.now());
-    const due = (u: string) => (!finalUrl(state, u) && (opts?.retry || !failed.has(u) || Date.now() - failed.get(u)!.at > RETRY_MS)) || (!!opts?.retry && hasRetriable(u));
+    const due = (u: string) => (!finalUrl(state, u) && (opts?.retry || !failed.has(u) || Date.now() - failed.get(u)!.at > RETRY_MS)) || (!!opts?.retry && hasRetriable(u, fallbacks?.get(u)));
     let changed = false;
     const queued = tops.filter((u) => due(u) && !downloading.has(u));
     for (const u of queued) downloading.add(u);
@@ -395,7 +428,7 @@ async function ensureUrls(tops: string[], opts?: { retry?: boolean }): Promise<b
                 todo.map(async (u) => {
                     const own = { aliases: {} as Record<string, string>, modules: {} as Record<string, PackageModule> };
                     try {
-                        const f = await downloadGraph(u, own);
+                        const f = await downloadGraph(u, own, fallbacks?.get(u));
                         if (f !== u) own.aliases[u] = f;
                         Object.assign(into.aliases, own.aliases);
                         Object.assign(into.modules, own.modules);
@@ -443,9 +476,9 @@ export function packageStatus(u: string): PackageStatus {
 }
 
 /** drop stored modules and typings no script imports any more */
-export async function prunePackages(codes: Iterable<string>): Promise<void> {
+export async function prunePackages(items: Iterable<ImportingScript>): Promise<void> {
     await loadPackages();
-    const live = packageUrlsIn(codes);
+    const live = packageUrlsIn(items);
     for (const [u, at] of ensuredAt) {
         if (Date.now() - at < RETRY_MS) live.add(u);
         else ensuredAt.delete(u);

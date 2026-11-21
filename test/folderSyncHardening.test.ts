@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import { pathDir, seedBundle } from "./bundleHelper";
 
 // in-memory chrome.storage + directory handle (with a backup subfolder)
 const store: Record<string, any> = {};
@@ -21,29 +22,7 @@ const files: F = new Map();
 const backups: F = new Map();
 let clock = 1;
 function fakeDir(m: F, name: string): any {
-    return {
-        name,
-        async *values() {
-            for (const [n, f] of m) yield { kind: "file", name: n, getFile: async () => ({ lastModified: f.t, size: f.text.length, text: async () => f.text }) };
-        },
-        async getFileHandle(n: string, o?: any) {
-            if (!m.has(n)) {
-                if (!o?.create) throw Object.assign(new Error("nf"), { name: "NotFoundError" });
-                m.set(n, { text: "", t: clock++ });
-            }
-            return {
-                getFile: async () => ({ lastModified: m.get(n)!.t, size: m.get(n)!.text.length, text: async () => m.get(n)!.text }),
-                createWritable: async () => ({ write: async (t: string) => m.set(n, { text: t, t: clock++ }), close: async () => {} }),
-            };
-        },
-        async getDirectoryHandle(n: string) {
-            if (n !== ".tangitweak-backup") throw new Error("nf");
-            return fakeDir(backups, n);
-        },
-        async removeEntry(n: string) {
-            m.delete(n);
-        },
-    };
+    return pathDir(m, { tick: () => clock++, special: (p) => (p === ".tangitweak-backup" ? fakeDir(backups, p) : undefined) }, "", name);
 }
 const dir = fakeDir(files, "d");
 vi.mock("../src/shared/folderSync", async (orig) => ({ ...(await orig<any>()), loadSavedHandle: async () => dir, saveHandle: async () => {}, clearSavedHandle: async () => {} }));
@@ -158,14 +137,16 @@ describe("folder sync: the background is the only writer", () => {
         const sync = await started();
         const { saveScript } = await ss();
         const code = `import { tweak } from "tangitweak"; tweak.params({ n: { type: "number", default: 1 } });`;
-        await saveScript({ id: "p", code, name: "old" });
+        await seedBundle("old");
+        await seedBundle("new");
+        await saveScript({ id: "p", code, name: "old/index" });
         await sync.flush();
-        put("settings.json", JSON.stringify({ scripts: { "old.ts": { n: 9 } } }, null, 2) + "\n");
+        put("settings.json", JSON.stringify({ scripts: { "old/index.ts": { n: 9 } } }, null, 2) + "\n");
         await sync.flush();
-        expect(JSON.parse(files.get("settings.json")!.text)).toEqual({ scripts: { "old.ts": { n: 9 } } });
-        await saveScript({ id: "p", code, name: "new" });
+        expect(JSON.parse(files.get("settings.json")!.text)).toEqual({ scripts: { "old/index.ts": { n: 9 } } });
+        await saveScript({ id: "p", code, name: "new/index" });
         await sync.flush();
-        expect(JSON.parse(files.get("settings.json")!.text)).toEqual({ scripts: { "new.ts": { n: 9 } } });
+        expect(JSON.parse(files.get("settings.json")!.text)).toEqual({ scripts: { "new/index.ts": { n: 9 } } });
         await sync.stop();
     });
 });

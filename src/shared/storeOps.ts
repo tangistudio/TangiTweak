@@ -200,10 +200,10 @@ export function storePersist(name: string, opts: unknown, api = "tweak.globalSto
     throw new TypeError(`${api}("${name}"): persist must be true, false or a list of top-level field names`);
 }
 
-/** a store's name and initial value, checked; `names` (name → the API that took it) holds each name once per script */
+/** a store's name and initial value, checked; `names` (name → the API that took it) holds each name once per tweak */
 export function claimStoreName(names: Map<string, string>, api: string, name: unknown, initial: unknown): asserts name is string {
     if (typeof name !== "string" || !name) throw new TypeError(`${api}: the first argument must be the store's name (a non-empty string)`);
     const had = names.get(name);
-    if (had) throw new Error(`${api}("${name}"): this script already has a store named "${name}" (${had}) — a name may be used once per script (call ${api} at top level and share the result)`);
+    if (had) throw new Error(`${api}("${name}"): this tweak already has a store named "${name}" (${had}) — a name may be used once per tweak (call ${api} at top level and share the result)`);
     if (!initial || typeof initial !== "object" || Array.isArray(initial)) throw new TypeError(`${api}("${name}"): initial must be an object`);
 }

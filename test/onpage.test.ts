@@ -142,7 +142,7 @@ describe("page shim worlds", () => {
         expect(tw(iso).pageStore({ m: 2 }).m).toBe(2);
         expect(tw(iso).tabStore({ k: 3 }).k).toBe(3);
         expect(made).toEqual(['g:a:["n"]', "p:main.ts#0", "t:main.ts#1"]);
-        expect(() => tw(iso).globalStore("a", {})).toThrow(/already has a store named "a"/);
+        expect(() => tw(iso).globalStore("a", {})).toThrow(/a store ID is used once per tweak/);
         expect(() => tw(iso).globalStore("A", {})).toThrow(/a store's ID is lowercase/);
         expect(() => tw(iso).globalStore("c", [])).toThrow(/initial must be an object/);
         const site = makePageShim({ params: {}, log: () => {}, storage: { get: () => undefined, set: () => undefined }, world: "page", stores });

@@ -35,10 +35,11 @@ import { getStoresText, applyStoresText, storesTextParses, STORES_FILE } from ".
 import { storeOwner } from "./engine/stores";
 import { SETTINGS_FILE, SCHEMA_FILE } from "../shared/settingsJson";
 import { settingsSchemaJson } from "../shared/settingsSchema";
-import { API_DTS_FILE, BUILTIN_TYPINGS_ROOT, PACKAGE_JSON_FILE, TEST_PKG_ROOT, TSCONFIG_FILE, apiDtsText, packageJsonText, tsconfigText } from "../shared/generatedFiles";
+import { currentTangiTweakVersion } from "../shared/packageMetadata";
+import { API_DTS_FILE, BUILTIN_TYPINGS_ROOT, PACKAGE_JSON_FILE, SDK_ROOT, TEST_PKG_ROOT, TSCONFIG_FILE, apiDtsText, packageJsonText, sdkFiles, tsconfigText } from "../shared/generatedFiles";
 import { broadcastToUi } from "./engine/logs";
 import { dlogLevel } from "../shared/debugLog";
-import { folderPathProblem, isConfigJsonPath, isScriptFilePath, scriptFileName, scriptNameFromFile } from "../shared/scriptName";
+import { folderPathProblem, isConfigJsonPath, isGitignorePath, isScriptFilePath, scriptFileName, scriptNameFromFile } from "../shared/scriptName";
 import { bytesToImageDataUrl, imageDataUrlToBytes, isDataSpec, isImageDataPath } from "../shared/scriptImports";
 import { ancestorFolders, isInFolder } from "../shared/folders";
 import { PACKAGE_TYPINGS_KEY, TYPINGS_ROOT, type StoredTypings } from "../shared/packageImports";
@@ -51,7 +52,7 @@ function canonicalFileName(name: string): string {
 }
 
 const isScriptFile = isScriptFilePath;
-const isDataFile = (path: string) => isDataSpec(path) && !isConfigJsonPath(path) && !baseName(path).startsWith(".");
+const isDataFile = (path: string) => (isDataSpec(path) && !isConfigJsonPath(path) && !baseName(path).startsWith(".")) || (isGitignorePath(path) && path.includes("/"));
 const isSyncedFile = (path: string) => isScriptFile(path) || isDataFile(path);
 const baseName = (path: string) => path.slice(path.lastIndexOf("/") + 1);
 /** `known` signature of a folder (they only appear and vanish) */
@@ -1156,6 +1157,10 @@ async function ensureSupportFiles(): Promise<void> {
             return r.text();
         });
         await ensureFile(API_DTS_FILE, apiDtsText(dts));
+        for (const [p, text] of Object.entries(sdkFiles(dts, currentTangiTweakVersion()))) {
+            const path = `${SDK_ROOT}/${p}`;
+            if ((await readTextOrNull(path)) !== text) await writeFile(path, text);
+        }
     } catch (e: any) {
         dlogLevel("sync", "warn", `Folder sync: could not refresh ${API_DTS_FILE}: ${e?.message || e}`);
     }

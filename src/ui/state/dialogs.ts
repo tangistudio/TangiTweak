@@ -46,7 +46,7 @@ export const dialogs = proxy({
     welcome: false,
     conflict: null as Request<ConflictOptions, ConflictChoice> | null,
     picker: null as Request<PickOptions, number[] | null> | null,
-    /** Install Script: what it starts with; `n` starts it over */
+    /** Install Tweak: what it starts with; `n` starts it over */
     install: null as { n: number; req: InstallRequest } | null,
 });
 
@@ -69,13 +69,13 @@ export function showHelpTab(tab: HelpTab): void {
     dialogs.helpShown++;
 }
 
-/** Esc: close Settings, Help, Quick Open and Install Script (the conflict dialog and the picker handle their own keys). */
+/** Esc: close Settings, Help, Quick Open and Install Tweak (the conflict dialog and the picker handle their own keys). */
 export function closeDialogs(): void {
     dialogs.settings = dialogs.help = dialogs.quickOpen = false;
     dialogs.install = null;
 }
 
-/** Install Script: the picker, a URL to read, an update to review (`update`: a package id), or a drop */
+/** Install Tweak: the picker, a URL to read, an update to review (`update`: a package id), or a drop */
 export function openInstall(req: InstallRequest = {}): void {
     dialogs.install = ref({ n: ++requests, req });
 }

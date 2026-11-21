@@ -36,7 +36,8 @@ const SCRIPTS = [
     { id: "state", name: "state", code: STATE },
     { id: "main", name: "main", code: MAIN },
 ];
-const PAGE_KEYS = ["onPage:0", "onPage:0@state", "onPage:1", "onPage:2"];
+// numbered tweak-wide: the module's registration is one of the entry's
+const PAGE_KEYS = ["onPage:0", "onPage:1", "onPage:2", "onPage:3"];
 
 /** the store names each kind was asked for */
 function recorder() {
@@ -57,8 +58,8 @@ function page(world: "isolated" | "page") {
     const stores: PageStores = { store: (n, i) => r.store(n, i), tabStore: r.tabStore, pageStore: r.pageStore };
     const base = { params: {}, log: () => {}, storage: { get: () => undefined, set: () => undefined }, world, siteStore: r.siteStore, ...(world === "isolated" ? { stores } : {}) };
     const libs = [{ name: "state", src: toRunnableJs(STATE) }];
-    const requireFrom = makeLibRequire(libs, (lib, require, m) => scriptFunction(lib.src!, lib.name)(makePageShim({ ...base, lib: lib.name }).host, console, require, m, m.exports));
     const shim = makePageShim(base);
+    const requireFrom = makeLibRequire(libs, (lib, require, m) => scriptFunction(lib.src!, lib.name)(shim.host, console, require, m, m.exports));
     const m = { exports: {} as any };
     shim.top(() => scriptFunction(toRunnableJs(MAIN), "main")(shim.host, console, requireFrom("main"), m, m.exports));
     return { shim, names: r.names };
@@ -71,16 +72,16 @@ describe("tweak: handler keys by registration order, the same in every world", (
         expect(c.meta.active).toBe(true);
         const keys = c.meta.routes.filter((r) => r.key).map((r) => r.key);
         expect(keys).toEqual(["onSite:0", ...PAGE_KEYS, "onOverlay:0"]);
-        expect(c.meta.routes.find((r) => r.key === "onPage:0@state")!.lib).toBe("state");
+        expect(c.meta.routes.find((r) => r.key === "onPage:1")!.file).toBe("state");
     });
 
     it("the isolated world (onPage) and the site's world (onSite) compute the background's keys", () => {
         const iso = page("isolated").shim;
         expect(iso.dom.map((d) => [d.h, d.fn({})])).toEqual([
             ["onPage:0", "a"],
-            ["onPage:0@state", "lib"],
-            ["onPage:1", "b"],
-            ["onPage:2", "c"],
+            ["onPage:1", "lib"],
+            ["onPage:2", "b"],
+            ["onPage:3", "c"],
         ]);
         expect(page("page").shim.dom.map((d) => [d.h, d.fn({})])).toEqual([["onSite:0", "site"]]);
     });
@@ -127,10 +128,8 @@ describe("tweak: stores a library's function creates", () => {
         const r = recorder();
         const stores: PageStores = { store: (n, i) => r.store(n, i), tabStore: r.tabStore, pageStore: r.pageStore };
         const base = { params: {}, log: () => {}, storage: { get: () => undefined, set: () => undefined }, world: "isolated" as const, siteStore: r.siteStore, stores };
-        const requireFrom = makeLibRequire([{ name: "lib", src: toRunnableJs(LIB) }], (lib, require, m) =>
-            scriptFunction(lib.src!, lib.name)(makePageShim({ ...base, lib: lib.name }).host, console, require, m, m.exports),
-        );
         const shim = makePageShim(base);
+        const requireFrom = makeLibRequire([{ name: "lib", src: toRunnableJs(LIB) }], (lib, require, m) => scriptFunction(lib.src!, lib.name)(shim.host, console, require, m, m.exports));
         const m = { exports: {} as any };
         shim.top(() => scriptFunction(toRunnableJs(scripts[1].code), "a")(shim.host, console, requireFrom("a"), m, m.exports));
         expect(r.names).toEqual(["tab a#0", "page lib#0", "page lib#1"]);
@@ -157,6 +156,13 @@ describe("tweak: the API", () => {
         for (const id of ["Seen", "a b", ".hidden", "x/y", ""]) expect(run(`import { tweak } from "tangitweak";\ntweak.globalStore(${JSON.stringify(id)}, {});`).error).toContain(`tweak.globalStore(${JSON.stringify(id)})`);
         expect(run(`import { tweak } from "tangitweak";\ntweak.globalStore("seen-items.v2_x", {});`).error).toBeNull();
         expect(run(`import { tweak } from "tangitweak";\ntweak.globalStore("s", {});\ntweak.globalStore("s", {});`).error).toMatch(/tweak\.globalStore\("s"\)/);
+    });
+
+    it("a store ID is unique across a tweak's files", () => {
+        const scripts = [{ id: "a", name: "t/a", code: `import { tweak } from "tangitweak";\nexport const s = tweak.globalStore("x", {});` }];
+        const compile = (code: string) => compileScript(code, { name: "t/index", importModule: makeModuleResolver(scripts, () => ({})).resolveFrom("t/index") });
+        expect(compile(`import { tweak } from "tangitweak";\nimport { s } from "./a";\nvoid s;\ntweak.globalStore("x", {});`).error).toMatch(/tweak\.globalStore\("x"\): a store ID is used once per tweak — "t\/a" already declares it/);
+        expect(compile(`import { tweak } from "tangitweak";\nimport { s } from "./a";\nvoid s;\ntweak.globalStore("y", {});`).error).toBeNull();
     });
 
     it("its messages say tweak", () => {

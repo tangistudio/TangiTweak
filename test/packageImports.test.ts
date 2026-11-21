@@ -90,7 +90,11 @@ describe("package URLs", () => {
         expect(classifyNested("@s/p/sub/x", from)).toEqual({ bare: "@s/p", sub: "sub/x" });
         expect(rangeUrl("b", "^1.2.0 || 2", "x.js")).toBe("https://unpkg.com/b@%5E1.2.0%20%7C%7C%202/x.js");
         expect(rangeUrl("b", undefined, "")).toBe("https://unpkg.com/b@latest");
-        for (const r of ["npm:other@1", "workspace:*", "github:a/b", "file:../x", "a/b"]) expect(rangeUrl("b", r, "")).toBeNull();
+        for (const r of ["workspace:*", "github:a/b", "file:../x", "a/b"]) expect(rangeUrl("b", r, "")).toBeNull();
+        // npm: aliases name another package
+        expect(rangeUrl("b", "npm:other@1", "")).toBe("https://unpkg.com/other@1");
+        expect(rangeUrl("events", "npm:events@^3", "")).toBe("https://unpkg.com/events@%5E3");
+        expect(rangeUrl("x", "npm:@s/y", "sub/a.js")).toBe("https://unpkg.com/@s/y@latest/sub/a.js");
         expect(typesPackageName("@scope/x")).toBe("@types/scope__x");
     });
 
@@ -181,13 +185,38 @@ describe("downloading a package's module graph", () => {
         const load = makePackageLoader(p.packagesSnapshot());
         expect(load("https://unpkg.com/builtin-lib@1.0.0")).toEqual({
             ok: true,
-            err: `"fs" is a Node.js built-in — not available in TangiTweak scripts`,
-            err2: `"node:path" is a Node.js built-in — not available in TangiTweak scripts`,
+            err: `"fs" is a Node.js built-in — not available in tweaks`,
+            err2: `"node:path" is a Node.js built-in — not available in tweaks — add "path": "npm:path-browserify" to the tweak's package.json "dependencies" to use npm's browser version`,
         });
         const nf = load("https://unpkg.com/nested-fail@1.0.0");
         expect(nf.ok).toBe(1);
         expect(nf.err).toMatch(/cannot import "\.\/missing\.js" \(required by https:\/\/unpkg\.com\/nested-fail@1\.0\.0\/index\.js\): HTTP 404/);
         expect(unpkg.calls.filter((c) => c.includes("fs"))).toEqual([]);
+    });
+
+    it("a package's npm: alias dependency downloads the package it names", async () => {
+        const p = await bg();
+        await p.ensurePackages([`import a from "https://unpkg.com/alias-user@1.0.0";`]);
+        const pkgs = p.packagesSnapshot();
+        expect(pkgs.modules["https://unpkg.com/alias-user@1.0.0/index.js"].requires.evt).toBe("https://unpkg.com/tiny-events@1.0.0/index.js");
+        expect(makePackageLoader(pkgs)("https://unpkg.com/alias-user@1.0.0")).toEqual({ evt: "tiny-events" });
+    });
+
+    it("a tweak's bare imports come from its package.json; a Node.js built-in a package needs falls back to the tweak's dependencies", async () => {
+        const tweak = (deps: Record<string, string>) => [{ path: "t/package.json", text: JSON.stringify({ name: "t", tangitweak: {}, dependencies: deps }) }];
+        const entry = { name: "t/index", code: `import n from "needs-events";` };
+        let p = await bg();
+        await p.ensurePackages([entry], { data: tweak({ "needs-events": "^1.0.0" }) });
+        let load = makePackageLoader(p.packagesSnapshot());
+        const bare = p.packagesSnapshot().aliases["https://unpkg.com/needs-events@%5E1.0.0"];
+        expect(bare).toBe("https://unpkg.com/needs-events@1.0.0/index.js");
+        // not given: the error says how to add it
+        expect(load(bare).err).toMatch(/^"events" is a Node\.js built-in — not available in tweaks — add "events": "latest" to the tweak's package\.json "dependencies"/);
+        for (const k of Object.keys(store)) delete store[k];
+        p = await bg();
+        await p.ensurePackages([entry], { data: tweak({ "needs-events": "^1.0.0", events: "npm:tiny-events@^1.0.0" }) });
+        load = makePackageLoader(p.packagesSnapshot());
+        expect(load("https://unpkg.com/needs-events@1.0.0/index.js")).toEqual({ events: "tiny-events", nodeEvents: "tiny-events" });
     });
 
     it("cycles get partial exports; JSON modules export their data", async () => {
