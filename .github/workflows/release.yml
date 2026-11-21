@@ -118,6 +118,10 @@ jobs:
     # runs when the helper was built, or skipped because it's reused
     if: always() && needs.helper-plan.result == 'success' && (needs.helper.result == 'success' || needs.helper.result == 'skipped')
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      # npm Trusted Publishing (OIDC): no npm token
+      id-token: write
     steps:
       - uses: actions/checkout@v4
 
@@ -159,12 +163,12 @@ jobs:
           VERSION=$(node -p "const m = require('./dist/manifest.json'); m.version_name || m.version")
           zip -qr "tangitweak-mv2-v${VERSION}.zip" dist
           (cd dist-mv3 && zip -qr "../tangitweak-mv3-v${VERSION}.zip" .)
-          TGZ=$(npm pack ./dist-test-pkg --quiet)
-          mv "$TGZ" "tangitweak-test-v${VERSION}.tgz"
-          cp "tangitweak-test-v${VERSION}.tgz" "tangitweak-test.tgz"
+          # the SDK, the npm package `tangitweak` (also published to npm below)
+          TGZ=$(npm pack ./dist-sdk --quiet)
+          mv "$TGZ" "tangitweak-sdk-v${VERSION}.tgz"
           echo "ZIP_NAME=tangitweak-mv2-v${VERSION}.zip" >> "$GITHUB_ENV"
           echo "ZIP_MV3_NAME=tangitweak-mv3-v${VERSION}.zip" >> "$GITHUB_ENV"
-          echo "TEST_TGZ_VERSIONED=tangitweak-test-v${VERSION}.tgz" >> "$GITHUB_ENV"
+          echo "SDK_TGZ=tangitweak-sdk-v${VERSION}.tgz" >> "$GITHUB_ENV"
           echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
 
       - name: Package crx (signed with CRX_PRIVATE_KEY → stable extension id)
@@ -221,11 +225,28 @@ jobs:
           files: |
             ${{ env.ZIP_NAME }}
             ${{ env.ZIP_MV3_NAME }}
-            ${{ env.TEST_TGZ_VERSIONED }}
-            tangitweak-test.tgz
+            ${{ env.SDK_TGZ }}
             tangitweak-*.crx
             helper-dist/*
           body_path: release-notes.md
+
+      # Trusted Publishing: npm trusts this workflow (set up once on
+      # npmjs.com, see docs/development.md), so there's no token. It needs
+      # npm 11.5.1 or later. Prereleases (0.40.0-alpha) go under their
+      # dist-tag (`alpha`), others under `latest`.
+      - name: Publish the SDK to npm
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          if [ "$(npm view "tangitweak@${VERSION}" version 2>/dev/null)" = "$VERSION" ]; then
+            echo "tangitweak@${VERSION} is already on npm, skipping"
+            exit 0
+          fi
+          npm install -g npm@^11.5.1
+          case "$VERSION" in
+            *-*) PRE="${VERSION#*-}"; TAG="${PRE%%[.0-9]*}"; TAG="${TAG:-next}" ;;
+            *) TAG=latest ;;
+          esac
+          npm publish ./dist-sdk --provenance --access public --tag "$TAG"
 
   # AMO signing can take a long time: the release is published without the
   # Firefox package, which this job adds when it's ready.
