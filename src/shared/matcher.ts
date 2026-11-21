@@ -99,7 +99,9 @@ export function matchReplace(patternOrMatch: string | MatchResult, replacePatter
 /** "<all_urls>" and "*" match every URL (as in WebExtension match patterns). */
 const ALL_URLS = new Set(["<all_urls>", "*"]);
 
+/** parsed patterns, least recently used first (re-parsing costs ~100× a test) */
 const parsed = new Map<string, URLPattern | null>();
+const PARSED_MAX = 5000;
 
 /**
  * A script `match` entry as a URLPattern (constructor-string syntax, see
@@ -118,9 +120,9 @@ function cached(pattern: string): URLPattern | null {
         } catch {
             p = null;
         }
-        if (parsed.size > 1000) parsed.clear();
-        parsed.set(pattern, p);
-    }
+        if (parsed.size >= PARSED_MAX) parsed.delete(parsed.keys().next().value!);
+    } else parsed.delete(pattern);
+    parsed.set(pattern, p);
     return p;
 }
 
@@ -181,6 +183,19 @@ export function hostGlobOf(pattern: string): string | null {
     if (!p || !PLAIN.test(p.hostname) || p.hostname === "*") return null;
     const port = p.port === "" ? "" : /^\d+$/.test(p.port) ? `:${p.port}` : ":*";
     return p.hostname.toLowerCase() + port;
+}
+
+/**
+ * Which hosts a pattern can match, for bucketing (RouteIndex): one exact
+ * hostname, every subdomain of `suffix` (a `*.suffix` host), or null = any
+ * host. Exact: a pattern keyed here never matches another hostname.
+ */
+export function hostKeyOf(pattern: string): { exact: string } | { suffix: string } | null {
+    const h = cached(pattern)?.hostname;
+    if (!h || !PLAIN.test(h)) return null;
+    if (!h.includes("*")) return { exact: h };
+    const m = /^\*\.([^*]+)$/.exec(h);
+    return m ? { suffix: m[1] } : null;
 }
 
 /** A coarse "*"-glob over the whole URL (e.g. for CDP Fetch patterns); "*" when not expressible. */

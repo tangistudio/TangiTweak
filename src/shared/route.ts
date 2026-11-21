@@ -9,7 +9,7 @@
  * Each network route is owned by exactly one strategy: its own, required,
  * `strategy` — there is no default.
  */
-import { matchAny, matchGroups, matchPatternError } from "./matcher";
+import { hostKeyOf, matchAny, matchGroups, matchPatternError } from "./matcher";
 
 export type Strategy = "page" | "extension" | "debugger" | "helper" | "rules";
 export const STRATEGIES: Strategy[] = ["helper", "page", "extension", "debugger", "rules"];
@@ -204,6 +204,71 @@ export function routeMatches(route: RouteMeta, url: string, method?: string, typ
     if (route.methods && method && !route.methods.includes(method.toUpperCase())) return false;
     if (route.resourceTypes && type && !route.resourceTypes.includes(type)) return false;
     return true;
+}
+
+/**
+ * Routes bucketed by the hosts their `url` patterns can match, so a request
+ * tests only the routes for its hostname (and its parent domains, for
+ * `*.domain` hosts) plus the any-host ones — not every route. Results keep
+ * the items' order.
+ */
+export class RouteIndex<T> {
+    private readonly exact = new Map<string, number[]>();
+    private readonly suffix = new Map<string, number[]>();
+    private readonly anyHost: number[] = [];
+
+    constructor(
+        readonly items: readonly T[],
+        private readonly routeOf: (item: T) => RouteMeta
+    ) {
+        const add = (map: Map<string, number[]>, key: string, i: number) => {
+            const at = map.get(key);
+            if (!at) map.set(key, [i]);
+            else if (at[at.length - 1] !== i) at.push(i);
+        };
+        items.forEach((item, i) => {
+            const keys = routePatterns(routeOf(item).url).map(hostKeyOf);
+            if (keys.some((k) => k === null)) this.anyHost.push(i);
+            else
+                for (const k of keys as ({ exact: string } | { suffix: string })[]) {
+                    if ("exact" in k) add(this.exact, k.exact, i);
+                    else add(this.suffix, k.suffix, i);
+                }
+        });
+    }
+
+    /** the items whose routes could match url (a superset of the matches) */
+    candidates(url: string): T[] {
+        let host: string;
+        try {
+            host = new URL(url).hostname;
+        } catch {
+            return [...this.items];
+        }
+        const at: number[][] = [this.anyHost, this.exact.get(host) ?? []];
+        for (let i = host.indexOf("."); i >= 0; i = host.indexOf(".", i + 1)) at.push(this.suffix.get(host.slice(i + 1)) ?? []);
+        const hits = at.filter((a) => a.length);
+        if (hits.length === 1) return hits[0].map((i) => this.items[i]);
+        return [...new Set(hits.flat())].sort((a, b) => a - b).map((i) => this.items[i]);
+    }
+
+    /** the items whose route matches (routeMatches), in order */
+    match(url: string, method?: string, type?: string): T[] {
+        return this.candidates(url).filter((item) => routeMatches(this.routeOf(item), url, method, type));
+    }
+
+    some(url: string, method?: string, type?: string, also: (item: T) => boolean = () => true): boolean {
+        return this.candidates(url).some((item) => also(item) && routeMatches(this.routeOf(item), url, method, type));
+    }
+}
+
+const indexes = new WeakMap<readonly unknown[], RouteIndex<any>>();
+
+/** the RouteIndex of a list, built once per list (don't mutate an indexed list — assign a new one) */
+export function indexRoutes<T>(items: readonly T[], routeOf: (item: T) => RouteMeta): RouteIndex<T> {
+    let index = indexes.get(items);
+    if (!index) indexes.set(items, (index = new RouteIndex(items, routeOf)));
+    return index;
 }
 
 /** ctx.groups for a matched url */

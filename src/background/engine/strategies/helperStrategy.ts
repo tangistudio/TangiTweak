@@ -16,7 +16,7 @@ import { bodyKind, getTextTypes } from "../../../shared/bodyKind";
 import { bytesToBase64, base64ToBytes } from "../../../shared/bytesPack";
 import { headerValue, requestBodyFrom } from "../../../shared/requestBody";
 import { hostPatternOf, type SystemProxyInfo } from "../../../shared/pac";
-import { routeMatches, takesBinary, type RouteMeta } from "../../../shared/route";
+import { indexRoutes, takesBinary, type RouteMeta } from "../../../shared/route";
 import { dlogLevel } from "../../../shared/debugLog";
 import { helperInstallCommand, helperInstallShell, isHelperOutdated, MIN_HELPER_VERSION } from "../../../shared/helperInstall";
 import type { Script } from "../scriptStore";
@@ -487,7 +487,7 @@ export class HelperStrategy {
 
     /** a process route wanting `flag` matches (resourceTypes: extension-side only — the helper can't see them) */
     private matching(url: string, method: string, type: string, flag: Flag): boolean {
-        return this.owned.some((o) => helperRouteOf(o.route)[flag] && routeMatches(o.route, url, method, type || undefined));
+        return indexRoutes(this.owned, (o) => o.route).some(url, method, type || undefined, (o) => helperRouteOf(o.route)[flag]);
     }
 
     /**

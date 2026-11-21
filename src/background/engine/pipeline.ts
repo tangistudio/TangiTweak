@@ -35,7 +35,7 @@ import { missedLine } from "../../shared/netTypes";
 import { binaryOptedOut, debuggerMissedLine, frameHasHook as pingHook, isLoopbackUrl, missedReason, missedWhat, routeProblem, MISSED_SKIP_TYPES } from "../../shared/missedTap";
 import { resolveParamValues } from "../../shared/scriptDef";
 import { shippedLibIds, type ShippedLib } from "../../shared/scriptImports";
-import { effectiveStrategy, hookCanSee, isNetKind, pageWorld, routeLabel, routeMatches, takesBinary, type RouteMeta, type Strategy } from "../../shared/route";
+import { effectiveStrategy, hookCanSee, indexRoutes, isNetKind, pageWorld, routeLabel, routeMatches, takesBinary, type RouteMeta, type Strategy } from "../../shared/route";
 import { analyzeScripts, runBodyOp, type Analyzed } from "../compileHost";
 import { recordNetBody } from "../network";
 import { reportSkipped, setSkipRoutes } from "./skipped";
@@ -211,7 +211,7 @@ export function createPipeline(
     const cdpWarned = new Set<string>();
     const frameHasHook = (tabId: number, frameId?: number) => pingHook(chrome.tabs, () => chrome.runtime.lastError, tabId, frameId);
     const extOrigin = chrome.runtime.getURL("");
-    const watchedFor = (url: string, method?: string, type?: string) => bodyWatch.filter((w) => routeMatches(w.route, url, method, type));
+    const watchedFor = (url: string, method?: string, type?: string) => indexRoutes(bodyWatch, (w) => w.route).match(url, method, type);
     const ownRequest = (d: any) => d.url.startsWith(extOrigin) || (d.initiator || d.originUrl || "").startsWith(extOrigin.replace(/\/$/, ""));
     // webRequest requestIds for the strategies' log lines, Network rows and the check below
     correlator.attach(chrome.webRequest);

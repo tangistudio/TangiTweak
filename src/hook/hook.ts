@@ -13,7 +13,7 @@ import { makeScriptConsole, formatLogArgs, scriptLogLine, type ScriptLogLevel } 
 import { scriptFunction, withTweak, type RawScriptFn, type ScriptFn } from "../shared/scriptFn";
 import { siteUnits, type PackageFn } from "../shared/siteCode";
 import { makeLibRequire, type ShippedLib } from "../shared/scriptImports";
-import { routeMatches, takesBinary, type DocumentWhen, type RouteMeta } from "../shared/route";
+import { indexRoutes, takesBinary, type DocumentWhen, type RouteMeta } from "../shared/route";
 import { makePageShim, domHandlersFor, scheduleDocument, fireRun, type PageDocumentHandler, type PageShim } from "../shared/pageShim";
 import { ScriptLife, type Generation } from "../shared/runLifecycle";
 import { noteShadowRoot } from "../shared/domElements";
@@ -57,7 +57,7 @@ import { watchCall, type CallWatch } from "../shared/callWatch";
     let routes: RouteMeta[] = [];
     const wants = (url: string, method: string): boolean => {
         try {
-            return routes.some((r) => routeMatches(r, url, method));
+            return indexRoutes(routes, (r) => r).some(url, method);
         } catch {
             return false;
         }
@@ -65,7 +65,7 @@ import { watchCall, type CallWatch } from "../shared/callWatch";
     /** does an onResponseBody route with `binary: true` match? (binary bodies go only to those) */
     const wantsBinary = (url: string, method: string): boolean => {
         try {
-            return routes.some((r) => r.kind === "onResponseBody" && takesBinary(r) && routeMatches(r, url, method));
+            return indexRoutes(routes, (r) => r).some(url, method, undefined, (r) => r.kind === "onResponseBody" && takesBinary(r));
         } catch {
             return false;
         }

@@ -23,6 +23,7 @@ its section below.
 - **No more `tt-api.d.ts`** at the root of the synced folder: each tweak's `tsconfig.json` extends the SDK's, whose `index.d.ts` has the same typings. The one TangiTweak wrote is removed; one you wrote yourself stays.
 - **No more `settings.schema.json`** in the synced folder. The one TangiTweak wrote is removed; `settings.json` still gets completions and validation in the Editor.
 - **The Explorer folds a tweak's stores** under one `.tweak/stores` row, closed until you open it (click, Enter or →); opening a store from elsewhere opens the row.
+- **Faster URL matching with many tweaks**: each request is now checked only against the routes whose host could match it (its exact host, a `*.domain` it's under, or patterns with a wildcard host), not every route. With 1,000 routes on different hosts, matching a request drops from about 0.2 ms to under a microsecond. Parsed URL patterns are no longer all thrown away once there are more than 1,000 of them.
 - **The popup lists tweaks, not their modules**, and the Explorer's tooltip on a module names its tweak's entry. **New Module…** starts from a small importable module instead of a whole script, the Welcome page's **New empty tweak** makes a tweak, and **Import…** takes zips only.
 
 ### Fixed

@@ -13,7 +13,7 @@
  * Requests matched by an active rule are marked Modified in the Network
  * view (our own matcher on observed requests; no feedback permission).
  */
-import { routeLabel, routeMatches, type NetKind, type RouteMeta } from "../../../shared/route";
+import { indexRoutes, routeLabel, routeMatches, type NetKind, type RouteMeta } from "../../../shared/route";
 import { reportSkipped } from "../skipped";
 import { regexProblemText, ruleErrorLine, substitute, type RuleSpec } from "../../../shared/dnrRules";
 import { probeScriptRules, type ScriptRules } from "../../../shared/rulesProbe";
@@ -295,7 +295,8 @@ export class RulesStrategy {
         this.seen.add(d.requestId);
         if (this.seen.size > 500) this.seen.delete(this.seen.values().next().value!);
         const tabId = d.tabId ?? -1;
-        const hits = this.active
+        const hits = indexRoutes(this.active, (a) => a.rule.route)
+            .candidates(d.url)
             .filter((a) => {
                 const c = a.rule.spec.condition;
                 if (Array.isArray(c.tabIds) && !c.tabIds.includes(tabId)) return false;

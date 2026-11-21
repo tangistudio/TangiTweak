@@ -23,7 +23,7 @@ import { tabScope } from "../../../shared/storeOps";
 import { pages } from "../pages";
 import { recordNetBody } from "../../network";
 import { isThenable, type Routed } from "../../../shared/compile";
-import { effectiveStrategy, routeGroups, routeLabel, routeMatches, takesBinary, takesText, type RouteMeta } from "../../../shared/route";
+import { effectiveStrategy, indexRoutes, routeGroups, routeLabel, takesBinary, takesText, type RouteMeta } from "../../../shared/route";
 import { formatScriptError } from "../../../shared/scriptError";
 import type { HeaderChanges, HookDisposition, InterceptionStrategy, MaybePromise, WebRequestDetailsLike } from "./types";
 import type { Script } from "../scriptStore";
@@ -76,7 +76,7 @@ export class ExtensionStrategy implements InterceptionStrategy {
 
     /** names of the scripts this strategy runs for `url` (diagnostics) */
     matchingNames(url: string): string[] {
-        return this.entries.filter((e) => KINDS.some((k) => e.handlers[k].some((h) => routeMatches(h.route, url)))).map((e) => e.name);
+        return this.entries.filter((e) => KINDS.some((k) => indexRoutes(e.handlers[k], (h) => h.route).some(url))).map((e) => e.name);
     }
 
     /** Free per-request caches (also called by the pipeline on error/complete). */
@@ -93,7 +93,7 @@ export class ExtensionStrategy implements InterceptionStrategy {
 
     /** the entry's `kind` handlers whose route matches this request */
     private hits(e: Entry, kind: Kind, details: WebRequestDetailsLike): Routed[] {
-        return e.handlers[kind].filter((h) => routeMatches(h.route, details.url, details.method, details.type));
+        return indexRoutes(e.handlers[kind], (h) => h.route).match(details.url, details.method, details.type);
     }
 
     /**

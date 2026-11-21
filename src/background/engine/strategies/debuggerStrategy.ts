@@ -12,7 +12,7 @@
 import { withOpPage } from "../pages";
 import { urlGlobOf } from "../../../shared/matcher";
 import { runOp, type BodyOp, type OpScript } from "../../../shared/bodyOps";
-import { routeMatches, takesBinary, type RouteKind } from "../../../shared/route";
+import { indexRoutes, takesBinary, type RouteKind } from "../../../shared/route";
 import type { Script } from "../scriptStore";
 import { log, noteBodySkip } from "../logs";
 import { bypassed } from "../bypass";
@@ -79,6 +79,9 @@ export class DebuggerStrategy {
     private attached = new Set<string>();
     /** cdp-owned handler routes */
     private owned: OwnedRoute[] = [];
+    private get index() {
+        return indexRoutes(this.owned, (o) => o.route);
+    }
     /** MV2: compiled scripts owning cdp routes */
     private ops: OpScript[] = [];
     /** tabId → timer for idle auto-detach */
@@ -201,16 +204,16 @@ export class DebuggerStrategy {
 
     /** names of scripts with a cdp route matching `url` (optionally a request's method/type) */
     debuggerScriptsFor(url: string, method?: string, type?: string): string[] {
-        return [...new Set(this.owned.filter((o) => routeMatches(o.route, url, method, type)).map((o) => o.name))];
+        return [...new Set(this.index.match(url, method, type).map((o) => o.name))];
     }
 
     /** MV2: does this request need the debugger (a cdp route matches it)? */
     needs(details: { url: string; method: string; type: string }): boolean {
-        return this.owned.some((o) => routeMatches(o.route, details.url, details.method, details.type));
+        return this.index.some(details.url, details.method, details.type);
     }
 
     private wants(url: string, method: string, type: string, kinds: RouteKind[], binary = false): boolean {
-        return this.owned.some((o) => kinds.includes(o.route.kind) && (!binary || takesBinary(o.route)) && routeMatches(o.route, url, method, type));
+        return this.index.some(url, method, type, (o) => kinds.includes(o.route.kind) && (!binary || takesBinary(o.route)));
     }
 
     /** Forget per-tab state on tab close. */
@@ -299,7 +302,7 @@ export class DebuggerStrategy {
     shouldAttach(url: string): boolean {
         if (!this.owned.length || !this.patterns.length) return false;
         if (__MV3__) return /^(https?|file):/i.test(url);
-        return this.owned.some((o) => routeMatches(o.route, url));
+        return this.index.some(url);
     }
 
     /** FORCED attach: a request explicitly needs the debugger (MV2 needsCdp). */

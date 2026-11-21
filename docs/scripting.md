@@ -102,6 +102,10 @@ leave out matches any. `"<all_urls>"` matches every URL.
 An invalid URL pattern (e.g. `*example.com*`, which has no scheme) makes the
 registration throw. The error shows on the script.
 
+Name the host when you can (`example.com` or `*.example.com`). Those
+patterns are only checked against requests to that host. A wildcard or
+`:name` host (`*://*/*`, `<all_urls>`) is checked on every request.
+
 Named groups land in `ctx.groups` (`*` wildcards as `"0"`, `"1"`, …):
 
 ```ts

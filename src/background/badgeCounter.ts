@@ -1,12 +1,17 @@
-import { matchAny } from "../shared/matcher";
+import { RouteIndex, isNetKind, type RouteMeta } from "../shared/route";
 import type { Script } from "./engine/scriptStore";
 
-/** onPage code (either kind): counts once it ran on the tab, not when its URL matches */
-const PAGE_KINDS = new Set(["onDocument", "onOverlay"]);
+type NetRoute = { id: string; route: RouteMeta };
+const netIndexes = new WeakMap<readonly Script[], RouteIndex<NetRoute>>();
 
-/** a script's network routes matching a request `url` */
-function requestMatches(s: Script, url: string): boolean {
-    return (s.meta.routes || []).some((r) => !PAGE_KINDS.has(r.kind) && matchAny(r.url, url) && !matchAny(r.exclude || [], url));
+/** the network routes of the enabled scripts (onPage code counts once it ran on the tab, not when its URL matches) */
+function netRoutes(scripts: readonly Script[]): RouteIndex<NetRoute> {
+    let index = netIndexes.get(scripts);
+    if (!index) {
+        const routes = scripts.flatMap((s) => (s.enabled && s.meta.active ? (s.meta.routes || []).filter((r) => isNetKind(r.kind)).map((route) => ({ id: s.id, route })) : []));
+        netIndexes.set(scripts, (index = new RouteIndex(routes, (r) => r.route)));
+    }
+    return index;
 }
 
 /** Badge colors: scripts active and fine / some with warnings / some with errors. */
@@ -49,7 +54,7 @@ export function createBadgeCounter(scripts: () => readonly Script[]) {
             if (newPage) tabs.delete(tabId);
             if (!url || !/^https?:/i.test(url)) return newPage ? 0 : this.count(tabId);
             const set = setOf(tabId);
-            for (const s of scripts()) if (s.enabled && s.meta.active && requestMatches(s, url)) set.add(s.id);
+            for (const { id } of netRoutes(scripts()).match(url)) set.add(id);
             return this.count(tabId);
         },
         /** The script's page code ran (or tried to) on the tab. Returns the active count. */

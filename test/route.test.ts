@@ -1,6 +1,6 @@
 /** Per-handler routes: normalization, matching, required strategy, and the page-side shim. */
 import { describe, expect, it } from "vitest";
-import { effectiveStrategy, hookCanSee, normalizeRoute, routeGroups, routeLabel, routeMatches, sampleUrl, scriptUrls } from "../src/shared/route";
+import { RouteIndex, effectiveStrategy, hookCanSee, normalizeRoute, routeGroups, routeLabel, routeMatches, sampleUrl, scriptUrls, type RouteMeta } from "../src/shared/route";
 import { domHandlersFor, makePageShim } from "../src/shared/pageShim";
 
 describe("normalizeRoute", () => {
@@ -84,6 +84,47 @@ describe("routeMatches", () => {
     it("named groups", () => {
         expect(routeGroups(r("https://x.com/users/:id"), "https://x.com/users/42")).toMatchObject({ id: "42" });
         expect(routeGroups(r("*"), "https://x.com/")).not.toHaveProperty("id");
+    });
+});
+
+describe("RouteIndex", () => {
+    const patterns = [
+        "*://api.example.com/*",
+        "*://*.example.com/*",
+        "https://Example.COM:8080/x/*",
+        "*://bücher.de/*",
+        "*://*/*",
+        "<all_urls>",
+        "*://exa*mple.com/*",
+        "*://example.com*",
+        "*://:sub.example.org/*",
+        "not a pattern",
+    ];
+    const route = (url: string, index: number): RouteMeta => ({ kind: "onRequest", index, url: [url], exclude: [], strategy: "page" });
+    const routes = patterns.map(route);
+    const urls = [
+        "https://api.example.com/v1",
+        "https://a.b.example.com/",
+        "https://example.com/",
+        "https://example.com:8080/x/y",
+        "https://xn--bcher-kva.de/",
+        "https://example.com.evil.net/",
+        "https://exaXmple.com/",
+        "https://other.org/",
+        "https://sub.example.org/",
+        "not a url",
+    ];
+
+    it("matches exactly what testing every route does, in order", () => {
+        const index = new RouteIndex(routes, (r) => r);
+        for (const url of urls) expect(index.match(url)).toEqual(routes.filter((r) => routeMatches(r, url)));
+    });
+
+    it("tests only the routes whose host could match", () => {
+        const many = Array.from({ length: 1000 }, (_, i) => route(`*://site${i}.example.org/*`, i));
+        const index = new RouteIndex(many, (r) => r);
+        expect(index.candidates("https://site7.example.org/a")).toEqual([many[7]]);
+        expect(index.candidates("https://elsewhere.net/")).toEqual([]);
     });
 });
 
