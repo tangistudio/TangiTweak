@@ -134,6 +134,8 @@ describe("folder sync support files", () => {
         expect(pkg).toMatchObject({ private: true, type: "module" });
         expect(pkg.imports).toBeUndefined();
         expect(pkg.devDependencies).toEqual({ eslint: "^10.0.0", typescript: "~6.0.0", "typescript-eslint": "^8.0.0", tangitweak: "file:.tangitweak/sdk/tangitweak" });
+        // npm workspaces: a tweak's `tangitweak` dependency installs as this build's SDK, unpublished or not
+        expect(pkg.workspaces).toEqual(["**", ".tangitweak/sdk/tangitweak"]);
         // the Editor's checks as ESLint rules
         expect(files.get("eslint.config.mjs")?.text).toContain(".tangitweak/eslint-plugin.mjs");
         expect(files.get(".tangitweak/eslint-plugin.mjs")?.text).toContain("no-invalid-world-access");
@@ -152,6 +154,7 @@ describe("folder sync support files", () => {
             {
                 text: JSON.stringify({
                     scripts: { test: "vitest run" },
+                    workspaces: ["tools/*"],
                     devDependencies: { vitest: "^2.1.4", "happy-dom": "^21.0.0" },
                 }),
                 t: clock++,
@@ -167,6 +170,7 @@ describe("folder sync support files", () => {
         expect(mergedPkg.$comment).toContain(GENERATED_NOTE);
         expect(mergedPkg.type).toBe("module");
         expect(mergedPkg.scripts).toEqual({ test: "vitest run" });
+        expect(mergedPkg.workspaces).toEqual(["tools/*", ".tangitweak/sdk/tangitweak"]);
         expect(mergedPkg.devDependencies).toEqual({
             vitest: "^2.1.4",
             "happy-dom": "^21.0.0",

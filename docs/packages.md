@@ -236,8 +236,9 @@ SDK), so editors check `tweak` and the built-ins (valtio, React) the way
 TangiTweak does. `npm install` in the tweak's folder fetches it, since its
 `package.json` lists `tangitweak`. In a [synced folder](editor.md#synced-folder),
 Folder Sync writes the running extension's copy of the SDK to
-`.tangitweak/sdk/tangitweak/` and links it from the folder's root
-`package.json`, so `npm install` at the root works without npm's copy. The
+`.tangitweak/sdk/tangitweak/` and the folder's root `package.json` makes it
+and every tweak npm workspaces, so `npm install`, at the root or in the
+tweak's folder, uses that copy instead of npm's. The
 same package has `tangitweak/test` for [testing tweaks](testing.md#setup).
 
 **Export Package…** (right-click a tweak's folder) downloads the tweak as

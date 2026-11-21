@@ -48,13 +48,16 @@ export function packageJsonText(existing?: Record<string, any>): string {
     const devDeps = { ...(isPlainObj(prev.devDependencies) ? prev.devDependencies : {}) };
     if (imports["#tangitweak/test"] === `./${OLD_TEST_PKG_ROOT}/index.mjs`) delete imports["#tangitweak/test"];
     if (devDeps["@tangitweak/test"] === `file:${OLD_TEST_PKG_ROOT}`) delete devDeps["@tangitweak/test"];
+    // every tweak bundle plus the SDK: `npm install` (here or in a tweak's folder) links a bundle's `tangitweak` dependency to this build's SDK, published or not
+    const workspaces = Array.isArray(prev.workspaces) ? (prev.workspaces.includes(SDK_ROOT) ? prev.workspaces : [...prev.workspaces, SDK_ROOT]) : (prev.workspaces ?? ["**", SDK_ROOT]);
     return (
         JSON.stringify(
             {
                 ...prev,
-                $comment: `${GENERATED_NOTE} User scripts/devDependencies for local tests are kept; TangiTweak scripts import runtime packages by pinned unpkg URL (https://unpkg.com/pkg@x.y.z). Run \`npm install\` once to lint tweaks with ESLint (eslint.config.mjs).`,
+                $comment: `${GENERATED_NOTE} User scripts/devDependencies for local tests are kept; TangiTweak scripts import runtime packages by pinned unpkg URL (https://unpkg.com/pkg@x.y.z). Run \`npm install\` once to lint tweaks with ESLint (eslint.config.mjs); the workspaces link each tweak's \`tangitweak\` dependency to the SDK in ${SDK_ROOT}.`,
                 private: typeof prev.private === "boolean" ? prev.private : true,
                 type: "module",
+                workspaces,
                 imports: Object.keys(imports).length ? imports : undefined,
                 devDependencies: {
                     eslint: "^10.0.0",

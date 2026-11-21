@@ -18,6 +18,7 @@ its section below.
 
 ### Changed
 
+- **`npm install` in a synced tweak's folder works before the SDK is on npm**: the synced folder's root `package.json` now lists every tweak and `.tangitweak/sdk/tangitweak` as npm `workspaces`, so a tweak's `tangitweak` dependency installs as the running extension's SDK instead of failing with `No versions available for tangitweak`.
 - **No more `settings.schema.json`** in the synced folder. The one TangiTweak wrote is removed; `settings.json` still gets completions and validation in the Editor.
 - **The Explorer folds a tweak's stores** under one `.tweak/stores` row, closed until you open it (click, Enter or →); opening a store from elsewhere opens the row.
 
