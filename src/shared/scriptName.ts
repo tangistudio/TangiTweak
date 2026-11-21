@@ -129,18 +129,6 @@ export function scriptPathKey(nameOrFile: string): string {
     return scriptFileKey(scriptNameFromInput(nameOrFile));
 }
 
-/** `base`, or `base (2)`, `base (3)`… — the first whose file doesn't clash with `taken` */
-export function uniqueScriptName(base: string, taken: string[]): string {
-    const keys = new Set(taken.map(scriptFileKey));
-    if (!keys.has(scriptFileKey(base))) return base;
-    const ext = isTsxName(base) ? ".tsx" : "";
-    const stem = base.slice(0, base.length - ext.length);
-    for (let i = 2; ; i++) {
-        const next = `${stem} (${i})${ext}`;
-        if (!keys.has(scriptFileKey(next))) return next;
-    }
-}
-
 /** file path → script name (exact) */
 export function scriptNameFromFile(fileName: string): string {
     return fileName.replace(/\.ts$/, "") || "Imported script";

@@ -1,5 +1,5 @@
 /**
- * Param definitions imported from a utility script:
+ * Param definitions imported from a module:
  *   import { envParam } from "./utils"; tweak.params({ intercept_environments: envParam })
  * The save-time (meta-only) compile used to stub every import, so the def
  * reached tweak.params as the stub proxy and the explorer showed a bogus

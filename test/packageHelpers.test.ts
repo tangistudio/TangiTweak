@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { deflateRawSync } from "node:zlib";
 import { addedCapabilities, capabilitiesOf, describeCapabilities, isAllUrls, type Capabilities } from "../src/shared/packageCaps";
-import { modifiedFiles, packageFolder, packageName, singleScriptBundles, storeItemOf, uniqueEntryName } from "../src/shared/packageModel";
+import { modifiedFiles, packageFolder, packageName, storeItemOf } from "../src/shared/packageModel";
 import { diffHunks, lineDiff } from "../src/shared/lineDiff";
 import { readZip } from "../src/shared/zip";
 import { isPackageFile, localPackage, startsIn } from "../src/shared/localPackage";
@@ -41,7 +41,7 @@ describe("packageCaps", () => {
         const lines = describeCapabilities(caps({ urls: ["<all_urls>", "*://a.com/*"], strategies: ["debugger", "fetch"], connect: ["x.io"] }));
         expect(lines.map((l) => l.risk)).toEqual(["high", "high", "low", "low", "low"]);
         expect(lines[0].text).toBe("Runs on every site");
-        expect(describeCapabilities(caps())).toEqual([{ text: "Registers no handlers (a library)", risk: "low" }]);
+        expect(describeCapabilities(caps())).toEqual([{ text: "Registers no handlers with its current settings", risk: "low" }]);
     });
 
     it("lists only what an update adds", () => {
@@ -63,30 +63,21 @@ describe("packageCaps", () => {
 
 describe("packageModel", () => {
     it("maps package files to store items", () => {
-        expect(storeItemOf("", "x.tangitweak.ts")).toEqual({ kind: "script", name: "x.tangitweak" });
+        expect(storeItemOf("x", "index.ts")).toEqual({ kind: "script", name: "x/index" });
         expect(storeItemOf("x", "lib/a.ts")).toEqual({ kind: "script", name: "x/lib/a" });
         expect(storeItemOf("x", "ui.tsx")).toEqual({ kind: "script", name: "x/ui.tsx" });
         expect(storeItemOf("x", "data/c.json")).toEqual({ kind: "data", name: "x/data/c.json" });
     });
 
-    it("names a package by its metadata, else its first script", () => {
-        expect(packageName({ entries: ["a/dark.tangitweak.ts"], metadata: {} })).toBe("dark");
-        expect(packageName({ entries: ["dark.ts"], metadata: {} })).toBe("dark");
-        expect(packageName({ entries: ["dark.tangitweak.ts"], metadata: { name: "Dark Mode" } })).toBe("Dark Mode");
+    it("names a package by its metadata, else its folder", () => {
+        expect(packageName({ folder: "dark", metadata: {} })).toBe("dark");
+        expect(packageName({ folder: "dark", metadata: { name: "Dark Mode" } })).toBe("Dark Mode");
     });
 
-    it("puts a single file at the root and more in a unique folder", () => {
-        expect(packageFolder({ entries: ["dark.tangitweak.ts"], files: { "dark.tangitweak.ts": "" } }, ["dark"])).toBe("");
-        const files = { "dark.tangitweak.ts": "", "lib.ts": "" };
-        expect(packageFolder({ entries: ["dark.tangitweak.ts"], files }, [])).toBe("dark");
-        expect(packageFolder({ entries: ["dark.tangitweak.ts"], files }, ["Dark/x", "dark (2)/y.json"])).toBe("dark (3)");
-        expect(packageFolder({ entries: ["a.ts", "b.ts"], files: { "a.ts": "", "b.ts": "" }, bundleName: "My/Kit" }, [])).toBe("My-Kit");
-    });
-
-    it("keeps a renamed root entry an entry", () => {
-        expect(uniqueEntryName("x.tangitweak", [])).toBe("x.tangitweak");
-        expect(uniqueEntryName("x.tangitweak", ["x.tangitweak", "x (2).tangitweak"])).toBe("x (3).tangitweak");
-        expect(uniqueEntryName("x.tangitweak.tsx", ["x.tangitweak.tsx"])).toBe("x (2).tangitweak.tsx");
+    it("installs into a unique folder named after the package", () => {
+        expect(packageFolder("dark", [])).toBe("dark");
+        expect(packageFolder("dark", ["Dark/x", "dark (2)/y.json"])).toBe("dark (3)");
+        expect(packageFolder("My/Kit", [])).toBe("My-Kit");
     });
 
     it("finds files edited, renamed or deleted since install", () => {
@@ -100,39 +91,6 @@ describe("packageModel", () => {
         } as const;
         const now: Record<string, { name: string; hash: string }> = { "1": { name: "p/a", hash: "h1" }, "2": { name: "p/b", hash: "edited" }, "3": { name: "q/c.json", hash: "h3" } };
         expect(modifiedFiles(pkg as never, (f) => now[f.id])).toEqual(["b.ts", "c.json", "d.ts"]);
-    });
-
-    it("resolves bundle display names for each bundle's entry", () => {
-        const scripts = [
-            { id: "s1", meta: { name: "redwood/index.tsx", active: true } },
-            { id: "s2", meta: { name: "redwood/shared/lib", active: false } },
-            { id: "s3", meta: { name: "multi/a", active: true } },
-            { id: "s4", meta: { name: "multi/b", active: true } },
-            { id: "s5", meta: { name: "unnamed/index", active: true } },
-            { id: "s6", meta: { name: "demo/demo.tangitweak", active: true } },
-        ];
-        const dataFiles = [
-            { path: "redwood/package.json", text: JSON.stringify({ name: "redwood", description: "Atlas tools", tangitweak: { displayName: "Redwood Devtools" } }) },
-            // its entry (index.ts) isn't there
-            { path: "multi/package.json", text: JSON.stringify({ name: "multi", tangitweak: {} }) },
-            { path: "unnamed/package.json", text: JSON.stringify({ tangitweak: {} }) },
-        ];
-        const installed = {
-            p1: {
-                id: "p1",
-                folder: "demo",
-                entries: ["demo.tangitweak.ts"],
-                metadata: { name: "Demo Package", description: "From URL", connect: [] },
-                files: { "demo.tangitweak.ts": { kind: "script", id: "s6", name: "demo/demo.tangitweak", hash: "h" } },
-            } as any,
-        };
-        const map = singleScriptBundles(scripts, dataFiles, installed);
-        expect(map.get("s1")).toEqual({ name: "Redwood Devtools", description: "Atlas tools" });
-        expect(map.has("s2")).toBe(false);
-        expect(map.has("s3")).toBe(false);
-        expect(map.has("s4")).toBe(false);
-        expect(map.get("s5")).toEqual({ name: "unnamed", description: undefined });
-        expect(map.get("s6")).toEqual({ name: "Demo Package", description: "From URL" });
     });
 });
 

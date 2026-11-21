@@ -18,7 +18,8 @@ import {
 } from "./scriptStore";
 import { loadDataFiles } from "./dataFiles";
 import { analyzePackage, applyPending, checkPackages, dismissPending, forgetPackage, installPackage, listPackages, offerPackage, rollbackPackage, setAutoUpdate, upgradePackage } from "./packages";
-import { resolveWorkspaceIcons, singleScriptBundles } from "../../shared/packageModel";
+import { resolveWorkspaceIcons } from "../../shared/packageModel";
+import { scriptRoles } from "../../shared/tweakBundle";
 import { loadPackages, packagesSnapshot, requestPackages } from "./packageImports";
 import { isUrlSpec, packageClosure, type PackageModules } from "../../shared/packageImports";
 import { packageUnit, scriptUnit, siteKey } from "../../shared/siteCode";
@@ -752,15 +753,14 @@ export function createPipeline(
                     listDataFiles(),
                     listPackages(),
                 ]);
-                const bundles = singleScriptBundles(scripts, dataFiles, installedPkgs);
+                const roles = scriptRoles(scripts, dataFiles);
                 const { scriptIcons } = resolveWorkspaceIcons(scripts, dataFiles, installedPkgs);
                 sendResponse(
                     scripts.map((s) => {
-                        const b = bundles.get(s.id);
                         const iconUrl = scriptIcons.get(s.id);
                         return {
                             ...s,
-                            ...(b ? { bundleName: b.name, ...(b.description ? { bundleDescription: b.description } : {}) } : {}),
+                            ...roles.get(s.id)!,
                             ...(iconUrl ? { iconUrl } : {}),
                             paramDefs: s.paramDefs === undefined ? analyzed.get(s.id)?.paramDefs || {} : s.paramDefs,
                             runtimeError: errors.get(s.id) ?? null,

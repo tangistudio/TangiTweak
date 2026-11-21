@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { isTsxName, scriptFileKey, scriptFileName, scriptNameFromFile, scriptNameFromInput, uniqueScriptName } from "../src/shared/scriptName";
+import { isTsxName, scriptFileKey, scriptFileName, scriptNameFromFile, scriptNameFromInput } from "../src/shared/scriptName";
 import { dependantsOf, importResolver } from "../src/shared/scriptImports";
 import { jsxElementAt } from "../src/shared/builtinSpecs";
 
@@ -22,11 +22,6 @@ describe(".tsx script names", () => {
         expect(scriptNameFromInput("x.ts")).toBe("x");
         expect(scriptNameFromInput("x.tsx")).toBe("x.tsx");
         expect(scriptNameFromInput("x")).toBe("x");
-    });
-
-    it("a unique name numbers the stem, keeping .tsx", () => {
-        expect(uniqueScriptName("Panel.tsx", ["Panel.tsx"])).toBe("Panel (2).tsx");
-        expect(uniqueScriptName("Panel.tsx", ["Panel"])).toBe("Panel.tsx");
     });
 });
 

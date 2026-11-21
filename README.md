@@ -97,7 +97,7 @@ running (later: **?** → **Welcome** or **?** → **Samples**).
 | | |
 |---|---|
 | [Installing](docs/install.md) | release zips, signed crx, building from source |
-| [Writing scripts](docs/scripting.md) | the `tweak` API, routes, parameters, libraries, imports and data files, `tweak.globalStore`/`tweak.pageStore`/`tweak.siteStore`/`tweak.fetch`, page code (`tweak.onSite`, `tweak.onPage`, `tweak.onOverlay`), handles, hot reload, overlays, stacking, async handlers |
+| [Writing scripts](docs/scripting.md) | the `tweak` API, routes, parameters, modules, imports and data files, `tweak.globalStore`/`tweak.pageStore`/`tweak.siteStore`/`tweak.fetch`, page code (`tweak.onSite`, `tweak.onPage`, `tweak.onOverlay`), handles, hot reload, overlays, stacking, async handlers |
 | [Testing tweaks](docs/testing.md) | Vitest tests with `"tangitweak/test"`: fixtures for pages, tabs and requests, one-component tests, and the browser's limits |
 | [Installing and sharing scripts](docs/packages.md) | install from a URL, GitHub, a gist, a folder or a zip; the header; where files go; updates and rollback |
 | [Interception strategies](docs/strategies.md) | `page` / `debugger` / `extension` / `helper` / `rules`, the default and per-handler choice, [which strategies keep the URL when replacing a response](docs/strategies.md#how-each-strategy-serves-a-replacement), the Missed warning, browser compatibility |

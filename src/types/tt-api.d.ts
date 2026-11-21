@@ -1052,8 +1052,8 @@ declare namespace TangiTweak {
      * tweak.onRequest({ url: "*://api.example.com/*", strategy: "helper" }, (ctx) => ({ headers: { set: { "x-debug": "1" } } }));
      * ```
      *
-     * A file that registers **no** handlers is a *library*: other scripts
-     * import it, and it never runs on its own.
+     * The tweak's entry registers them; its other files are *modules*: they
+     * run when the entry imports them, and what they register is the tweak's.
      *
      * **Stacking** — when several handlers match one request they run in list
      * order (scripts top to bottom in the Editor, then registration order):

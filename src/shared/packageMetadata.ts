@@ -38,8 +38,6 @@ export interface PackageMetadata {
 
 /** a bundle's package.json */
 export interface Manifest extends PackageMetadata {
-    /** its entry file, relative to the folder: `[main]`, else `["index.ts"]` (index.tsx when there's no index.ts) */
-    scripts: string[];
     /** the npm `name` */
     packageName?: string;
     /** the declared `main` (normalized), if any */
@@ -114,7 +112,7 @@ export function parseManifest(text: string, where = MANIFEST_FILE): Manifest {
         return v.trim() || undefined;
     };
     const author = typeof raw.author === "object" && raw.author && typeof raw.author.name === "string" ? raw.author.name.trim() || undefined : str(raw, "author");
-    const out: Manifest = { connect: [], scripts: [], dependencies: {} };
+    const out: Manifest = { connect: [], dependencies: {} };
     const set = <K extends keyof Manifest>(k: K, v: Manifest[K] | undefined) => {
         if (v !== undefined) out[k] = v;
     };
@@ -148,7 +146,6 @@ export function parseManifest(text: string, where = MANIFEST_FILE): Manifest {
         if (!/\.(tsx?|js)$/i.test(main) || main.startsWith("/") || main.split("/").includes("..")) throw new Error(`${where}: "main" ("${main}") must be a .ts or .tsx file in the bundle's folder`);
         out.main = main.replace(/\.js$/i, ".ts");
     }
-    out.scripts = [out.main ?? "index.ts"];
     return out;
 }
 

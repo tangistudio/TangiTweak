@@ -3,15 +3,15 @@
  */
 
 import "./shell/mount";
-import { loadMonaco, STARTER_TEMPLATE, apiTypingsText, updateJsonSchemas } from "./monacoSetup";
+import { loadMonaco, apiTypingsText, updateJsonSchemas } from "./monacoSetup";
 import { createMonacoTsWorkspace, IMPORT_OWNER, JSX_IN_TS, type TsWorkspace } from "./tsWorkspace";
 import { API_TYPINGS_URI } from "./apiLinks";
 import { NavHistory } from "./navHistory";
 import type { SampleScript } from "./samples";
 import { folderOf, imageDataUrlToBytes, isImageDataPath, isMarkdownPath, isSvgPath, missingImports } from "../shared/scriptImports";
-import { newTweakFiles } from "../shared/newTweak";
+import { NEW_MODULE, newTweakFiles } from "../shared/newTweak";
 import { highestVersion, isManifestPath, MANIFEST_FILE, minTangiTweakProblem, parseManifest } from "../shared/packageMetadata";
-import { bundleOf, dataReader, entryName } from "../shared/tweakBundle";
+import { bundleOf, dataReader, entryName, type ScriptRole } from "../shared/tweakBundle";
 import { localPackage } from "../shared/localPackage";
 import { writeZip } from "../shared/zip";
 import { buildExportZip, emptyFolders, EXPORT_ZIP_NAME, filesGoneFrom, readExportZip, type ExportContents } from "../shared/exportZip";
@@ -22,7 +22,7 @@ import { dialogs, openHelp, openSettings, pickItems, resolveConflict } from "./s
 import { folderStateText, setHelperStatus, settings } from "./state/settings";
 import { watchTheme, type Theme } from "./theme";
 import * as fsBridge from "./fsBridge";
-import { cleanScriptName, isTsxName, scriptNameProblem, scriptFileName, scriptFileKey, scriptPathKey, scriptNameFromFile, uniqueScriptName, dataFilePathProblem, folderPathProblem, isGitignorePath } from "../shared/scriptName";
+import { isTsxName, scriptNameProblem, scriptFileName, scriptFileKey, scriptPathKey, scriptNameFromFile, dataFilePathProblem, folderPathProblem, isGitignorePath } from "../shared/scriptName";
 import { jsxElementAt } from "../shared/builtinSpecs";
 import { vscodeTargetPath, editorLaunchUrl, launchAppName, type LaunchMode } from "./bundle";
 import { computeDirty } from "./dirtyState";
@@ -54,7 +54,7 @@ import { collectDiagnostics, diagnosticsFileName, downloadText, installedExtensi
 import { DIAG_SECTIONS } from "../shared/diagnosticsSections";
 
 // ---- state ----
-let scripts: (Script & { runtimeError?: ScriptHealthInput["runtimeError"]; typeErrors?: string[]; ruleErrors?: string[]; routeWarnings?: string[] })[] = [];
+let scripts: (Script & { runtimeError?: ScriptHealthInput["runtimeError"]; typeErrors?: string[]; ruleErrors?: string[]; routeWarnings?: string[] } & Partial<Pick<ScriptRole, "role" | "entry">>)[] = [];
 /** data files (JSON), by path; folders: every folder (explicit + implied), sorted */
 let dataFiles: DataFile[] = [];
 let folders: string[] = [];
@@ -367,10 +367,10 @@ async function deleteRows(rows: TreeRow[]): Promise<void> {
     await refresh();
 }
 
-/** Editor toolbar switch: enable/disable the open script (hidden for settings.json, data files and libraries). */
+/** Editor toolbar switch: enable/disable the open tweak (hidden for settings.json, data files and a tweak's modules). */
 function updateEnabledToggle(): void {
     const script = typingsShown ? undefined : scripts.find((s) => s.id === selectedId);
-    toolbar.enabled = !script || script.meta.active === false ? null : !!script.enabled;
+    toolbar.enabled = script?.role !== "entry" ? null : !!script.enabled;
 }
 
 /** ⇧⌘E: show the explorer and put the focus in it */
@@ -531,7 +531,7 @@ async function createItem(kind: NewKind, path: string): Promise<void> {
         if (ok) status(`"${path}/" is a new tweak — its package.json names it; share the folder (or Export Package…)`);
     } else if (kind === "script") {
         const id = uuid();
-        await send({ type: "saveScript", id, code: STARTER_TEMPLATE, name: path });
+        await send({ type: "saveScript", id, code: NEW_MODULE, name: path });
         await refresh();
         select(id);
         editor?.focus();
@@ -1804,7 +1804,7 @@ async function exportBundle(): Promise<void> {
         title: "Export",
         intro: "Pick what goes into the zip. It's laid out like the scripts folder: scripts and data files by path, and settings.json with TangiTweak's own settings. Each tweak's settings and saved data (its data folder) stay out unless you include them.",
         items: [
-            ...scripts.map((s) => ({ path: scriptFileName(s.meta.name), kind: "script" as const, badge: s.meta.active !== false && !s.enabled ? "disabled" : undefined })),
+            ...scripts.map((s) => ({ path: scriptFileName(s.meta.name), kind: "script" as const, badge: s.role === "entry" && !s.enabled ? "disabled" : undefined })),
             ...dataFiles.map((d) => ({ path: d.path, kind: "data" as const })),
             { path: SETTINGS_FILE, kind: "settings" as const, detail: "TangiTweak's own settings" },
             ...(tweakFiles.length
@@ -1847,21 +1847,14 @@ const saveImported = async (item: { code: string; name?: string; enabled?: boole
     await send({ type: "saveScript", id: existing?.id ?? uuid(), code: item.code, name: item.name, enabled: item.enabled });
 };
 const existsBadge = (name?: string) => (name && scripts.some((s) => scriptFileKey(s.meta.name) === scriptFileKey(name)) ? "replaces existing" : "new");
-/** Import…: a zip (pick what of it to import) or a single script file */
+/** Import…: a zip (pick what of it to import) */
 function importBundle(): void {
     const input = document.createElement("input");
     input.type = "file";
-    input.accept = ".zip,.ts,.tsx,.js";
+    input.accept = ".zip";
     input.onchange = async () => {
         const file = input.files?.[0];
-        if (!file) return;
-        if (/\.zip$/i.test(file.name)) return void (await importZip(file));
-        const text = await file.text();
-        const base = cleanScriptName(file.name.replace(/\.ts$/i, "")) || "Imported script";
-        const name = uniqueScriptName(base, scripts.map((s) => s.meta.name));
-        await send({ type: "saveScript", id: uuid(), code: text, name });
-        status("imported script ✓");
-        await refresh();
+        if (file) await importZip(file);
     };
     input.click();
 }

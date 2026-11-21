@@ -2,8 +2,8 @@
  * saveScript resilience: when the MV3 sandbox compile RPC fails
  * (compileForStorage → the "sandbox compile failed" sentinel), the stored
  * script keeps its PREVIOUS meta/paramDefs instead of being corrupted into
- * a utility (𝑓 icon, active: false). A failed toggle/edit must never
- * destroy the script/utility state.
+ * one with no handlers (active: false). A failed toggle/edit must never
+ * destroy the stored routes.
  */
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
@@ -53,7 +53,7 @@ describe("saveScript sandbox-failure resilience", () => {
         compileResult.paramDefs = {};
         compileResult.error = "sandbox compile failed";
         const again = await saveScript({ id, code: "x" });
-        expect(again.meta.active).toBe(true); // not corrupted to a library
+        expect(again.meta.active).toBe(true); // not corrupted to no handlers
         expect(again.meta.name).toBe("Mine"); // name kept
         expect(again.paramDefs?.p).toBeTruthy();
         expect(good.meta.active).toBe(true);

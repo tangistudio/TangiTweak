@@ -1,7 +1,7 @@
 /**
  * Script metadata. A script is ACTIVE when its top-level code registers at
- * least one handler (tweak.onRequest(route, fn), …); a source that registers
- * nothing is a utility module — inert on its own, importable by others.
+ * least one handler (tweak.onRequest(route, fn), …) — a bundle's modules
+ * register nothing on their own; the entry calls into them.
  */
 import { scriptUrls, type RouteMeta } from "./route";
 
@@ -9,7 +9,7 @@ export type { Strategy } from "./route";
 
 export interface ResMeta {
     name: string;
-    /** registered at least one handler at top level (else: utility) */
+    /** registered at least one handler at top level (with its current params) */
     active: boolean;
     routes: RouteMeta[];
     /** union of route urls — badge / "active on this tab" only, never dispatch */

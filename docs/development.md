@@ -255,7 +255,7 @@ pages, and drops blocking `webRequest`):
 - **No `eval` in content scripts (MV3).** The Chrome Web Store allows
   running code that isn't in the package only through `chrome.userScripts`
   and `chrome.debugger`, so `hook.js` and `bridge.js` are built with
-  `__NO_EVAL__` and never compile code. Each onSite script, the library
+  `__NO_EVAL__` and never compile code. Each onSite script, the module
   scripts it imports and its package modules are registered as
   `chrome.userScripts` with `world: "MAIN"` (`tt-main-<id>`,
   `src/shared/siteCode.ts`): each pushes its function onto a queue on the

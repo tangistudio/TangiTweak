@@ -42,7 +42,7 @@ import { showContextMenu } from "./ContextMenu";
 import { NameInput } from "./NameInput";
 import { FileIcon, indent } from "./icons";
 import { isMacPlatform, keyHint } from "../shortcuts";
-import { badgeRowOf, packageOf, packages, packageTitle } from "../state/packages";
+import { packageOf, packages, packageTitle } from "../state/packages";
 import { openInstall } from "../state/dialogs";
 import { tweakFolders } from "../../shared/newTweak";
 import { NEEDS_REWRITE } from "../../shared/tweakBundle";
@@ -315,13 +315,12 @@ function onContextMenu(e: MouseEvent<HTMLUListElement>): void {
     if (!row) return;
     moveFocus(id);
     const script = row.kind === "script" ? explorer.scripts.find((s) => s.id === id) : undefined;
-    const isLib = script?.meta.active === false;
     const pkg = packageOf(row);
     const exportStart = row.kind === "folder" ? packageStartOf(row.path) : undefined;
     showContextMenu(e.clientX, e.clientY, [
         ...(row.kind === "folder" ? expandAllMenuItems([row.path]) : [{ label: "Open", key: "Enter", run: () => open(id) }, null]),
         ...(pkg ? packageMenu(pkg) : []),
-        ...(script && !isLib ? [{ label: script.enabled ? "Disable" : "Enable", run: () => actions.setScriptEnabled(script.id, !script.enabled) }, null] : []),
+        ...(script?.role === "entry" ? [{ label: script.enabled ? "Disable" : "Enable", run: () => actions.setScriptEnabled(script.id, !script.enabled) }, null] : []),
         ...(exportStart ? [{ label: "Export Package…", run: () => actions.exportPackage(exportStart) }, null] : []),
         ...newItemsMenu(targetFolder(row)),
         null,
@@ -428,17 +427,14 @@ export function ExplorerTree() {
     const { dropFolder, handlers } = useDnd();
     const pkgSnap = useSnapshot(packages);
     const pkgByRow = new Map<string, InstalledPackage>();
-    for (const p of Object.values(pkgSnap.byId) as InstalledPackage[]) {
-        const at = badgeRowOf(p);
-        pkgByRow.set("folder" in at ? folderRowId(at.folder) : at.id, p);
-    }
+    for (const p of Object.values(pkgSnap.byId) as InstalledPackage[]) if (p.folder) pkgByRow.set(folderRowId(p.folder), p);
     const localPkgs = localPackageFolders(snap.dataFiles);
     void snap.tweakData; // tweakDataIn reads the store: re-render when the data folder files change
     const { scriptIcons, folderIcons } = resolveWorkspaceIcons(snap.scripts, snap.dataFiles, pkgSnap.byId as Record<string, InstalledPackage>);
     const pkgBadge = (id: string) => {
         const p = pkgByRow.get(id);
         // a package folder's icon says it's a package: its badge is for news only
-        if (!p || (isFolderRowId(id) && !p.pending && !p.lastError)) return null;
+        if (!p || (!p.pending && !p.lastError)) return null;
         return (
             <span
                 className={"pkg-ind" + (p.pending ? " pending" : p.lastError ? " failed" : "")}
@@ -629,15 +625,15 @@ export function ExplorerTree() {
             );
         } else {
             const script = explorer.scripts.find((s) => s.id === r.id)!;
-            const isLib = script.meta.active === false;
-            const off = !isLib && !script.enabled;
+            const tweak = script.role === "entry";
+            const off = tweak && !script.enabled;
             const health = scriptHealth(script);
             const title = [
                 r.depth ? scriptFileName(script.meta.name) : "",
                 script.error?.startsWith(NEEDS_REWRITE)
                     ? script.error
-                    : isLib
-                      ? "Module of a tweak — it runs when the tweak's entry (its package.json's \"main\", else index.ts) imports it; its handlers, params and stores are the tweak's"
+                    : script.role === "module"
+                      ? `Module of ${script.entry ? scriptFileName(script.entry) : "its tweak"} — it runs when that entry imports it; its handlers, params and stores are the tweak's`
                       : script.meta.match.join(", "),
                 off ? "Disabled — enable it from the toolbar or the right-click menu" : "",
                 "Double-click or F2 to rename",
@@ -647,12 +643,11 @@ export function ExplorerTree() {
             items.push(
                 li(
                     r.id,
-                    (isLib ? "" : " handlers") + (off ? " disabled" : ""),
+                    (tweak ? " handlers" : "") + (off ? " disabled" : ""),
                     r.depth,
                     <>
                         <FileIcon kind={isTsxName(script.meta.name) ? "tsx" : "ts"} src={scriptIcons.get(script.id)} />
                         {name(r, baseName(scriptFileName(script.meta.name)), title, health ? " error" : "")}
-                        {pkgBadge(r.id)}
                         {health && (
                             <span
                                 className={`err-ind ${health.kind}`}

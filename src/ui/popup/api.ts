@@ -2,6 +2,7 @@ import { send, sendWake } from "../lib/messaging";
 import { PACKAGES_KEY } from "../../shared/packageModel";
 import type { ParamTree } from "../../shared/scriptDef";
 import type { ScriptHealthInput } from "../../shared/scriptHealth";
+import type { ScriptRole } from "../../shared/tweakBundle";
 
 export interface ScriptInfo {
     id: string;
@@ -11,7 +12,10 @@ export interface ScriptInfo {
     typeErrors?: string[];
     ruleErrors?: string[];
     meta: { name: string; active?: boolean; description?: string };
-    /** when the script is the sole entry of a bundle, the bundle's display name */
+    /** in its tweak bundle: the entry (a tweak: it has the switch), a module of `entry`, or a file outside any bundle */
+    role: ScriptRole["role"];
+    entry?: string;
+    /** an entry's bundle display name */
     bundleName?: string;
     bundleDescription?: string;
     /** resolved `<img src>` URL from script or bundle metadata `icon` */

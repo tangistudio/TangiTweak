@@ -900,7 +900,7 @@ tweak.onOverlay("https://shop.example/*", (ctx) => {
   mirror), and `tweak.onOverlay` (live mirror of the top frame's copy).
   **Not available in any network handler** (`onRequest`, `replaceResponse`,
   `onResponseHeaders`, `onResponseBody` — throws and is flagged in
-  Problems) or inside imported libraries.
+  Problems) or inside imported modules.
 - **Page data.** The site can read it, change it and fake its values, like
   anything else in its world. Check what you read from it before it
   decides what trusted code does, and never put secrets in it.
@@ -1187,7 +1187,7 @@ tweak.onOverlay("*://app.example.com/*", (ctx) => {
   | network handlers | ✗ rejects | ✗ rejects | ✗ rejects |
 
   An `onPage` call to the overlay from an iframe rejects with `only the top
-  frame can call the overlay`. Handles from an imported library don't
+  frame can call the overlay`. Handles from an imported module don't
   connect: register the handler in the script itself.
 - **Calls wait — with no time limit.** A call made before the handler has
   run in that frame (an overlay calling `onPage` code at `document_start`,

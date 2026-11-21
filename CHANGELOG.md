@@ -23,6 +23,7 @@ its section below.
 - **No more `tt-api.d.ts`** at the root of the synced folder: each tweak's `tsconfig.json` extends the SDK's, whose `index.d.ts` has the same typings. The one TangiTweak wrote is removed; one you wrote yourself stays.
 - **No more `settings.schema.json`** in the synced folder. The one TangiTweak wrote is removed; `settings.json` still gets completions and validation in the Editor.
 - **The Explorer folds a tweak's stores** under one `.tweak/stores` row, closed until you open it (click, Enter or →); opening a store from elsewhere opens the row.
+- **The popup lists tweaks, not their modules**, and the Explorer's tooltip on a module names its tweak's entry. **New Module…** starts from a small importable module instead of a whole script, the Welcome page's **New empty tweak** makes a tweak, and **Import…** takes zips only.
 
 ### Fixed
 
@@ -30,10 +31,12 @@ its section below.
 - **Two browsers syncing one folder** no longer rewrite `.tweak/stores/*.json` back and forth forever (`changed on disk — applied` every few seconds): a file holding the same data in another key order isn't rewritten.
 - **Bare imports type-check in the Editor**: `import { zip } from "fflate"` in a tweak with `fflate` in its `package.json` `dependencies` gets the package's types instead of `Cannot find module 'fflate'`. Range dependencies like `^0.8.2` now get typings too.
 - **The Editor no longer checks a tweak's `.gitignore` as JSON** (`Expected a JSON object, array or literal`).
+- **A tweak whose handlers depend on its params** (e.g. `if (params.on) tweak.onPage(…)`) keeps its enable switch in the popup, Editor and Explorer while they're off, instead of turning into a 𝑓 library.
 
 ### Removed
 
 - **URL imports** (`import x from "https://unpkg.com/x@1.2.3"`) are no longer supported: list packages in the tweak's `package.json` `dependencies` and import them by name. Such an import is now a compile error that the Editor and ESLint mark. The pin-the-version quick fix and Preact via `@jsxImportSource https://unpkg.com/preact@…` go with them.
+- **The 𝑓 library marker** and the last single-file paths: a script with no handlers is a module of its tweak, and installed packages always have one entry in their own folder.
 
 ## [0.40.1-alpha] - 2026-11-21
 

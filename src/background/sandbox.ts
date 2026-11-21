@@ -43,7 +43,7 @@ import { ensureBuiltins } from "../shared/builtins";
  * Environment parity with the MV2 background page: sandboxed pages get NO
  * chrome.* APIs, but MV2 scripts compile in a page where chrome exists.
  * A script touching chrome before registering its handlers would die
- * inside its own try/catch and silently compile as a utility (𝑓) — so
+ * inside its own try/catch and silently compile with no handlers — so
  * the sandbox provides a minimal chrome/browser shim (metadata + in-memory
  * storage; reverse-channel ops like tweak.storage still go over postMessage
  * via the tweak shim, NOT this one).
@@ -220,7 +220,7 @@ function ensureCompiled(scripts: PlainScript[], paramValues: Record<string, any>
     );
     // unknown/missing imports resolve to silent stubs — a script whose
     // import fails must still run its body so its handlers register
-    // (otherwise it silently stores as a utility: 𝑓 icon, never matches).
+    // (otherwise it silently stores with no handlers and never matches).
     // A data file or package that fails to import is the importer's compile error.
     const resolveImport = (importer: string) => (spec: string): any => {
         try {

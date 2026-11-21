@@ -1,5 +1,5 @@
 /**
- * Browser-action popup: list scripts, toggle them, edit their parameters
+ * Browser-action popup: list the tweaks (bundle entries), toggle them, edit their parameters
  * inline, open the full manager on a specific script.
  */
 import { scriptHealth } from "../../shared/scriptHealth";
@@ -51,10 +51,8 @@ export function Popup({ api }: { api: PopupApi }) {
         };
     }, []);
 
-    // utilities (no handlers) appear only when they declare params — a
-    // param value may turn one into a script (handlers registered under
-    // `if (p.on)`), and imported helpers may read them
-    const visible = load.state === "ready" ? load.scripts.filter((s) => s.meta.active !== false || hasParams(s)) : [];
+    // a tweak is its bundle's entry: its modules (and files outside a bundle) have no switch or params of their own
+    const visible = load.state === "ready" ? load.scripts.filter((s) => s.role === "entry") : [];
     const nActive = visible.filter((s) => active.has(s.id)).length;
 
     return (
@@ -77,8 +75,8 @@ export function Popup({ api }: { api: PopupApi }) {
                 ))}
             </ul>
             {load.state === "error" && <div id="empty">Could not reach the extension — close and reopen the popup.</div>}
-            {load.state === "ready" && load.scripts.length === 0 && (
-                <div id="empty">No scripts yet — open the Editor to create one.</div>
+            {load.state === "ready" && visible.length === 0 && (
+                <div id="empty">No tweaks yet — open the Editor to create one.</div>
             )}
             <ResizeGrip api={api} />
         </>
@@ -93,28 +91,20 @@ function ScriptRow({ script, api, onChanged, version, activeHere }: { script: Sc
     const [open, setOpen] = useState(false);
     const [iconBroken, setIconBroken] = useState(false);
     useEffect(() => setIconBroken(false), [script.iconUrl]);
-    const isLib = script.meta.active === false;
     const health = scriptHealth(script);
     const icon = script.iconUrl && !iconBroken ? script.iconUrl : undefined;
     const desc = script.bundleDescription;
     return (
         <>
-            <li className={"script-item" + (isLib ? " utility" : "") + (activeHere ? " active-here" : "")}>
-                {isLib ? (
-                    // utilities have no enabled switch (same as the manager / settings.json)
-                    <span className="util-ind" role="img" aria-label="library" title="Library — registers no handlers with its current params; importable by other scripts">
-                        𝑓
-                    </span>
-                ) : (
-                    <Switch
-                        on={script.enabled}
-                        title={script.enabled ? "Disable" : "Enable"}
-                        onToggle={async (next) => {
-                            await api.setEnabled(script.id, next);
-                            onChanged();
-                        }}
-                    />
-                )}
+            <li className={"script-item" + (activeHere ? " active-here" : "")}>
+                <Switch
+                    on={script.enabled}
+                    title={script.enabled ? "Disable" : "Enable"}
+                    onToggle={async (next) => {
+                        await api.setEnabled(script.id, next);
+                        onChanged();
+                    }}
+                />
                 <span
                     className="active-ind"
                     role="img"

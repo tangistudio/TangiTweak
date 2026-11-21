@@ -1,6 +1,7 @@
 import { proxy, ref } from "valtio";
 import { allFolders, ancestorFolders, isInFolder } from "../../shared/folders";
 import type { ScriptHealthInput } from "../../shared/scriptHealth";
+import type { ScriptRole } from "../../shared/tweakBundle";
 import type { Script } from "../../background/engine/scriptStore";
 import type { DataFile } from "../../background/engine/dataFiles";
 import { explorerTree, folderRowId, idRange, targetFolder, topLevelRows, type TreeRow } from "../explorerTree";
@@ -20,7 +21,7 @@ export const tweakStoresRootOf = (id: string): string => id.slice(TWEAK_STORES.l
 /** rows that aren't tree items (no selecting, moving, renaming): settings.json and the tweaks' data folder files */
 export const isVirtualRootId = (id: string | null | undefined): boolean => id === SETTINGS_ID || isTweakDataId(id) || isTweakStoresId(id);
 
-export type ExplorerScript = Script & Partial<ScriptHealthInput> & { routeWarnings?: string[] };
+export type ExplorerScript = Script & Partial<ScriptHealthInput> & { routeWarnings?: string[] } & Partial<Pick<ScriptRole, "role" | "entry">>;
 export type NewKind = "script" | "data" | "folder" | "tweak";
 export type MenuItem = { label: string; key?: string; run: () => void } | null;
 

@@ -17,7 +17,7 @@ The file of a tweak that runs: `package.json`'s `main`, else `index.ts`, else `i
 _Avoid_: main script, root script
 
 **Module**:
-A file of a tweak other than its entry; it runs only when imported, and what it registers belongs to the tweak.
+A file of a tweak other than its entry; it runs only when imported, and what it registers belongs to the tweak. It has no enable switch or params of its own and isn't listed in the popup.
 _Avoid_: library, utility, lib, helper
 
 **Script**:

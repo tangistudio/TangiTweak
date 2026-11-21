@@ -1,6 +1,6 @@
 /** installed packages (see shared/packageModel), kept live for the Explorer */
 import { proxy, ref } from "valtio";
-import { entryIds, PACKAGES_KEY, packageName, updateSource, type InstalledPackage } from "../../shared/packageModel";
+import { PACKAGES_KEY, packageName, updateSource, type InstalledPackage } from "../../shared/packageModel";
 import { parseSource, sourceLabel } from "../../shared/packageSource";
 import { fetchFrom, packagesApi } from "../install/api";
 
@@ -13,8 +13,6 @@ export function packageOf(row: { kind: string; id: string; path: string }): Inst
     return all.find((p) => Object.values(p.files).some((f) => f.id === row.id));
 }
 
-/** the row that carries a package's badge: its folder, or (a single file) its entry */
-export const badgeRowOf = (p: InstalledPackage): { folder: string } | { id: string } => (p.folder ? { folder: p.folder } : { id: entryIds(p)[0] });
 
 const labelOf = (url: string) => {
     const src = parseSource(url);

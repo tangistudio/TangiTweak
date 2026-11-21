@@ -60,7 +60,7 @@ export interface CompiledScript {
     code: string;
     /** parameter definitions collected from tweak.params (if any) */
     paramDefs?: ParamTree;
-    /** the module's exports (utility scripts: importable by others) */
+    /** the module's exports (importable by other scripts) */
     exports?: any;
 }
 
@@ -177,8 +177,9 @@ export function toRunnableJs(code: string): string {
 
 /**
  * Compile from full source. A script is ACTIVE when its top level
- * registers at least one handler; one that registers nothing compiles as
- * a utility module (exports importable, params allowed).
+ * registers at least one handler; one that registers nothing (a module,
+ * or an entry whose handlers are off for its current params) compiles
+ * inactive (exports importable, params allowed).
  */
 export function compileScript(code: string, overrides?: ResApiOverrides): CompiledScript {
     const meta = defaultMeta();
@@ -547,7 +548,7 @@ export function makeModuleResolver(
  * Meta-only compile of one script against the stored scripts (save time):
  * imports resolve to the REAL libraries where a script by that name exists
  * — params/routes built from imported values (e.g. a param definition
- * exported by a utility) are captured — and to silent stubs otherwise.
+ * exported by a module) are captured — and to silent stubs otherwise.
  * `target` replaces any stored script with the same id.
  */
 export function compileWithLibs(
@@ -595,7 +596,7 @@ export function compileManyWithLibs(
  * stub instead of throwing. Used by the MV3 sandbox analyze path (and
  * anywhere meta capture must not depend on the import graph): a script
  * whose `import` fails must still run its body so its registrations
- * and params are captured — otherwise it silently stores as a utility.
+ * and params are captured — otherwise it silently stores with no handlers.
  * A data file or package that fails to import is still the importer's error.
  */
 export function resolveWithStubFallback(resolve: (spec: string) => any): (spec: string) => any {
@@ -631,7 +632,7 @@ function makeForwardingConsole(sink?: ResApiOverrides["logSink"]): Console {
 
 /**
  * The collector stack: registrations go to the script whose top level is
- * running right now (recipes exported by a utility and called from an
+ * running right now (recipes exported by a module and called from an
  * importer's top level belong to the importer). Empty = too late.
  */
 const collectors: ScriptHandlers[] = [];

@@ -225,8 +225,8 @@ export interface StorageCompileContext {
 /**
  * Compile a saved script for storage: meta + paramDefs (saveScript path).
  * Imports resolve against the stored scripts in `ctx` (so e.g. a param
- * definition imported from a utility is captured with its real type);
- * imports with no matching (or a broken) library resolve to inert stubs —
+ * definition imported from a module is captured with its real type);
+ * imports with no matching (or a broken) module resolve to inert stubs —
  * routes built from those come out empty until the reload-time analyze.
  * Package URLs it imports are downloaded first.
  */

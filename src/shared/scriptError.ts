@@ -78,7 +78,7 @@ export function formatScriptError(name: string, e: any, context?: string): strin
  * The user-source line of the outermost script frame on the current stack:
  * the line in the script's top level that made the current call (for
  * `tweak.onRequest(…)`, its registration — also when a recipe from an imported
- * utility registered it). Firefox may not name `new Function` frames by
+ * module registered it). Firefox may not name `new Function` frames by
  * their sourceURL: there they read `… > Function:L:C`.
  */
 export function callerLine(): number | undefined {

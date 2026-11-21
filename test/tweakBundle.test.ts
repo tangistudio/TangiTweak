@@ -5,7 +5,7 @@
  */
 import { describe, it, expect, beforeEach } from "vitest";
 import "../src/shared/transpile";
-import { bareImport, bundleOf, bundleRole, dataReader, dependenciesOf, entryName, gateCompiled, NEEDS_REWRITE, versionProblem } from "../src/shared/tweakBundle";
+import { bareImport, bundleOf, bundleRole, dataReader, dependenciesOf, entryName, gateCompiled, NEEDS_REWRITE, scriptRoles, versionProblem } from "../src/shared/tweakBundle";
 import { bundlePkg } from "./bundleHelper";
 
 const store: Record<string, any> = {};
@@ -55,6 +55,24 @@ describe("bundles", () => {
         expect(solo.role === "rewrite" && solo.reason).toMatch(/^Needs a rewrite: single-file scripts no longer load/);
         const old = bundleRole("old/a", names, r);
         expect(old.role === "rewrite" && old.reason).toMatch(/^Needs a rewrite: old\/metadata\.json bundles no longer load/);
+    });
+
+    it("lists each script's role for the UI, with an entry's bundle name", () => {
+        const scripts = [
+            { id: "s1", meta: { name: "redwood/index.tsx" } },
+            { id: "s2", meta: { name: "redwood/shared/lib" } },
+            { id: "s3", meta: { name: "unnamed/index" } },
+            { id: "s4", meta: { name: "solo" } },
+        ];
+        const dataFiles = [
+            { path: "redwood/package.json", text: JSON.stringify({ name: "redwood", description: "Atlas tools", tangitweak: { displayName: "Redwood Devtools" } }) },
+            { path: "unnamed/package.json", text: JSON.stringify({ tangitweak: {} }) },
+        ];
+        const roles = scriptRoles(scripts, dataFiles);
+        expect(roles.get("s1")).toEqual({ role: "entry", bundleName: "Redwood Devtools", bundleDescription: "Atlas tools" });
+        expect(roles.get("s2")).toEqual({ role: "module", entry: "redwood/index.tsx" });
+        expect(roles.get("s3")).toEqual({ role: "entry", bundleName: "unnamed" });
+        expect(roles.get("s4")).toEqual({ role: "rewrite" });
     });
 
     it("checks the extension's version against dependencies.tangitweak (minimum only; a missing one is fine)", () => {
@@ -137,7 +155,7 @@ describe("New Tweak…", () => {
         const pkg = JSON.parse(files["tools/My Tweak/package.json"]);
         expect(pkg).toMatchObject({ name: "my-tweak", version: "1.0.0", tangitweak: { displayName: "My Tweak" }, dependencies: { tangitweak: "^0.40.0-alpha" } }); // the running version_name
         expect(minTangiTweakOf(pkg)).toBe("0.40.0-alpha");
-        expect(parseManifest(files["tools/My Tweak/package.json"])).toMatchObject({ name: "My Tweak", packageName: "my-tweak", scripts: ["index.ts"] });
+        expect(parseManifest(files["tools/My Tweak/package.json"])).toMatchObject({ name: "My Tweak", packageName: "my-tweak" });
         expect(JSON.parse(files["tools/My Tweak/tsconfig.json"])).toEqual({ extends: "tangitweak/tsconfig.json" });
         expect(files["tools/My Tweak/.gitignore"].split("\n")).toEqual(["node_modules/", ".tweak/", ""]);
         expect(entry.name).toBe("tools/My Tweak/index");

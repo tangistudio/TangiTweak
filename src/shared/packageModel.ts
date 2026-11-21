@@ -9,8 +9,7 @@
  */
 import type { Capabilities } from "./packageCaps";
 import { MANIFEST_FILE, parseManifest, type PackageMetadata } from "./packageMetadata";
-import { ENTRY_FILE_RE } from "./packageSource";
-import { folderOf, isDataSpec, resolveIconSrc } from "./scriptImports";
+import { isDataSpec, resolveIconSrc } from "./scriptImports";
 import { scriptFileKey } from "./scriptName";
 
 export const PACKAGES_KEY = "wtPackages"; // the extension's former name (Wiretrick): kept so stored data survives
@@ -18,7 +17,7 @@ export const PACKAGES_KEY = "wtPackages"; // the extension's former name (Wiretr
 /** what a package is at one revision: its files' texts */
 export interface PackageVersion {
     revision: string;
-    /** its entry's path among `files` (package.json's `main`, else index.ts / index.tsx) */
+    /** `[its entry's path]` among `files` (package.json's `main`, else index.ts / index.tsx) — a list: the stored shape */
     entries: string[];
     files: Record<string, string>;
     metadata: PackageMetadata;
@@ -46,7 +45,7 @@ export interface InstalledPackage {
     id: string;
     /** where it was installed from, as given (parseSource reads it); "" = local files. metadata.updateURL overrides it for updates (see updateSource) */
     source: string;
-    /** the folder its files went into; "" = the root (a single file) */
+    /** the folder its files went into */
     folder: string;
     entries: string[];
     revision: string;
@@ -78,45 +77,29 @@ export function storeItemOf(folder: string, rel: string): { kind: "script" | "da
     return { kind: "script", name: join(folder, rel).replace(/\.ts$/i, "") };
 }
 
-/** an entry's file name without `.tangitweak.ts` */
-export const entryStem = (entry: string): string => entry.replace(/^.*\//, "").replace(ENTRY_FILE_RE, "").replace(/\.tsx?$/i, "");
-
-/** a package's display name: its package.json's displayName (else name), else its entry's file name */
-export function packageName(p: { entries: string[]; metadata: Pick<PackageMetadata, "name"> }): string {
-    return p.metadata.name || entryStem(p.entries[0] ?? "") || "package";
+/** a package's display name: its package.json's displayName (else name), else its folder */
+export function packageName(p: { folder: string; metadata: Pick<PackageMetadata, "name"> }): string {
+    return p.metadata.name || p.folder || "package";
 }
 
-/** the store id of a package's entries */
+/** the store id of a package's entry */
 export const entryIds = (p: Pick<InstalledPackage, "entries" | "files">): string[] => p.entries.flatMap((e) => (p.files[e] ? [p.files[e].id] : []));
 
-/** the natural folder name a multi-file package wants (`""` for a single file), before collision numbering */
-export function naturalPackageFolder(p: { entries: string[]; files: Record<string, string>; bundleName?: string }): string {
-    if (Object.keys(p.files).length === 1) return "";
-    return (p.bundleName || entryStem(p.entries[0] ?? "")).replace(/[\\/:*?"<>|]+/g, "-").replace(/^[\s.]+|[\s.]+$/g, "") || "package";
+/** the folder name a package wants (its package.json's name), before collision numbering */
+export function naturalPackageFolder(bundleName: string | undefined): string {
+    return (bundleName ?? "").replace(/[\\/:*?"<>|]+/g, "-").replace(/^[\s.]+|[\s.]+$/g, "") || "package";
 }
 
 /**
  * Where a package installs: a folder named after its package.json's
- * `name` (or the entry), then `dark (2)/`… past what's `taken`
- * — script names, data paths and folders.
+ * `name`, then `dark (2)/`… past what's `taken` — script names, data
+ * paths and folders.
  */
-export function packageFolder(p: { entries: string[]; files: Record<string, string>; bundleName?: string }, taken: string[]): string {
-    const stem = naturalPackageFolder(p);
-    if (!stem) return "";
+export function packageFolder(bundleName: string | undefined, taken: string[]): string {
+    const stem = naturalPackageFolder(bundleName);
     const keys = new Set(taken.map((t) => scriptFileKey(t.split("/")[0])));
     if (!keys.has(scriptFileKey(stem))) return stem;
     for (let i = 2; ; i++) if (!keys.has(scriptFileKey(`${stem} (${i})`))) return `${stem} (${i})`;
-}
-
-/** a root single-file entry's name past the `taken` ones: `x.tangitweak` → `x (2).tangitweak` (still an entry) */
-export function uniqueEntryName(name: string, taken: string[]): string {
-    const keys = new Set(taken.map(scriptFileKey));
-    if (!keys.has(scriptFileKey(name))) return name;
-    const m = /^(.*?)(\.tangitweak(?:\.tsx)?)?$/i.exec(name)!;
-    for (let i = 2; ; i++) {
-        const next = `${m[1]} (${i})${m[2] ?? ""}`;
-        if (!keys.has(scriptFileKey(next))) return next;
-    }
 }
 
 /** the package files whose store item is gone, renamed or edited since it was installed */
@@ -130,47 +113,9 @@ export function modifiedFiles(pkg: Pick<InstalledPackage, "files">, current: (f:
 }
 
 /** a bundle's entry script: its `main`, else index.ts, else index.tsx */
-function entryScriptOf<S>(folder: string, manifest: { main?: string; scripts: string[] }, byKey: Map<string, S>): S | undefined {
+function entryScriptOf<S>(folder: string, manifest: { main?: string }, byKey: Map<string, S>): S | undefined {
     const at = (rel: string) => byKey.get(scriptFileKey(storeItemOf(folder, rel).name));
-    return at(manifest.scripts[0]) ?? (manifest.main ? undefined : at("index.tsx"));
-}
-
-/**
- * For each bundle (`<folder>/package.json`) or installed folder package
- * (`pkg.folder !== ""`) with a single entry script, map that script's id to
- * the bundle's display name (and description fallback) for the popup menu.
- */
-export function singleScriptBundles(
-    scripts: readonly { id: string; meta: { name: string; active?: boolean } }[],
-    dataFiles: readonly { path: string; text: string }[] = [],
-    installed: Record<string, InstalledPackage> = {}
-): Map<string, { name: string; description?: string }> {
-    const out = new Map<string, { name: string; description?: string }>();
-    const byKey = new Map(scripts.map((s) => [scriptFileKey(s.meta.name), s]));
-    const manifestFolders = new Set<string>();
-    for (const d of dataFiles) {
-        if (!d.path.toLowerCase().endsWith("/" + MANIFEST_FILE)) continue;
-        const folder = d.path.slice(0, -MANIFEST_FILE.length - 1);
-        if (!folder) continue;
-        manifestFolders.add(folder.toLowerCase());
-        let manifest;
-        try {
-            manifest = parseManifest(d.text);
-        } catch {
-            continue;
-        }
-        const s = entryScriptOf(folder, manifest, byKey);
-        if (!s) continue;
-        out.set(s.id, { name: manifest.name || folder, description: manifest.description });
-    }
-    for (const pkg of Object.values(installed)) {
-        if (!pkg.folder || manifestFolders.has(pkg.folder.toLowerCase()) || pkg.entries.length !== 1) continue;
-        const ids = entryIds(pkg);
-        if (ids.length === 1 && scripts.some((s) => s.id === ids[0])) {
-            out.set(ids[0], { name: packageName(pkg), description: pkg.metadata.description });
-        }
-    }
-    return out;
+    return manifest.main ? at(manifest.main) : (at("index.ts") ?? at("index.tsx"));
 }
 
 /**
@@ -221,7 +166,7 @@ export function resolveWorkspaceIcons(
  * against the package's own `files` (plus optional fallback `extraDataFiles`).
  */
 export function resolvePackageIcon(
-    pkg: { entries: string[]; files: Record<string, string>; metadata?: Pick<PackageMetadata, "icon"> },
+    pkg: { files: Record<string, string>; metadata?: Pick<PackageMetadata, "icon"> },
     extraDataFiles: readonly { path: string; text: string }[] = []
 ): string | undefined {
     const pkgData = [
@@ -231,8 +176,7 @@ export function resolvePackageIcon(
         ...extraDataFiles,
     ];
     if (pkg.metadata?.icon) {
-        const base = pkg.files[MANIFEST_FILE] !== undefined ? "" : folderOf(pkg.entries[0] ?? "");
-        const resolved = resolveIconSrc(pkg.metadata.icon, base, pkgData);
+        const resolved = resolveIconSrc(pkg.metadata.icon, "", pkgData);
         if (resolved) return resolved;
     }
     return undefined;

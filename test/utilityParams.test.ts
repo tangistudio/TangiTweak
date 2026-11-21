@@ -1,8 +1,7 @@
 /**
- * Utility scripts (no handlers at top level) with params: their params are
- * editable (popup / the data folder's settings.json), and a param value may make them
- * register handlers — changing it must turn the utility into a script
- * (stored meta, reload) and back.
+ * An entry whose handlers are gated by a param: its params are editable
+ * (popup / the data folder's settings.json), and changing the param must
+ * give it its routes (stored meta, reload) and take them back.
  */
 import { describe, it, expect, beforeEach } from "vitest";
 import "../src/shared/transpile";
@@ -41,7 +40,7 @@ describe("tweaks whose params gate their handlers", () => {
         await seedBundle("gate");
     });
 
-    it("stores a param-gated library as a library with its paramDefs", async () => {
+    it("stores a param-gated entry with no routes and its paramDefs", async () => {
         const s = await saveScript({ id: "g", name: "gate/index", code: GATE });
         expect(s.error).toBeNull();
         expect(s.meta.active).toBe(false);

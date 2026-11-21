@@ -15,7 +15,7 @@ function memoryStorage(): Storage {
     };
 }
 
-const script = (id: string, name: string, extra: Record<string, unknown> = {}): any => ({ id, code: "", enabled: true, meta: { name, match: ["*://example.com/*"], active: true }, ...extra });
+const script = (id: string, name: string, extra: Record<string, unknown> = {}): any => ({ id, code: "", enabled: true, meta: { name, match: ["*://example.com/*"], active: true }, role: "entry", ...extra });
 const data = (id: string, path: string): any => ({ id, path, text: "{}" });
 
 /** mock/ (beta, limits.json, deep/ (gamma)), empty/, alpha, delta */
@@ -168,6 +168,18 @@ describe("explorer tree", () => {
         expect([...s.explorer.sel]).toEqual(["s_b"]);
         act(() => void fireEvent.click(row("dir:empty")));
         expect(row("dir:empty").getAttribute("aria-expanded")).toBe("false");
+    });
+
+    it("a module has no Enable/Disable and names its entry; an entry keeps them with no handlers for its current params", async () => {
+        const mod = script("s_b", "mock/beta", { role: "module", entry: "mock/index" });
+        const { row } = await mount({ scripts: [script("s_a", "alpha", { meta: { name: "alpha", match: [], active: false } }), mod] });
+        const items = () => [...document.querySelectorAll(".ctx-menu li")].map((l) => l.textContent);
+        act(() => void fireEvent.contextMenu(row("s_b"), { clientX: 10, clientY: 10 }));
+        expect(items()).not.toContain("Disable");
+        expect(row("s_b").querySelector(".script-name")!.getAttribute("title")).toContain("Module of mock/index.ts");
+        act(() => void fireEvent.keyDown(document, { key: "Escape" }));
+        act(() => void fireEvent.contextMenu(row("s_a"), { clientX: 10, clientY: 10 }));
+        expect(items()).toContain("Disable");
     });
 
     it("right-click shows the row's menu; a menu item runs and closes it", async () => {

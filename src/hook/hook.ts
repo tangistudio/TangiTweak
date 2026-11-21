@@ -108,7 +108,7 @@ import { watchCall, type CallWatch } from "../shared/callWatch";
         for (const l of libSources) if (l.fk && !units.get(l.fk)) out.push(l.name);
         return out;
     }
-    /** a script's or library's function (`fk`: its unit, MV3) */
+    /** a script's or imported module's function (`fk`: its unit, MV3) */
     function scriptFn(name: string, src: string, fk?: string): ScriptFn {
         if (!__NO_EVAL__) return scriptFunction(src, name);
         const fn = fk ? units!.get(fk) : undefined;
@@ -345,7 +345,7 @@ import { watchCall, type CallWatch } from "../shared/callWatch";
         compiled = true;
         // MV3 with user scripts off: none of it is here (calls say why, answerCall)
         if (domHandlers.length === 0 || siteOff !== null) return;
-        // module registry over the shipped library sources and data files:
+        // module registry over the shipped module sources and data files:
         // the page-side `require` backing ES imports ("./utils" → the script
         // named utils, "./a.json" → the data file)
         // the tweak whose top level runs: its modules run with its `tweak` (their handlers, params and stores are its own)
@@ -499,7 +499,7 @@ import { watchCall, type CallWatch } from "../shared/callWatch";
         return makePageShim({
             params,
             exposer,
-            // a library's (scriptId null): what its functions register while a script's top level runs is the script's
+            // an imported module's (scriptId null): what its functions register while a script's top level runs is the script's
             lib: scriptId ? undefined : name,
             siteStore: scriptId ? (n, initial) => siteStores.store(scriptId, n, initial) : undefined,
             // a handle call in onSite code: a runtime Problem at the call (once per script and page)

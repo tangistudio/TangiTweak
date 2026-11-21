@@ -69,7 +69,7 @@ describe("script API", () => {
         expect(compileScript(`import { tweak } from "tangitweak"; tweak.defineParam("a", { type: "number" });`).error).toMatch(/tweak\.defineParam is not a function/);
     });
 
-    it("a script without handlers is a library (params allowed)", () => {
+    it("a script without handlers compiles inactive (params allowed)", () => {
         const c = compileScript(`import { tweak } from "tangitweak"; tweak.params({ n: { type: "number", default: 2 } });\nexport const helper = () => 42;`);
         expect(c.error).toBeNull();
         expect(c.meta.active).toBe(false);

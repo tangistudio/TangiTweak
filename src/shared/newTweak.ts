@@ -19,6 +19,14 @@ tweak.onPage({ url: "*://*.example.com/*" }, () => {
 });
 `;
 
+/** New Module…: a file of the tweak the entry imports */
+export const NEW_MODULE = `// A module of this tweak: it runs when the entry imports it
+// (import { label } from "./this-file"); what it registers is the tweak's.
+export function label(text: string): string {
+    return \`[tweak] \${text}\`;
+}
+`;
+
 /** an npm package name made out of a folder's name ("My Tweak" → "my-tweak") */
 export function packageNameOf(folder: string): string {
     const base = folder.slice(folder.lastIndexOf("/") + 1);

@@ -58,13 +58,11 @@ describe("package metadata", () => {
             connect: ["x.com"],
             minTangiTweakVersion: "0.40.0-alpha",
             dependencies: { tangitweak: "^0.40.0-alpha", dayjs: "^1.11.0", events: "npm:events@^3" },
-            scripts: ["index.ts"],
         });
         // the npm name when there's no displayName; `main` names the entry
         const n = parseManifest(pkg({ name: "dark", main: "./src/main.tsx", tangitweak: {} }));
         expect(n.name).toBe("dark");
         expect(n.main).toBe("src/main.tsx");
-        expect(n.scripts).toEqual(["src/main.tsx"]);
         expect(isBundlePackageJson(pkg({ name: "x", tangitweak: {} }))).toBe(true);
         expect(isBundlePackageJson(pkg({ name: "x" }))).toBe(false);
         expect(isBundlePackageJson("{")).toBe(false);

@@ -59,7 +59,7 @@ export function describeCapabilities(c: Capabilities): { text: string; risk: Ris
     if (c.overlay) out.push({ text: "Draws an overlay over pages", risk: "low" });
     if (c.connect.length) out.push({ text: `Connects to ${c.connect.join(", ")}`, risk: "low" });
     if (c.packages.length) out.push({ text: `Imports ${c.packages.join(", ")} from npm`, risk: "low" });
-    if (!out.length) out.push({ text: "Registers no handlers (a library)", risk: "low" });
+    if (!out.length) out.push({ text: "Registers no handlers with its current settings", risk: "low" });
     const rank: Record<Risk, number> = { high: 0, medium: 1, low: 2 };
     return out.sort((a, b) => rank[a.risk] - rank[b.risk]);
 }

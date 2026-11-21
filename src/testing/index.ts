@@ -1619,11 +1619,7 @@ export async function loadTweak(source: TweakSource, options: LoadTweakOptions =
 
     const tweak: LoadedTweak = {
         manifest: ws.manifest,
-        get metadata() {
-            if (!ws.manifest) return undefined;
-            const { scripts: _, ...m } = ws.manifest;
-            return m;
-        },
+        metadata: ws.manifest,
         get capabilities() {
             const routes = entryScripts.flatMap((s) => compiledMap.get(s.id)?.meta.routes || []);
             return capabilitiesOf(

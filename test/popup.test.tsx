@@ -33,45 +33,34 @@ const script = (id: string, name: string, extra: Partial<ScriptInfo> = {}): Scri
     enabled: true,
     error: null,
     meta: { name, active: true },
+    role: "entry",
     ...extra,
 });
 
 const names = (c: Element) => [...c.querySelectorAll("#script-list .script-name")].map((n) => n.textContent);
 
 describe("Popup", () => {
-    it("lists active scripts and hides libraries without params", async () => {
-        const { container } = render(<Popup api={fakeApi([script("a", "Alpha"), script("l", "lib", { meta: { name: "lib", active: false } })])} />);
+    it("lists the tweaks (bundle entries), not their modules", async () => {
+        const mod = script("m", "t/lib", { meta: { name: "t/lib", active: true }, role: "module", entry: "t/index" });
+        const { container } = render(<Popup api={fakeApi([script("a", "Alpha"), mod, script("r", "solo", { role: "rewrite" })])} />);
         await waitFor(() => expect(names(container)).toEqual(["Alpha"]));
         expect(container.querySelector("#empty")).toBeNull();
     });
 
-    it("lists libraries that declare params, without an enabled switch, with editable params", async () => {
+    it("keeps an entry's switch while its current params register no handlers", async () => {
         const defs = { on: { type: "boolean", default: false, description: "Turn interception on" } } as any;
-        let values: any = { on: false };
-        const util = (active: boolean) => script("u", "gate", { meta: { name: "gate", active }, paramDefs: defs });
-        const api = fakeApi([script("a", "Alpha"), util(false)]);
+        const values: any = { on: false };
+        const api = fakeApi([script("a", "Alpha"), script("g", "gate", { meta: { name: "gate", active: false }, paramDefs: defs })]);
         api.getParams = vi.fn(async () => ({ defs, values }));
-        let fire = () => {};
-        api.onChange = (fn) => ((fire = fn), () => {});
         const { container } = render(<Popup api={api} />);
         await waitFor(() => expect(names(container)).toEqual(["Alpha", "gate"]));
-        const row = () => container.querySelectorAll("#script-list .script-item")[1];
-        expect(row().classList.contains("utility")).toBe(true);
-        expect(row().querySelector(".switch")).toBeNull();
-        expect(row().querySelector(".util-ind")).not.toBeNull();
+        const row = container.querySelectorAll("#script-list .script-item")[1];
+        expect(row.querySelector(".switch.on")).not.toBeNull();
 
-        fireEvent.click(row().querySelector(".btn-fold")!);
+        fireEvent.click(row.querySelector(".btn-fold")!);
         await screen.findByText("Turn interception on");
         fireEvent.click(container.querySelector(".param-fold .switch")!);
-        expect(api.calls).toContainEqual(["setParam", "u", "on", true]);
-
-        // the extension recompiled it with on=true: it registered handlers → a script
-        values = { on: true };
-        (api.listScripts as any).mockImplementation(async () => [script("a", "Alpha"), util(true)]);
-        fire();
-        await waitFor(() => expect(row().classList.contains("utility")).toBe(false));
-        expect(row().querySelector(".switch.on")).not.toBeNull();
-        expect(container.querySelector(".param-fold .switch.on")).not.toBeNull(); // fold stays open
+        expect(api.calls).toContainEqual(["setParam", "g", "on", true]);
     });
 
     it("marks the scripts counted in the badge for this tab", async () => {
@@ -91,7 +80,7 @@ describe("Popup", () => {
 
     it("shows the empty state", async () => {
         render(<Popup api={fakeApi([])} />);
-        await screen.findByText(/No scripts yet/);
+        await screen.findByText(/No tweaks yet/);
     });
 
     it("shows a reach error when listing fails", async () => {

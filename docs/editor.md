@@ -512,7 +512,7 @@ the build (MV2/MV3), browser, OS, extension ID and the local helper's state.
 **Help…** opens the samples and keyboard shortcuts (the
 editor toolbar's **?**).
 
-**Welcome page.** With no scripts yet, the Editor opens on a welcome page
+**Welcome page.** With no tweaks yet, the Editor opens on a welcome page
 that lists every sample. **Try it** adds the sample (turned on), waits until
 it's running and opens its page in a new tab, already changed; **Open** just
 adds it. None of the samples need the local helper. Reopen the page any time
@@ -563,8 +563,8 @@ files are all in one folder, or any folder in the zip with a
 `package.json` that has a `"tangitweak"` block) also lists the files you have in that folder that the new
 version doesn't, struck through and marked **deleted**. They're ticked, so
 importing deletes them. Untick any you want to keep.
-A plain `.ts`/`.tsx`/`.js` file imports as a single file; outside a tweak's
-folder it doesn't run.
+Import takes zips only. A zip's script outside a tweak's folder imports
+but doesn't run: it **needs a rewrite**.
 
 ## `settings.json`
 

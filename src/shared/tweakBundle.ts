@@ -4,14 +4,14 @@
  * `index.tsx`) is the tweak — the enable switch, params and stores are
  * the entry's; the other files are its modules and run only when
  * imported, their registrations, params and stores belonging to the
- * entry. A file outside any bundle (a single-file script, or one of a
- * pre-0.40 metadata.json bundle) doesn't load: it needs a rewrite.
+ * entry. A file outside any bundle (a pre-0.40 single-file script, or one
+ * of a pre-0.40 metadata.json bundle) doesn't load: it needs a rewrite.
  *
  * Bare imports (`import dayjs from "dayjs"`) resolve through the bundle's
  * package.json `dependencies`, `npm:` aliases included.
  */
 import { defaultMeta, finishMeta, type ResMeta } from "./metaParser";
-import { currentTangiTweakVersion, isBundlePackageJson, LEGACY_MANIFEST_FILE, MANIFEST_FILE, minTangiTweakOf, minTangiTweakProblem, normalizeMain } from "./packageMetadata";
+import { currentTangiTweakVersion, isBundlePackageJson, LEGACY_MANIFEST_FILE, MANIFEST_FILE, minTangiTweakOf, minTangiTweakProblem, normalizeMain, parseManifest, type Manifest } from "./packageMetadata";
 import { rangeUrl, splitBare } from "./packageImports";
 
 /** the start of a script's error when it doesn't load as it is */
@@ -80,6 +80,39 @@ export function bundleRole(name: string, scriptNames: Iterable<string>, read: Da
                 ? `${NEEDS_REWRITE} ${legacy}${LEGACY_MANIFEST_FILE} bundles no longer load — replace it with a package.json that has a "tangitweak" block, with one entry (its "main", else index.ts) that imports the other files (see New Tweak…)`
                 : `${NEEDS_REWRITE} single-file scripts no longer load — make it a tweak: a folder with a package.json that has a "tangitweak" block and this code in its index.ts (see New Tweak…)`,
     };
+}
+
+/** what the UI shows a stored script as (see bundleRole): an entry is a tweak (its switch, its popup row), named by its bundle */
+export interface ScriptRole {
+    role: BundleRole["role"];
+    /** a module's entry: the tweak it's part of */
+    entry?: string;
+    /** an entry's bundle's display name (its package.json's, else its folder) and description */
+    bundleName?: string;
+    bundleDescription?: string;
+}
+
+/** each stored script's role, by id */
+export function scriptRoles(scripts: readonly { id: string; meta: { name: string } }[], dataFiles: Iterable<{ path: string; text: string }>): Map<string, ScriptRole> {
+    const read = dataReader(dataFiles);
+    const names = scripts.map((s) => s.meta.name);
+    const out = new Map<string, ScriptRole>();
+    for (const s of scripts) {
+        const r = bundleRole(s.meta.name, names, read);
+        if (r.role !== "entry") {
+            out.set(s.id, r.role === "module" ? { role: "module", entry: r.entry } : { role: "rewrite" });
+            continue;
+        }
+        let m: Manifest | undefined;
+        try {
+            m = parseManifest(read(r.bundle.pkgPath)!, r.bundle.pkgPath);
+        } catch {
+            // an invalid field: named by its folder
+        }
+        const name = m?.name || r.bundle.root.slice(0, -1);
+        out.set(s.id, { role: "entry", ...(name ? { bundleName: name } : {}), ...(m?.description ? { bundleDescription: m.description } : {}) });
+    }
+    return out;
 }
 
 /** why a bundle's entry can't run here (its package.json asks for a newer TangiTweak), or null */

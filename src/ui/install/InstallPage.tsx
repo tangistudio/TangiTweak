@@ -151,7 +151,7 @@ export function InstallFlow({ request, host }: { request: InstallRequest; host: 
             if (!pkg.pending) {
                 const files = await installedTexts(pkg);
                 if (runSeq.current !== myRun) return;
-                return setState({ phase: "nothing", pkg, iconUrl: resolvePackageIcon({ entries: pkg.entries, files, metadata: pkg.metadata }) });
+                return setState({ phase: "nothing", pkg, iconUrl: resolvePackageIcon({ files, metadata: pkg.metadata }) });
             }
             const fetched: Fetched = { source: pkg.source, entries: pkg.pending.entries, files: pkg.pending.files, revision: pkg.pending.revision, missing: [], bare: [] };
             const analysis = await analyzeWithProgress(fetched, myRun, id);
@@ -299,7 +299,7 @@ export function InstallFlow({ request, host }: { request: InstallRequest; host: 
                                             const nextPkg = pkg ?? prevPkg;
                                             const files = await installedTexts(nextPkg);
                                             if (runSeq.current !== myRun) return;
-                                            const iconUrl = resolvePackageIcon({ entries: nextPkg.entries, files, metadata: nextPkg.metadata });
+                                            const iconUrl = resolvePackageIcon({ files, metadata: nextPkg.metadata });
                                             setState({ phase: "nothing", pkg: nextPkg, iconUrl, note: pkg?.lastError ? `Checking failed: ${pkg.lastError}` : pkg && pkg.updatedAt > prevPkg.updatedAt ? "It updated to the latest version." : "It's up to date." });
                                         } catch (e) {
                                             if (runSeq.current === myRun) setState({ phase: "error", error: errText(e) });
@@ -762,7 +762,7 @@ function PendingReview(props: { state: Extract<State, { phase: "pending" }>; set
                             run(async () => {
                                 await packagesApi.dismiss(pkg.id);
                                 const files = await installedTexts(pkg);
-                                const iconUrl = resolvePackageIcon({ entries: pkg.entries, files, metadata: pkg.metadata });
+                                const iconUrl = resolvePackageIcon({ files, metadata: pkg.metadata });
                                 props.setState({ phase: "nothing", pkg, iconUrl, note: "Skipped — the next newer version will be offered." });
                             })
                         }

@@ -9,14 +9,12 @@ import { compareVersions, MANIFEST_FILE, minTangiTweakProblem, parseManifest, ty
 import {
     PACKAGES_KEY,
     entryIds,
-    entryStem,
     modifiedFiles,
     naturalPackageFolder,
     packageFolder,
     packageName,
     resolvePackageIcon,
     storeItemOf,
-    uniqueEntryName,
     type InstalledFile,
     type InstalledPackage,
     type PackageVersion,
@@ -53,7 +51,7 @@ export interface FetchedPackage {
     revision: string;
 }
 
-/** an already-existing script or bundle with the same name/source that installing can upgrade */
+/** an already-existing tweak with the same name/source that installing can upgrade */
 export interface ExistingPackageInfo {
     /** InstalledPackage id when already tracked as a package; undefined for unmanaged Explorer files */
     packageId?: string;
@@ -63,14 +61,14 @@ export interface ExistingPackageInfo {
     autoUpdate?: boolean;
     /** current file contents keyed by relative package path, for diffing */
     before: Record<string, string>;
-    /** folder or script name that "Install as copy" creates if the user chooses not to upgrade */
+    /** folder name that "Install as copy" creates if the user chooses not to upgrade */
     copyName: string;
 }
 
 export interface Analysis {
     name: string;
     metadata: PackageMetadata;
-    /** resolved `<img src>` URL when the script or bundle declares an icon */
+    /** resolved `<img src>` URL when the bundle declares an icon */
     iconUrl?: string;
     /** a bundle (a package.json with a "tangitweak" block): always, now */
     bundle: boolean;
@@ -79,11 +77,11 @@ export interface Analysis {
     error: string | null;
     /** warning when `minTangiTweakVersion` is newer than the running TangiTweak */
     versionWarning?: string | null;
-    /** where it would install ("" = the root) */
+    /** the folder it would install into */
     folder: string;
     /** package file → the store item it becomes */
     items: Record<string, { kind: "script" | "data"; name: string }>;
-    /** present when a script or bundle with the same source or name already exists */
+    /** present when a tweak with the same source or name already exists */
     existing?: ExistingPackageInfo;
     /** update: what it can do that the installed version can't */
     added?: string[];
@@ -101,8 +99,8 @@ function storageSet(items: Record<string, any>): Promise<void> {
 
 export async function listPackages(): Promise<Record<string, InstalledPackage>> {
     const all: Record<string, InstalledPackage> = (await storageGet(PACKAGES_KEY)) || {};
-    // records from before bundles (an unreleased shape) are dropped
-    for (const k of Object.keys(all)) if (!Array.isArray(all[k]?.entries)) delete all[k];
+    // records from before bundles (an unreleased shape: no entries, or a single file at the root) are dropped
+    for (const k of Object.keys(all)) if (!Array.isArray(all[k]?.entries) || !all[k].folder) delete all[k];
     return all;
 }
 
@@ -123,28 +121,25 @@ function serial<T>(fn: () => Promise<T>): Promise<T> {
 /**
  * The installed file a version's file replaces (it keeps that one's store
  * id: its params, stores and enabled state): the one at the same path, or
- * — a single-entry package whose entry was renamed — the old entry.
+ * — its entry was renamed — the old entry.
  */
 function priorOf(pkg: InstalledPackage | undefined, version: Pick<PackageVersion, "entries" | "files">, rel: string): InstalledFile | undefined {
     if (!pkg) return undefined;
     const old = pkg.files[rel];
     if (old) return old;
     const [was] = pkg.entries;
-    if (pkg.entries.length === 1 && version.entries.length === 1 && rel === version.entries[0] && !(was in version.files)) return pkg.files[was];
+    if (rel === version.entries[0] && was !== undefined && !(was in version.files)) return pkg.files[was];
     return undefined;
 }
 
 /** the store names a package's files take, keeping the installed ones' names */
-function layout(version: Pick<PackageVersion, "entries" | "files">, folder: string, pkg?: InstalledPackage, takenRoot: string[] = []): Analysis["items"] {
+function layout(version: Pick<PackageVersion, "files">, folder: string, pkg?: InstalledPackage): Analysis["items"] {
     const items: Analysis["items"] = {};
     for (const rel of Object.keys(version.files)) {
         const kept = pkg?.files[rel];
         // a renamed entry takes its new name
         items[rel] = kept ? { kind: kept.kind, name: kept.name } : storeItemOf(folder, rel);
     }
-    // a root single-file entry steps around a same-named script
-    const [only] = version.entries;
-    if (!pkg && !folder) items[only] = { kind: "script", name: uniqueEntryName(items[only].name, takenRoot) };
     return items;
 }
 
@@ -157,21 +152,20 @@ async function codeFiles(files: Record<string, string>): Promise<Record<string, 
     return Object.fromEntries(Object.entries(files).filter(([rel]) => !/(^|\/)\.[^/]*\//.test(rel) && !rel.startsWith(df + "/")));
 }
 
-/** compile the entries as they would install, against the package's own files and the stored ones */
+/** compile the entry as it would install, against the package's own files and the stored ones */
 async function analyze(fetched: Pick<FetchedPackage, "entries" | "files">, pkg?: InstalledPackage): Promise<Analysis> {
     const version = { entries: fetched.entries, files: await codeFiles(fetched.files) };
-    const { entries, files } = version;
-    if (!entries.length) throw new Error("the package has no script to run");
-    for (const e of entries) {
-        if (files[e] === undefined) throw new Error(`the package has no ${e}`);
-        if (!SCRIPT_FILE_RE.test(e)) throw new Error(`${e}: a package's scripts are .ts or .tsx files`);
-    }
+    const { files } = version;
+    const [entry] = version.entries;
+    if (!entry) throw new Error("the package has no script to run");
+    if (files[entry] === undefined) throw new Error(`the package has no ${entry}`);
+    if (!SCRIPT_FILE_RE.test(entry)) throw new Error(`${entry}: a package's scripts are .ts or .tsx files`);
     if (files[MANIFEST_FILE] === undefined) throw new Error(`the package has no ${MANIFEST_FILE} — a tweak is a folder with a package.json that has a "tangitweak" block`);
     const manifest = parseManifest(files[MANIFEST_FILE]);
     const [scripts, dataFiles, folders] = await Promise.all([listScripts(), listDataFiles(), listFolders()]);
     const taken = [...scripts.map((s) => s.meta.name), ...dataFiles.map((d) => d.path), ...allFolders(folders, [])];
-    const folder = pkg ? pkg.folder : packageFolder({ entries, files, bundleName: manifest.packageName ?? manifest.name }, taken);
-    const items = layout(version, folder, pkg, scripts.map((s) => s.meta.name));
+    const folder = pkg ? pkg.folder : packageFolder(manifest.packageName ?? manifest.name, taken);
+    const items = layout(version, folder, pkg);
     const own = new Set(pkg ? Object.values(pkg.files).map((f) => f.id) : []);
     const idOf = (rel: string) => priorOf(pkg, version, rel)?.id ?? `pkg:${rel}`;
     const pkgScripts = Object.keys(files)
@@ -185,23 +179,15 @@ async function analyze(fetched: Pick<FetchedPackage, "entries" | "files">, pkg?:
         .filter((rel) => items[rel].kind === "data")
         .map((rel) => ({ path: items[rel].name, text: files[rel] }));
     const values = await loadAllParamValues();
-    const compiled = [];
-    for (const e of entries) {
-        const id = idOf(e);
-        const libs = pkgScripts.filter((s) => s.rel !== e).map(({ id, name, code }) => ({ id, name, code }));
-        compiled.push({ e, c: await compileForStorage(files[e], items[e].name, values[id], { id, scripts: [...libs, ...others], paramValues: values, data, anyVersion: true }) });
-    }
-    const { scripts: _, main: _main, packageName: _name, dependencies: _deps, ...metadata } = manifest;
-    const failed = compiled.find(({ c }) => c.error);
-    const error = failed ? (entries.length > 1 ? `${failed.e}: ${failed.c.error}` : failed.c.error) : null;
+    const id = idOf(entry);
+    const modules = pkgScripts.filter((s) => s.rel !== entry).map(({ id, name, code }) => ({ id, name, code }));
+    const compiled = await compileForStorage(files[entry], items[entry].name, values[id], { id, scripts: [...modules, ...others], paramValues: values, data, anyVersion: true });
+    const { main: _main, packageName: _name, dependencies: _deps, ...metadata } = manifest;
+    const error = compiled.error;
     const versionWarning = minTangiTweakProblem(metadata.minTangiTweakVersion);
-    const caps = capabilitiesOf(
-        compiled.flatMap(({ c }) => c.meta.routes ?? []),
-        metadata.connect,
-        manifest.dependencies
-    );
-    const iconUrl = resolvePackageIcon({ entries, files, metadata }, dataFiles);
-    return { name: packageName({ entries, metadata }), metadata, ...(iconUrl ? { iconUrl } : {}), bundle: true, caps, error, ...(versionWarning ? { versionWarning } : {}), folder, items };
+    const caps = capabilitiesOf(compiled.meta.routes ?? [], metadata.connect, manifest.dependencies);
+    const iconUrl = resolvePackageIcon({ files, metadata }, dataFiles);
+    return { name: packageName({ folder, metadata }), metadata, ...(iconUrl ? { iconUrl } : {}), bundle: true, caps, error, ...(versionWarning ? { versionWarning } : {}), folder, items };
 }
 
 const normSource = (u: string): string => stripInstallHash(u).replace(/\/+$/, "");
@@ -240,8 +226,8 @@ async function synthesizeFolderTarget(
     const mf = dirData.find((d) => d.path.slice(dir.length + 1).toLowerCase() === MANIFEST_FILE);
     if (mf) {
         try {
-            const { scripts: sList, main: _main, packageName: _name, dependencies: deps, ...rest } = parseManifest(mf.text);
-            entries = sList;
+            const { main, packageName: _name, dependencies: deps, ...rest } = parseManifest(mf.text);
+            entries = [main ?? "index.ts"];
             dependencies = deps;
             metadata = rest;
             hasValidManifest = true;
@@ -250,8 +236,8 @@ async function synthesizeFolderTarget(
         }
     }
     if (!entries.length) {
-        const active = dirScripts.filter((s) => s.meta.active !== false);
-        entries = (active.length ? active : dirScripts).map((s) => scriptFileName(s.meta.name.slice(dir.length + 1)));
+        const first = dirScripts.find((s) => s.meta.active !== false) ?? dirScripts[0];
+        if (first) entries = [scriptFileName(first.meta.name.slice(dir.length + 1))];
     }
 
     // Crawl the local package so unimported companion files (README.md, unused
@@ -315,25 +301,6 @@ async function synthesizeFolderTarget(
     };
 }
 
-async function synthesizeScriptTarget(s: Script, entryRel: string): Promise<InstalledPackage> {
-    const metadata: PackageMetadata = { connect: [] };
-    const caps = capabilitiesOf(s.meta.routes ?? [], metadata.connect);
-    const now = Date.now();
-    return {
-        id: newId(),
-        source: "",
-        folder: "",
-        entries: [entryRel],
-        revision: await hashText(s.code),
-        metadata,
-        caps,
-        files: { [entryRel]: { kind: "script", id: s.id, name: s.meta.name, hash: await hashText(s.code) } },
-        autoUpdate: false,
-        installedAt: now,
-        updatedAt: now,
-    };
-}
-
 async function findExistingTarget(
     fetched: FetchedPackage,
     incomingNameHint?: string
@@ -343,13 +310,9 @@ async function findExistingTarget(
     const livePkgs = Object.values(allPkgs).filter((p) => Object.values(p.files).some((f) => liveIds.has(f.id)));
     const manifest = fetched.files[MANIFEST_FILE] !== undefined ? parseManifest(fetched.files[MANIFEST_FILE]) : undefined;
     const bundleName = manifest?.packageName ?? manifest?.name;
-    const wantFolder = naturalPackageFolder({ entries: fetched.entries, files: fetched.files, bundleName });
-    const onlyEntry = fetched.entries[0] ?? "";
-    const wantEntry = wantFolder ? "" : storeItemOf("", onlyEntry).name;
+    const wantFolder = naturalPackageFolder(bundleName);
     const taken = [...scripts.map((s) => s.meta.name), ...dataFiles.map((d) => d.path), ...allFolders(folders, [])];
-    const copyName = wantFolder
-        ? packageFolder({ entries: fetched.entries, files: fetched.files, bundleName }, taken)
-        : uniqueEntryName(wantEntry, scripts.map((s) => s.meta.name));
+    const copyName = packageFolder(bundleName, taken);
 
     const srcKey = fetched.source ? normSource(fetched.source) : "";
     if (srcKey) {
@@ -362,41 +325,27 @@ async function findExistingTarget(
     const wantedName = (incomingNameHint || manifest?.name || "").trim().toLowerCase();
     const byPkg = livePkgs.find((p) => {
         if (wantedName && packageName(p).toLowerCase() === wantedName) return true;
-        if (wantFolder && p.folder && scriptFileKey(p.folder) === scriptFileKey(wantFolder)) return true;
-        if (!wantFolder && !p.folder && p.entries[0] && p.files[p.entries[0]]) {
-            const existingName = p.files[p.entries[0]].name;
-            if (scriptFileKey(existingName) === scriptFileKey(wantEntry)) return true;
-            if (scriptFileKey(entryStem(existingName)) === scriptFileKey(entryStem(onlyEntry))) return true;
-        }
-        return false;
+        return !!p.folder && scriptFileKey(p.folder) === scriptFileKey(wantFolder);
     });
     if (byPkg) return { pkg: byPkg, managed: true, copyName };
 
-    // Unmanaged Explorer folder/bundle or root script with the same name
-    if (wantFolder) {
-        const topDirs = allFolders(folders, [...scripts.map((s) => s.meta.name), ...dataFiles.map((d) => d.path)]).filter((f) => !f.includes("/"));
-        const dir = topDirs.find((d) => {
-            if (scriptFileKey(d) === scriptFileKey(wantFolder)) return true;
-            if (!wantedName) return false;
-            const mf = dataFiles.find((df) => df.path.toLowerCase() === `${d.toLowerCase()}/${MANIFEST_FILE}`);
-            if (!mf) return false;
-            try {
-                const m = parseManifest(mf.text);
-                return m.name?.toLowerCase() === wantedName || m.packageName?.toLowerCase() === wantedName;
-            } catch {
-                return false;
-            }
-        });
-        if (dir) {
-            const hasFiles = scripts.some((s) => isInFolder(s.meta.name, dir)) || dataFiles.some((d) => isInFolder(d.path, dir));
-            if (hasFiles) return { pkg: await synthesizeFolderTarget(dir, scripts, dataFiles, fetched.files), managed: false, copyName };
+    // an unmanaged Explorer folder with the same name
+    const topDirs = allFolders(folders, [...scripts.map((s) => s.meta.name), ...dataFiles.map((d) => d.path)]).filter((f) => !f.includes("/"));
+    const dir = topDirs.find((d) => {
+        if (scriptFileKey(d) === scriptFileKey(wantFolder)) return true;
+        if (!wantedName) return false;
+        const mf = dataFiles.find((df) => df.path.toLowerCase() === `${d.toLowerCase()}/${MANIFEST_FILE}`);
+        if (!mf) return false;
+        try {
+            const m = parseManifest(mf.text);
+            return m.name?.toLowerCase() === wantedName || m.packageName?.toLowerCase() === wantedName;
+        } catch {
+            return false;
         }
-    } else if (onlyEntry) {
-        const rootScripts = scripts.filter((s) => !s.meta.name.includes("/"));
-        const hit =
-            rootScripts.find((s) => scriptFileKey(s.meta.name) === scriptFileKey(wantEntry)) ??
-            rootScripts.find((s) => scriptFileKey(entryStem(s.meta.name)) === scriptFileKey(entryStem(onlyEntry)));
-        if (hit) return { pkg: await synthesizeScriptTarget(hit, onlyEntry), managed: false, copyName };
+    });
+    if (dir) {
+        const hasFiles = scripts.some((s) => isInFolder(s.meta.name, dir)) || dataFiles.some((d) => isInFolder(d.path, dir));
+        if (hasFiles) return { pkg: await synthesizeFolderTarget(dir, scripts, dataFiles, fetched.files), managed: false, copyName };
     }
     return undefined;
 }
@@ -452,8 +401,8 @@ async function modifiedNow(pkg: InstalledPackage): Promise<string[]> {
 }
 
 /**
- * Write a version's files: data files, then libraries, then the entries
- * (they compile against what's there), then drop the files it no longer
+ * Write a version's files: data files, then modules, then the entry
+ * (it compiles against what's there), then drop the files it no longer
  * has. Files keep their store ids; a new entry of an installed bundle
  * starts turned on.
  */
@@ -541,7 +490,7 @@ async function snapshot(pkg: InstalledPackage): Promise<PackageVersion> {
 }
 
 /**
- * Upgrade an existing same-named package or unmanaged Explorer folder/script
+ * Upgrade an existing same-named package or unmanaged Explorer folder
  * in place: keeps store ids (params, stores, enabled state) and saves a
  * rollback snapshot in `previous`.
  */
@@ -554,7 +503,7 @@ export function upgradePackage(fetched: FetchedPackage, opts: { packageId?: stri
             const match = (await findExistingTarget(fetched, a0.name)) ?? (await findExistingTarget(fetched));
             target = match?.pkg;
         }
-        if (!target) throw new Error("that script or package isn't installed anymore");
+        if (!target) throw new Error("that tweak isn't installed anymore");
         const a = await analyze(fetched, target);
         if (a.error) throw new Error(`doesn't compile: ${a.error.split("\n")[0]}`);
         const previous = await snapshot(target);
@@ -741,7 +690,7 @@ export function forgetPackage(id: string): Promise<void> {
     });
 }
 
-/** a package whose every entry script was deleted is gone */
+/** a package whose entry was deleted is gone */
 async function prune(): Promise<void> {
     const all = await listPackages();
     if (!Object.keys(all).length) return;

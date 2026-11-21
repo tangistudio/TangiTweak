@@ -189,7 +189,7 @@ async function saveScriptNow(partial: Pick<Script, "id" | "code"> & Partial<Scri
     const name = partial.name ?? prev?.meta.name;
     // compile (not just parse) so handler routes and params land in meta;
     // imports resolve against the other stored scripts (a param definition
-    // imported from a utility is captured with its real type) and to stubs
+    // imported from a module is captured with its real type) and to stubs
     // where they don't resolve — capture must not depend on other scripts
     // loading cleanly (routes built from imports are refined by the
     // reload-time analyze). MV3: compiles in the sandbox page (the SW
@@ -199,8 +199,8 @@ async function saveScriptNow(partial: Pick<Script, "id" | "code"> & Partial<Scri
     const downloaded = await ensurePackages([{ name: name ?? "", code: partial.code }], { retry: true });
     const compiled = await compileForStorage(partial.code, name, allValues[partial.id], { id: partial.id, scripts: plain(byId), paramValues: allValues });
     // MV3 sandbox RPC failure (host unavailable): keep the previous
-    // meta/paramDefs rather than corrupting an active script into a
-    // utility — the next save recomputes. (The sentinel error string comes
+    // meta/paramDefs rather than corrupting an active script into one
+    // with no handlers — the next save recomputes. (The sentinel error string comes
     // from compileHost — matched exactly: user compile errors carry stacks
     // that mention sandbox.js.)
     const rpcFailed = compiled.error === SANDBOX_COMPILE_FAILED;
@@ -268,9 +268,9 @@ function plain(byId: { [id: string]: Script }): { id: string; name: string; code
 
 /**
  * Re-derive stored meta/paramDefs/error of `ids` in place (their code is
- * unchanged, but what they import or their param values changed — e.g. a
- * utility whose handlers register only for some param value becomes a
- * script). Returns the ids that changed. updatedAt is left alone: the
+ * unchanged, but what they import or their param values changed — e.g.
+ * an entry whose handlers register only for some param value gains or
+ * loses its routes). Returns the ids that changed. updatedAt is left alone: the
  * code didn't change.
  */
 async function recompileMeta(byId: { [id: string]: Script }, ids: string[], allValues: { [scriptId: string]: Record<string, any> }): Promise<string[]> {
@@ -672,8 +672,8 @@ async function writeParamValue(scriptId: string, key: string, value: any, knownP
     const all = await loadAllParamValues();
     all[scriptId] = setParamAtPath(all[scriptId], path, value);
     await storageSet({ [PARAMS_KEY]: all });
-    // handlers/params may depend on param values (a utility that registers
-    // handlers only when a param is on turns into a script): refresh the
+    // handlers/params may depend on param values (an entry that registers
+    // handlers only when a param is on gains its routes): refresh the
     // stored meta of the script and its importers
     const changed = s ? await recompileMeta(byId, [scriptId, ...dependantsOf(s.meta.name, plain(byId)).filter((id) => id !== scriptId)], all) : [];
     if (changed.length) {

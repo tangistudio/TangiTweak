@@ -228,7 +228,7 @@ describe("installed packages", () => {
         expect((await ss.listDataFiles()).map((d) => d.path).sort()).toEqual(["dark/cfg.json", "dark/extra.json", "dark/package.json"]);
     });
 
-    it("detects an unmanaged Explorer folder or root script with the same name, diffs only crawled package files, and preserves unimported companion files", async () => {
+    it("detects an unmanaged Explorer folder with the same name, diffs only crawled package files, and preserves unimported companion files", async () => {
         // Unmanaged bundle folder already in Explorer (e.g. from folder sync with a git checkout)
         await ss.saveDataFile({ path: "bonsai/package.json", text: JSON.stringify({ name: "bonsai", version: "0.0.1-alpha", tangitweak: {} }) });
         const existingEntry = await ss.saveScript({ id: ss.newId(), name: "bonsai/index.tsx", code: 'import { tweak } from "tangitweak"; import "./old.json";\ntweak.onPage("*://a.com/*", () => {});\n', enabled: false });

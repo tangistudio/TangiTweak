@@ -477,7 +477,7 @@ export function pickStart(paths: string[], where: string): string {
 
 /** a package's files as read, before they're laid out in the Explorer */
 export interface CrawledPackage {
-    /** its entries' paths in `files` */
+    /** `[its entry's path]` in `files` */
     entries: string[];
     /** the bundle's package.json (at `files["package.json"]`) */
     manifest: Manifest;
@@ -553,7 +553,6 @@ export async function crawl(start: string, read: (path: string) => Promise<strin
         // no "main": index.ts, else index.tsx
         const main = manifest.main ? dir + manifest.main : (await get(dir + "index.ts")) !== null || (await get(dir + "index.tsx")) === null ? dir + "index.ts" : dir + "index.tsx";
         entries = [main];
-        manifest.scripts = [main.slice(dir.length)];
         for (const e of entries) known.add(knownKey(e));
         const iconPath = isRelativeIconSpec(manifest.icon) ? importPath(start, /^\.\.?(\/|$)/.test(manifest.icon) ? manifest.icon : `./${manifest.icon}`) : null;
         if (iconPath) known.add(knownKey(iconPath));

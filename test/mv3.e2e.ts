@@ -158,12 +158,12 @@ try {
     const listResult = await mgr.evaluate(() => new Promise<any>((r) => chrome.runtime.sendMessage({ type: "listScripts" }, r)));
     check("script listed with stored name + paramDefs", listResult?.length === 1 && listResult[0].meta.name === "MV3 hook/index" && !!listResult[0].paramDefs, JSON.stringify(listResult?.map((s: any) => s.meta.name)));
 
-    // regression (𝑓-icon bug): a script that IMPORTS another script must
+    // regression: an entry that IMPORTS a module must
     // still capture its routes at save time — a failed import resolves
     // to a silent stub, never aborting the body before its handlers register
     await saveTweak(mgrSend, "s_lib", "api-interceptor", `export function tag(x: string) { return x; }`, { file: "api-lib" });
     const importSave = await saveTweak(mgrSend, "s_importer", "api-interceptor", `import { tweak } from "tangitweak"; import { tag } from "./api-lib";\ntweak.params({ label: { type: "string", default: "x" } });\ntweak.onResponseBody({ url: "*://*:*/*", strategy: "page" }, (ctx, body) => tag(body));`);
-    check("importing script captures its routes (not a library)",
+    check("an entry importing a module captures its routes",
         importSave?.meta?.active === true && importSave?.meta?.match?.includes("*://*:*/*") && !importSave.error,
         JSON.stringify(importSave?.meta));
     const list2 = await mgr.evaluate(() => new Promise<any>((r) => chrome.runtime.sendMessage({ type: "listScripts" }, r)));
@@ -212,9 +212,9 @@ try {
     await popup.waitForTimeout(1200);
     check("popup opens without warnings", popupWarnings.length === 0, JSON.stringify(popupWarnings.slice(0, 3)));
 
-    // popup lists the declared scripts (libraries filtered)
+    // popup lists the tweaks (modules filtered)
     const popupItems = await popup.evaluate(() => [...document.querySelectorAll("#script-list .script-name")].map((e) => e.textContent));
-    check("popup lists declared scripts (libraries filtered)", popupItems.includes("mv3-hook") && !popupItems.some((n: any) => n?.includes("api-lib")), JSON.stringify(popupItems));
+    check("popup lists tweaks (modules filtered)", popupItems.includes("mv3-hook") && !popupItems.some((n: any) => n?.includes("api-lib")), JSON.stringify(popupItems));
 
     // the compile/run diagnostics surface in the Editor's Log view —
     // success-path lines are debug-level: set the panel filter to Debug+.
@@ -1017,7 +1017,7 @@ tweak.replaceResponse({ url: "${ORIGIN}/sf-data", strategy: "page" }, async () =
     const byName = new Map<string, any>((imported || []).map((s: any) => [s.meta.name, s]));
     check("import re-detects routes (MV3 hook + api-interceptor active)", byName.get("MV3 hook/index")?.meta?.active === true && byName.get("api-interceptor/index")?.meta?.active === true, JSON.stringify((imported || []).map((s: any) => [s.meta.name, s.meta.active])));
     check("import restores params (api-interceptor.label)", !!byName.get("api-interceptor/index")?.paramDefs?.label);
-    check("import keeps libraries as libraries (api-lib)", byName.get("api-interceptor/api-lib")?.meta?.active === false);
+    check("import keeps modules inactive (api-lib)", byName.get("api-interceptor/api-lib")?.meta?.active === false);
     check("import restores enabled state", byName.get("MV3 hook/index")?.enabled === true && byName.get("api-interceptor/index")?.enabled === true);
     check("partial import skips the unticked script", !!skipName && !byName.has(skipName), String(skipName));
     // its package.json came in without it, so the Explorer flags the missing entry

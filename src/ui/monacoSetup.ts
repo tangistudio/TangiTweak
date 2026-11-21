@@ -403,31 +403,3 @@ function registerTsHover(monaco: any): void {
         },
     });
 }
-
-export const STARTER_TEMPLATE = `import { tweak } from "tangitweak";
-
-// Adjustable parameters (editable in settings.json / the popup ⚙ dialog):
-const cfg = tweak.params({
-    host: { type: "string", default: "*.example.com", description: "Host pattern to intercept" },
-    debug: { type: "boolean", default: true, description: "Log every request" },
-});
-
-// Each handler takes a route: its URL pattern(s) and the strategy that runs it
-// (helper | page | extension | debugger | rules — see Help → Reference → Strategies).
-// Modify request headers / redirect / cancel:
-tweak.onRequest({ url: \`*://\${cfg.host}/*\`, strategy: "helper" }, (ctx) => {
-    if (cfg.debug) tweak.log("request to", ctx.url);
-    // return { redirect: "https://example.com/other" };
-    // return { block: true };
-    // return { headers: { set: { "x-debug": "1" } } };
-});
-
-// Modify response headers:
-// tweak.onResponseHeaders({ url: \`*://\${cfg.host}/*\`, strategy: "helper" }, (ctx) => ({ headers: { set: { "access-control-allow-origin": "*" } } }));
-
-// Replace the whole response body:
-// tweak.replaceResponse({ url: \`*://\${cfg.host}/api/*\`, strategy: "helper" }, (ctx) => ({ mocked: true }));
-
-// Modify the response body (more route options: exclude / methods / resourceTypes):
-// tweak.onResponseBody({ url: \`*://\${cfg.host}/*\`, exclude: "*://*/*.png", strategy: "page" }, (ctx, body) => body.replace("foo", "bar"));
-`;
