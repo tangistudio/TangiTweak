@@ -389,11 +389,9 @@ function Picker(props: {
                     <p>{local.label} has more than one script (and no {MANIFEST_FILE} listing them) — which one?</p>
                     <ul className="entries">
                         {local.entries.map((e) => {
-                            const entryIcon = resolvePackageIcon({ entries: [e], files: local.files });
                             return (
                                 <li key={e}>
                                     <button className="link entry-pick" onClick={() => props.onEntry(local.files, e)}>
-                                        <PackageIcon src={entryIcon} className="pkg-icon-entry" />
                                         <span>{e}</span>
                                     </button>
                                 </li>

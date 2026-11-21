@@ -49,10 +49,10 @@ export const SETTINGS_SCHEMA = {
         },
         scripts: {
             type: "object",
-            description: "Per-script overrides keyed by script file name (`enabled` + declared `tt.params`)",
+            description: "Per-script overrides keyed by script file name (`enabled` + declared `tweak.params`)",
             additionalProperties: {
                 type: "object",
-                description: "Overrides for one script (`enabled` and params from its tt.params / tt.defineParam)",
+                description: "Overrides for one script (`enabled` and params from its tweak.params)",
                 properties: {
                     enabled: { type: "boolean", default: true, description: "Run this script" },
                 },

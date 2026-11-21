@@ -5,9 +5,9 @@ import { describe, it, expect, expectTypeOf } from "vitest";
 import { readFileSync } from "node:fs";
 import ts from "typescript";
 
-// never called: `tt` only exists inside scripts
-function typings() {
-    const page = tt.onPage("*://example.com/*", () => ({
+// never called: a script's `tweak` comes from `import { tweak } from "tangitweak"`
+function typings(tweak: TangiTweak.Tweak) {
+    const page = tweak.onPage("*://example.com/*", () => ({
         count: (sel: string) => document.querySelectorAll(sel).length,
         later: async (n: number) => ({ n }),
     }));
@@ -19,10 +19,10 @@ function typings() {
     // @ts-expect-error no such function
     void page.nope();
 
-    const site = tt.onSite("*://example.com/*", () => ({ flags: () => ({ a: true }) }));
+    const site = tweak.onSite("*://example.com/*", () => ({ flags: () => ({ a: true }) }));
     expectTypeOf(site.flags).toEqualTypeOf<() => Promise<{ a: boolean }>>();
 
-    const overlay = tt.onOverlay({ url: "*://example.com/*" }, (ctx) => {
+    const overlay = tweak.onOverlay({ url: "*://example.com/*" }, (ctx) => {
         expectTypeOf(ctx.url).toBeString();
         expectTypeOf(ctx.onNavigate).toEqualTypeOf<(fn: (url: string) => void) => () => void>();
         const off: () => void = ctx.shortcut("Mod+K", async () => {}, { priority: "after-page" });
@@ -34,14 +34,14 @@ function typings() {
     expectTypeOf(overlay.picked).toEqualTypeOf<(tag: string, at: { x: number; y: number }) => Promise<number>>();
 
     // handlers returning nothing, a string or an element still compile, and expose nothing
-    const none = tt.onPage("*", () => {});
+    const none = tweak.onPage("*", () => {});
     expectTypeOf(none).toEqualTypeOf<{}>();
-    const str = tt.onPage("*", () => "hi");
+    const str = tweak.onPage("*", () => "hi");
     expectTypeOf(str).toEqualTypeOf<{}>();
-    const el = tt.onPage("*", () => document.body);
+    const el = tweak.onPage("*", () => document.body);
     expectTypeOf(el).toEqualTypeOf<{}>();
     // from: "page" fetch options type-check
-    void tt.fetch("/api", { from: "page", bypass: true });
+    void tweak.fetch("/api", { from: "page", bypass: true });
 }
 void typings;
 
@@ -60,7 +60,7 @@ function errorsOf(snippet: string): string[] {
 }
 
 describe('import { tweak } from "tangitweak" typings', () => {
-    it("is tt's API, with unnamed tab/page/site stores and an ID for globalStore", () => {
+    it("is the scripting API, with unnamed tab/page/site stores and an ID for globalStore", () => {
         expect(
             errorsOf(`
 import { tweak } from "tangitweak";
@@ -77,7 +77,8 @@ tweak.log(tweak.storage, tweak.fetch);
         ).toEqual([]);
     });
 
-    it("has no metadata or defineParam; the unnamed stores take no name", () => {
+    it("has no metadata or defineParam, and no `tt` global; the unnamed stores take no name", () => {
+        expect(errorsOf(`tt.onPage("*", () => {});`)).toHaveLength(1);
         expect(errorsOf(`import { tweak } from "tangitweak";
 tweak.metadata({ name: "x" });`)).toHaveLength(1);
         expect(errorsOf(`import { tweak } from "tangitweak";
@@ -92,36 +93,36 @@ const s: { a: number } = tweak.tabStore({ a: "x" });`)).toHaveLength(1);
 describe("onSite / onPage / onOverlay typings", () => {
     it("infers argument and result types both ways", () => {
         expect(
-            errorsOf(`
-const page = tt.onPage("*", () => ({ count: (sel: string) => 1 }));
-const site = tt.onSite("*", () => ({ title: () => document.title }));
-tt.onOverlay("*", async () => { const n: number = await page.count("a"); const t: string = await site.title(); return { picked: (t: string) => t }; });
+            errorsOf(`import { tweak } from "tangitweak"; 
+const page = tweak.onPage("*", () => ({ count: (sel: string) => 1 }));
+const site = tweak.onSite("*", () => ({ title: () => document.title }));
+tweak.onOverlay("*", async () => { const n: number = await page.count("a"); const t: string = await site.title(); return { picked: (t: string) => t }; });
 `)
         ).toEqual([]);
     });
 
     it("a wrong argument, a missing function or a wrong result type fails", () => {
-        expect(errorsOf(`const page = tt.onPage("*", () => ({ count: (sel: string) => 1 }));\nvoid page.count(1);`)).toHaveLength(1);
-        expect(errorsOf(`const page = tt.onPage("*", () => ({ count: (sel: string) => 1 }));\nvoid page.nope();`)).toHaveLength(1);
-        expect(errorsOf(`const page = tt.onPage("*", () => ({ count: (sel: string) => 1 }));\nasync function f() { const s: string = await page.count("a"); }`)).toHaveLength(1);
+        expect(errorsOf(`import { tweak } from "tangitweak"; const page = tweak.onPage("*", () => ({ count: (sel: string) => 1 }));\nvoid page.count(1);`)).toHaveLength(1);
+        expect(errorsOf(`import { tweak } from "tangitweak"; const page = tweak.onPage("*", () => ({ count: (sel: string) => 1 }));\nvoid page.nope();`)).toHaveLength(1);
+        expect(errorsOf(`import { tweak } from "tangitweak"; const page = tweak.onPage("*", () => ({ count: (sel: string) => 1 }));\nasync function f() { const s: string = await page.count("a"); }`)).toHaveLength(1);
     });
 
     it("routes take a pattern or { url, exclude, when }; the removed options don't type-check", () => {
-        expect(errorsOf(`tt.onSite({ url: "*", exclude: "*://a/*", when: "document_start" }, () => {});\ntt.onPage(["*://a/*", "*://b/*"], () => {});\ntt.onOverlay({ url: "*", when: "document_idle" }, () => {});`)).toEqual([]);
-        expect(errorsOf(`tt.onPage({ url: "*", js: "page" }, () => {});`)).toHaveLength(1);
-        expect(errorsOf(`tt.onPage({ url: "*", dom: "overlay" }, () => {});`)).toHaveLength(1);
-        expect(errorsOf(`tt.onSite({ url: "*", unsafe: true }, () => {});`)).toHaveLength(1);
-        expect(errorsOf(`tt.onPage({ url: "*", when: "later" }, () => {});`)).toHaveLength(1);
-        expect(errorsOf(`tt.onPage("*", (ctx) => void ctx.evaluate(() => 1));`)).toHaveLength(1);
+        expect(errorsOf(`import { tweak } from "tangitweak"; tweak.onSite({ url: "*", exclude: "*://a/*", when: "document_start" }, () => {});\ntweak.onPage(["*://a/*", "*://b/*"], () => {});\ntweak.onOverlay({ url: "*", when: "document_idle" }, () => {});`)).toEqual([]);
+        expect(errorsOf(`import { tweak } from "tangitweak"; tweak.onPage({ url: "*", js: "page" }, () => {});`)).toHaveLength(1);
+        expect(errorsOf(`import { tweak } from "tangitweak"; tweak.onPage({ url: "*", dom: "overlay" }, () => {});`)).toHaveLength(1);
+        expect(errorsOf(`import { tweak } from "tangitweak"; tweak.onSite({ url: "*", unsafe: true }, () => {});`)).toHaveLength(1);
+        expect(errorsOf(`import { tweak } from "tangitweak"; tweak.onPage({ url: "*", when: "later" }, () => {});`)).toHaveLength(1);
+        expect(errorsOf(`import { tweak } from "tangitweak"; tweak.onPage("*", (ctx) => void ctx.evaluate(() => 1));`)).toHaveLength(1);
     });
 
     it("handlers returning nothing, a string or an Element still compile", () => {
-        expect(errorsOf(`tt.onPage("*", () => {});\ntt.onSite("*", () => "x");\ntt.onPage("*", () => document.body);\ntt.onOverlay("*", async () => {});`)).toEqual([]);
+        expect(errorsOf(`import { tweak } from "tangitweak"; tweak.onPage("*", () => {});\ntweak.onSite("*", () => "x");\ntweak.onPage("*", () => document.body);\ntweak.onOverlay("*", async () => {});`)).toEqual([]);
     });
 
     it("ctx.onNavigate and ctx.shortcut are the overlay's only", () => {
-        expect(errorsOf(`tt.onOverlay("*", (ctx) => { const off: () => void = ctx.onNavigate((u: string) => {}); off(); ctx.shortcut("Alt+K", () => {}); });`)).toEqual([]);
-        expect(errorsOf(`tt.onPage("*", (ctx) => { ctx.onNavigate(() => {}); });`)).toHaveLength(1);
-        expect(errorsOf(`tt.onSite("*", (ctx) => { ctx.shortcut("Alt+K", () => {}); });`)).toHaveLength(1);
+        expect(errorsOf(`import { tweak } from "tangitweak"; tweak.onOverlay("*", (ctx) => { const off: () => void = ctx.onNavigate((u: string) => {}); off(); ctx.shortcut("Alt+K", () => {}); });`)).toEqual([]);
+        expect(errorsOf(`import { tweak } from "tangitweak"; tweak.onPage("*", (ctx) => { ctx.onNavigate(() => {}); });`)).toHaveLength(1);
+        expect(errorsOf(`import { tweak } from "tangitweak"; tweak.onSite("*", (ctx) => { ctx.shortcut("Alt+K", () => {}); });`)).toHaveLength(1);
     });
 });

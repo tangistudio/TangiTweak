@@ -36,8 +36,11 @@ function typeErrors(code: string): string[] {
 
 describe("bundled samples", () => {
     for (const s of SAMPLES) {
-        it(`${s.name}: compiles, type-checks, names a page to try and needs no helper`, () => {
-            expect(compileScript(s.code, stubImports).error).toBeNull();
+        it(`${s.name}: compiles, registers its handlers, type-checks, names a page to try and needs no helper`, () => {
+            expect(s.code).toMatch(/^import \{ tweak \} from "tangitweak";/m);
+            const c = compileScript(s.code, stubImports);
+            expect(c.error).toBeNull();
+            expect(c.meta.routes.length).toBeGreaterThan(0);
             expect(typeErrors(s.code)).toEqual([]);
             expect(sampleTryUrl(s.code)).toMatch(/^https:\/\/[^\s]+$/);
             const strategies = sampleStrategies(s.code);
@@ -50,20 +53,20 @@ describe("bundled samples", () => {
 
 describe("sample helpers", () => {
     it("the type check catches a wrong call", () => {
-        expect(typeErrors(`const p = tt.onPage("*://a/*", () => ({ n: () => 1 }));\ntt.onOverlay("*://a/*", async () => { const s: string = await p.n(); });`)).toHaveLength(1);
+        expect(typeErrors(`import { tweak } from "tangitweak"; const p = tweak.onPage("*://a/*", () => ({ n: () => 1 }));\ntweak.onOverlay("*://a/*", async () => { const s: string = await p.n(); });`)).toHaveLength(1);
         expect(typeErrors(`import { useState } from "react";\nconst [n] = useState(0);\nconst el = <div>{n}</div>;`)).toEqual([]);
     });
     it("reads the Try it URL", () => {
-        expect(sampleTryUrl(`// Try it: open https://example.com/a?b=1 and reload\ntt.metadata({ description: "x" });`)).toBe("https://example.com/a?b=1");
-        expect(sampleTryUrl(`tt.metadata({ description: "x" });`)).toBeNull();
+        expect(sampleTryUrl(`import { tweak } from "tangitweak"; // Try it: open https://example.com/a?b=1 and reload\ntweak.onPage("*://a/*", () => {});`)).toBe("https://example.com/a?b=1");
+        expect(sampleTryUrl(`import { tweak } from "tangitweak"; tweak.onPage("*://a/*", () => {});`)).toBeNull();
     });
     it("lists the strategies routes name, both branches of a ternary", () => {
-        expect(sampleStrategies(`tt.onRequest({ url: "*://a/*", strategy: "rules" }, f);`)).toEqual(["rules"]);
-        expect(sampleStrategies(`tt.onResponseBody({ url: "*://a/*", strategy: tt.isFirefox ? "extension" : "debugger" }, f);`)).toEqual(["debugger", "extension"]);
-        expect(sampleStrategies(`tt.onPage("*://a/*", () => {});`)).toEqual(["onPage"]);
-        expect(sampleStrategies(`tt.onRequest({ url: "*://a/*", strategy: "page" }, f);\ntt.onPage("*://a/*", f);\ntt.onOverlay("*://a/*", f);`)).toEqual(["page", "overlay"]);
-        expect(sampleStrategies(`tt.onOverlay("*://a/*", f);`)).toEqual(["overlay"]);
-        expect(sampleStrategies(`tt.onSite("*://a/*", f);`)).toEqual(["onPage"]);
+        expect(sampleStrategies(`import { tweak } from "tangitweak"; tweak.onRequest({ url: "*://a/*", strategy: "rules" }, f);`)).toEqual(["rules"]);
+        expect(sampleStrategies(`import { tweak } from "tangitweak"; tweak.onResponseBody({ url: "*://a/*", strategy: tweak.isFirefox ? "extension" : "debugger" }, f);`)).toEqual(["debugger", "extension"]);
+        expect(sampleStrategies(`import { tweak } from "tangitweak"; tweak.onPage("*://a/*", () => {});`)).toEqual(["onPage"]);
+        expect(sampleStrategies(`import { tweak } from "tangitweak"; tweak.onRequest({ url: "*://a/*", strategy: "page" }, f);\ntweak.onPage("*://a/*", f);\ntweak.onOverlay("*://a/*", f);`)).toEqual(["page", "overlay"]);
+        expect(sampleStrategies(`import { tweak } from "tangitweak"; tweak.onOverlay("*://a/*", f);`)).toEqual(["overlay"]);
+        expect(sampleStrategies(`import { tweak } from "tangitweak"; tweak.onSite("*://a/*", f);`)).toEqual(["onPage"]);
     });
     it("drops the Try it sentence from the blurb", () => {
         expect(sampleSummary("Send any request elsewhere. Try it: open a.com — b.")).toBe("Send any request elsewhere.");

@@ -48,14 +48,14 @@ export async function checkFoldersAndDataFiles(ctx: any, mgr: any, origin: strin
         type: "saveScript",
         id: "s_folders_root",
         name: "rate limiter.tangitweak",
-        code: [`import limits from "./mock/rate-limits.json";`, `tt.onRequest({ url: ${O} + "/folders-echo*", strategy: "rules" }, () => ({ headers: { set: { "x-tt-limit": String(limits.max) } } }));`].join("\n"),
+        code: [`import limits from "./mock/rate-limits.json";`, `import { tweak } from "tangitweak"; tweak.onRequest({ url: ${O} + "/folders-echo*", strategy: "rules" }, () => ({ headers: { set: { "x-tt-limit": String(limits.max) } } }));`].join("\n"),
     });
     check(t("a root script importing ./mock/rate-limits.json saves"), !!root && !root.error && root.meta?.active === true, JSON.stringify({ error: root?.error, active: root?.meta?.active }));
     const inner = await send({
         type: "saveScript",
         id: "s_folders_inner",
         name: "mock/api mock.tangitweak",
-        code: [`import { max } from "./rate-limits.json";`, `tt.onRequest({ url: ${O} + "/folders-api", strategy: "page" }, () => ({ replaceResponse: { body: { max, from: "mock/api mock" } } }));`].join("\n"),
+        code: [`import { max } from "./rate-limits.json";`, `import { tweak } from "tangitweak"; tweak.onRequest({ url: ${O} + "/folders-api", strategy: "page" }, () => ({ replaceResponse: { body: { max, from: "mock/api mock" } } }));`].join("\n"),
     });
     check(t("a script inside the folder saves under its path"), !!inner && !inner.error && inner.meta?.name === "mock/api mock.tangitweak", JSON.stringify({ error: inner?.error, name: inner?.meta?.name }));
 
@@ -258,7 +258,7 @@ async function checkExplorerUi(ctx: any, mgr: any, check: Check, t: (s: string) 
     const svg = (await send({ type: "listDataFiles" })).find((d: any) => d.path === "ui-folder/icon.svg");
     const svgIcon = await mgr.evaluate((id: string) => document.querySelector(`#script-list li[data-id="${id}"] .file-icon`)?.className, svg?.id);
     check(t("explorer: a new .svg data file opens as XML with its own icon"), svgLang === "xml" && /^<svg /.test(svg?.text || "") && /\bsvg\b/.test(svgIcon || ""), JSON.stringify({ svgLang, svg, svgIcon }));
-    const svgUser = await send({ type: "saveScript", id: "s_folders_svg", name: "ui-folder/uses svg.tangitweak", code: `import logo from "./icon.svg";\nconst markup: string = logo;\ntt.params({ markup: { type: "string", default: markup } });\n` });
+    const svgUser = await send({ type: "saveScript", id: "s_folders_svg", name: "ui-folder/uses svg.tangitweak", code: `import { tweak } from "tangitweak"; import logo from "./icon.svg";\nconst markup: string = logo;\ntweak.params({ markup: { type: "string", default: markup } });\n` });
     const svgDefault = (await send({ type: "listScripts" })).find((s: any) => s.id === "s_folders_svg")?.paramDefs?.markup?.default;
     const svgTs = await mgr.evaluate(async () => {
         const monaco = (window as any).monaco;

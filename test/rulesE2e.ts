@@ -36,12 +36,12 @@ export async function checkRulesStrategy(ctx: any, mgr: any, origin: string, che
     const send = (msg: any): Promise<any> => mgr.evaluate((m: any) => new Promise((r) => chrome.runtime.sendMessage(m, (x: any) => r(x ?? null))), msg);
     const O = JSON.stringify(origin);
     const code = [
-        `tt.onRequest({ url: ${O} + "/rules-blocked", strategy: "rules" }, () => ({ block: true }));`,
-        `tt.onRequest({ url: ${O} + "/rules-method", strategy: "rules" }, (ctx) => (ctx.method === "POST" ? { block: true } : undefined));`,
-        `tt.onRequest({ url: ${O} + "/rules-redirect-src", strategy: "rules" }, () => ({ redirect: ${O} + "/rules-echo?from=static" }));`,
-        `tt.onRequest({ url: ${O} + "/rules-echo*", strategy: "rules" }, () => ({ headers: { set: { "x-tt-rules": "req" } } }));`,
-        `tt.onResponseHeaders({ url: ${O} + "/rules-api", strategy: "rules" }, () => ({ headers: { set: { "x-tt-rules-res": "res" } } }));`,
-        `tt.onRequest({ url: ${O} + "/rr{/v:ver}?/:name", strategy: "rules" }, (ctx) => ({ redirect: ${O} + "/rules-echo?name=" + ctx.groups.name + "&ver=" + (ctx.groups.ver ?? "") }));`,
+        `import { tweak } from "tangitweak"; tweak.onRequest({ url: ${O} + "/rules-blocked", strategy: "rules" }, () => ({ block: true }));`,
+        `tweak.onRequest({ url: ${O} + "/rules-method", strategy: "rules" }, (ctx) => (ctx.method === "POST" ? { block: true } : undefined));`,
+        `tweak.onRequest({ url: ${O} + "/rules-redirect-src", strategy: "rules" }, () => ({ redirect: ${O} + "/rules-echo?from=static" }));`,
+        `tweak.onRequest({ url: ${O} + "/rules-echo*", strategy: "rules" }, () => ({ headers: { set: { "x-tt-rules": "req" } } }));`,
+        `tweak.onResponseHeaders({ url: ${O} + "/rules-api", strategy: "rules" }, () => ({ headers: { set: { "x-tt-rules-res": "res" } } }));`,
+        `tweak.onRequest({ url: ${O} + "/rr{/v:ver}?/:name", strategy: "rules" }, (ctx) => ({ redirect: ${O} + "/rules-echo?name=" + ctx.groups.name + "&ver=" + (ctx.groups.ver ?? "") }));`,
     ].join("\n");
     const saved = await send({ type: "saveScript", id: "s_rules", name: "rules probe.tangitweak", code });
     check(t("script saves (one handler is not a rule, the script still loads)"), !!saved && !saved.error && saved.meta?.active === true, JSON.stringify({ error: saved?.error?.split("\n")[0], active: saved?.meta?.active }));
@@ -71,7 +71,7 @@ export async function checkRulesStrategy(ctx: any, mgr: any, origin: string, che
     // a URL pattern too complex for a rule: the problem points at the pattern
     // itself (line 3, where the string starts), and the editor squiggles it
     const cx = `https://cx{-(dev)}.example.test/{mms/}?static/:path+/:a/:b/:c/:d/:e/:f/:g/:h/:i/:j/:k/:name{.:hash([0-9a-f]{20,})}?{.min}?.:ext(js|css|json)`;
-    await send({ type: "saveScript", id: "s_rules_cx", name: "rules complex.tangitweak", code: ["// too complex", "tt.onRequest({", `    url: ${JSON.stringify(cx)},`, '    strategy: "rules",', `}, (ctx) => ({ redirect: ${O} + "/rules-echo?" + ctx.groups.k + ctx.groups.name + ctx.groups.ext }));`].join("\n") });
+    await send({ type: "saveScript", id: "s_rules_cx", name: "rules complex.tangitweak", code: ["// too complex", "import { tweak } from 'tangitweak'; tweak.onRequest({", `    url: ${JSON.stringify(cx)},`, '    strategy: "rules",', `}, (ctx) => ({ redirect: ${O} + "/rules-echo?" + ctx.groups.k + ctx.groups.name + ctx.groups.ext }));`].join("\n") });
     const cxProblem = await mgr.waitForFunction(() => [...document.querySelectorAll("#problems-list .pb-item.error")].map((l) => l.textContent || "").find((t) => t.includes("too complex for a rule")), null, { timeout: 10000 }).then((h: any) => h.jsonValue(), () => null);
     check(t("a too-complex pattern → a problem at the pattern's line and column"), !!cxProblem && /\[Ln 3, Col 11\]/.test(cxProblem), String(cxProblem).slice(-80));
     await mgr.evaluate(() => (document.querySelector('#script-list li[data-id="s_rules_cx"]') as HTMLElement).click());
@@ -158,9 +158,9 @@ export async function checkRulesStrategy(ctx: any, mgr: any, origin: string, che
     // a regex near the browser's memory limit: a many-group capturing route
     // fits; a far bigger one is reported per handler, not silently dropped
     const deep = [
-        `tt.onRequest({ url: ${O} + "/deep{/v:ver}?/users/:id/posts/:post/comments/:c", strategy: "rules" }, (ctx) => ({ redirect: ${O} + "/rules-echo?id=" + ctx.groups.id + "&post=" + ctx.groups.post + "&c=" + ctx.groups.c + "&ver=" + (ctx.groups.ver ?? "") }));`,
-        `tt.onRequest({ url: ${O} + "/huge/:a/:b/:c/:d/:e/:f/:g/:h/:i/:j/:k/:l/:m/:n/:o/:p/:q/:r", strategy: "rules" }, () => ({ block: true }));`,
-        `tt.onRequest({ url: ${O} + "/cap/:a/:b/:c/:d/:e/:f/:g/:h/:i/:j/:k", strategy: "rules" }, (ctx) => ({ redirect: ${O} + "/rules-echo?v=" + ctx.groups.a + ctx.groups.b + ctx.groups.c + ctx.groups.d + ctx.groups.e + ctx.groups.f + ctx.groups.g + ctx.groups.h + ctx.groups.i }));`,
+        `import { tweak } from "tangitweak"; tweak.onRequest({ url: ${O} + "/deep{/v:ver}?/users/:id/posts/:post/comments/:c", strategy: "rules" }, (ctx) => ({ redirect: ${O} + "/rules-echo?id=" + ctx.groups.id + "&post=" + ctx.groups.post + "&c=" + ctx.groups.c + "&ver=" + (ctx.groups.ver ?? "") }));`,
+        `tweak.onRequest({ url: ${O} + "/huge/:a/:b/:c/:d/:e/:f/:g/:h/:i/:j/:k/:l/:m/:n/:o/:p/:q/:r", strategy: "rules" }, () => ({ block: true }));`,
+        `tweak.onRequest({ url: ${O} + "/cap/:a/:b/:c/:d/:e/:f/:g/:h/:i/:j/:k", strategy: "rules" }, (ctx) => ({ redirect: ${O} + "/rules-echo?v=" + ctx.groups.a + ctx.groups.b + ctx.groups.c + ctx.groups.d + ctx.groups.e + ctx.groups.f + ctx.groups.g + ctx.groups.h + ctx.groups.i }));`,
     ].join("\n");
     await send({ type: "saveScript", id: "s_rules_deep", name: "rules deep.tangitweak", code: deep });
     const page3 = await ctx.newPage();
@@ -178,19 +178,19 @@ export async function checkRulesStrategy(ctx: any, mgr: any, origin: string, che
     check(t("a route that only overflows with the redirect's captures → the error says so"), /^onRequest #3: .*9 captured for the redirect\) — it fits without captures/.test(deepErrors?.[1] ?? ""), JSON.stringify(deepErrors));
     await send({ type: "deleteScript", id: "s_rules_deep" });
 
-    // tt.tabStore + strategy: "rules": setting tab.staging in Tab A's overlay
+    // tweak.tabStore + strategy: "rules": setting tab.staging in Tab A's overlay
     // redirects Tab A's very first main_frame request on navigation/reload
     // while Tab B stays untouched
     const tabCode = [
-        `const tab = tt.tabStore("env", { staging: false });`,
-        `tt.onOverlay(${O} + "/rules-page*", (ctx) => {`,
+        `import { tweak } from "tangitweak"; const tab = tweak.tabStore({ staging: false });`,
+        `tweak.onOverlay(${O} + "/rules-page*", (ctx) => {`,
         `    if (ctx.url.includes("stage=1")) tab.staging = true;`,
         `});`,
-        `tt.onRequest({ url: ${O} + "/rules-page", strategy: "rules" }, () => (tab.staging ? { redirect: ${O} + "/rules-echo?from=tabstore" } : undefined));`,
+        `tweak.onRequest({ url: ${O} + "/rules-page", strategy: "rules" }, () => (tab.staging ? { redirect: ${O} + "/rules-echo?from=tabstore" } : undefined));`,
     ].join("\n");
     await send({ type: "saveScript", id: "s_rules_tab", name: "rules tabStore.tangitweak", code: tabCode });
     const tabErrs = (await send({ type: "listScripts" })).find((s: any) => s.id === "s_rules_tab")?.ruleErrors;
-    check(t("tt.tabStore conditional handler starting off → 0 ruleErrors"), !tabErrs?.length, JSON.stringify(tabErrs));
+    check(t("tweak.tabStore conditional handler starting off → 0 ruleErrors"), !tabErrs?.length, JSON.stringify(tabErrs));
 
     const tabA = await ctx.newPage();
     const tabB = await ctx.newPage();
@@ -205,8 +205,8 @@ export async function checkRulesStrategy(ctx: any, mgr: any, origin: string, che
         if (urlA === `${origin}/rules-echo?from=tabstore`) break;
     }
     await tabB.reload({ waitUntil: "domcontentloaded" });
-    check(t("tt.tabStore ON in Tab A → navigation redirects Tab A's main_frame #1"), urlA === `${origin}/rules-echo?from=tabstore`, urlA);
-    check(t("tt.tabStore OFF in Tab B → Tab B reload stays unredirected"), tabB.url() === `${origin}/rules-page`, tabB.url());
+    check(t("tweak.tabStore ON in Tab A → navigation redirects Tab A's main_frame #1"), urlA === `${origin}/rules-echo?from=tabstore`, urlA);
+    check(t("tweak.tabStore OFF in Tab B → Tab B reload stays unredirected"), tabB.url() === `${origin}/rules-page`, tabB.url());
     await tabA.close();
     await tabB.close();
     await send({ type: "deleteScript", id: "s_rules_tab" });

@@ -49,7 +49,7 @@ const overlayFrame = (p: Page, sel: string) =>
 
 // sample name → how to see its effect (opens the page itself)
 const VERIFY: Record<string, (p: Page) => Promise<[boolean, string]>> = {
-    "Overlay panel (React + tt.globalStore)": async (p) => {
+    "Overlay panel (React + tweak.globalStore)": async (p) => {
         await open(p, "https://dummyjson.com/");
         const f = await overlayFrame(p, "#tt-fetch");
         if (!f) return [false, "no overlay panel"];
@@ -62,7 +62,7 @@ const VERIFY: Record<string, (p: Page) => Promise<[boolean, string]>> = {
         const real = await fetchUser(mocked);
         return [mocked === "Mocked User" && !!real && real !== "Mocked User", `${mocked} → ${real}`];
     },
-    "Watch and mock the site's fetch (tt.siteStore)": async (p) => {
+    "Watch and mock the site's fetch (tweak.siteStore)": async (p) => {
         await open(p, "https://dummyjson.com/");
         const f = await overlayFrame(p, "#tt-site-fetch");
         if (!f) return [false, "no overlay panel"];
@@ -141,7 +141,7 @@ const VERIFY: Record<string, (p: Page) => Promise<[boolean, string]>> = {
         const b = await hits();
         return [a > 0 && b === a + 1, `${a} → ${b}`];
     },
-    "Parameters (tt.params)": async (p) => {
+    "import { tweak } from 'tangitweak'; Parameters (tweak.params)": async (p) => {
         await open(p, "https://postman-echo.com/headers");
         const t = await text(p);
         return [/"x-mode":\s*"dev"/.test(t) && /"x-retries":\s*"3"/.test(t) && /"x-tags":\s*"tangitweak"/.test(t), t.slice(0, 200)];

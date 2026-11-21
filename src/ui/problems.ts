@@ -83,8 +83,6 @@ export interface ProblemScript {
     /** saved-code TypeScript errors, "line N: message" */
     typeErrors?: string[];
     routeWarnings?: string[];
-    /** warning when `minTangiTweakVersion` exceeds the running TangiTweak */
-    versionWarning?: string | null;
     /** the script's handlers and their registration lines ("onRequest #2" → its line) */
     routes?: { kind: string; api?: string; index: number; n?: number; lib?: string; line?: number; url?: string[] }[];
     /** the saved source: positions get a range (the token, the URL pattern) */
@@ -172,8 +170,7 @@ function lineRange(lines: string[], line: number): Range {
  * Where a handler named in a message ("onRequest #2: …") is: the URL pattern
  * the message quotes, found in the source (from the registration on, else
  * anywhere — e.g. a constant), else the registration call itself. The
- * registration line comes from the stored route, else the Nth `tt.<kind>(`
- * (or `tweak.<kind>(`).
+ * registration line comes from the stored route, else the Nth `tweak.<kind>(`.
  */
 function handlerRange(msg: string, s: ProblemScript): Range | { line: number } | undefined {
     const m = HANDLER.exec(msg);
@@ -204,7 +201,7 @@ function handlerRange(msg: string, s: ProblemScript): Range | { line: number } |
 
 /**
  * A handler's "uses `x` — …" problem (a store or a handle the site's world
- * can't have; `tt.siteStore` in a network handler) → the first use of `x`
+ * can't have; `tweak.siteStore` in a network handler) → the first use of `x`
  * in that handler.
  */
 function siteUseRange(msg: string, s: ProblemScript): Range | undefined {
@@ -292,10 +289,6 @@ export function collectProblems(scripts: ProblemScript[], liveMarkers: Map<strin
             return lines ? lineRange(lines, fallback ?? 1) : { line: fallback ?? 1 };
         };
         const handler = (raw: string): Position | Range => handlerRange(raw, s) ?? (lines ? lineRange(lines, 1) : { line: 1 });
-        if (s.versionWarning) {
-            const metaLine = lines ? lines.findIndex((l) => /\bminTangiTweakVersion\b|\btt\s*\.\s*metadata\b/.test(l)) + 1 : 0;
-            problems.push({ severity: "warning", kind: "compile", message: s.versionWarning, ...(lines ? lineRange(lines, metaLine || 1) : { line: 1 }) });
-        }
         if (s.error) problems.push({ severity: "error", kind: "compile", message: userFrames(s.error), ...at(s.error, live?.find((m) => m.severity === "error")?.line) });
         for (const r of s.ruleErrors || []) problems.push({ severity: "error", kind: "rules", message: r, ...handler(r) });
         if (s.runtimeError) problems.push({ severity: "error", kind: "runtime", message: runtimeMessage(s.runtimeError), dismissible: true, ...(s.runtimeError.ctx ? { context: s.runtimeError.ctx } : {}), ...at(s.runtimeError.message) });

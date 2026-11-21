@@ -26,7 +26,7 @@ describe("page hook: calls into a script it doesn't run yet", () => {
         n++;
         s1 = `s1-${n}`;
         s2 = `s2-${n}`;
-        script = { scriptId: s1, name: "one", src: `tt.onSite("*://*/*", () => ({ ping: () => "pong" }));` };
+        script = { scriptId: s1, name: "one", src: `const { tweak } = require("tangitweak"); tweak.onSite("*://*/*", () => ({ ping: () => "pong" }));` };
         const postMessage = window.postMessage.bind(window);
         vi.spyOn(window, "postMessage").mockImplementation((data: any, ...rest: any[]) => {
             record(data);
@@ -38,7 +38,7 @@ describe("page hook: calls into a script it doesn't run yet", () => {
         vi.useRealTimers();
     });
 
-    const callV = (s: string, cid: string, v?: string, fn = "ping") => post({ kind: "rpc.call", s, v, call: { cid, h: "onSite:~0", fn, args: [] } });
+    const callV = (s: string, cid: string, v?: string, fn = "ping") => post({ kind: "rpc.call", s, v, call: { cid, h: "onSite:0", fn, args: [] } });
     const NOT_RUNNING = { name: "WtCallError", message: "not running on this page" };
 
     it("a call for a version the hook hasn't compiled waits for the hot update that brings it", async () => {

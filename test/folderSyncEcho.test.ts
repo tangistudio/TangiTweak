@@ -79,7 +79,7 @@ vi.mock("../src/background/engine/logs", async (orig) => ({
 const put = (name: string, text: string) => files.set(name, { text, t: clock++ });
 const ss = () => import("../src/background/engine/scriptStore");
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-const PARAMS = `tt.params({ n: { type: "number", default: 1 } });`;
+const PARAMS = `import { tweak } from "tangitweak"; tweak.params({ n: { type: "number", default: 1 } });`;
 
 async function settled(sync: typeof import("../src/background/folderSync")) {
     // let debounced storage → disk work fire on its own, as in the browser
@@ -93,6 +93,7 @@ async function settled(sync: typeof import("../src/background/folderSync")) {
 async function setup() {
     put("plain.ts", "// plain");
     put("withParams.ts", PARAMS);
+    await import("../src/shared/transpile");
     const sync = await import("../src/background/folderSync");
     await sync.startFromStoredHandle({ fresh: true });
     await settled(sync);
@@ -152,7 +153,7 @@ describe("folder sync: received changes are not echoed back", () => {
 
     it("an external edit declaring a param is only received", async () => {
         const sync = await setup();
-        put("plain.ts", `tt.params({ m: { type: "number", default: 2 } });`);
+        put("plain.ts", `import { tweak } from "tangitweak"; tweak.params({ m: { type: "number", default: 2 } });`);
         await settled(sync);
         expect(JSON.parse(files.get("settings.schema.json")!.text).properties.scripts.properties["plain.ts"].properties.m).toMatchObject({ type: "number", default: 2 });
         expect(shown).toEqual(["receiving"]);
@@ -163,7 +164,7 @@ describe("folder sync: received changes are not echoed back", () => {
     it("an external add is only received", async () => {
         const sync = await setup();
         put("added.ts", "// added");
-        put("Added Params.ts", `tt.params({ k: { type: "boolean", default: true } });`);
+        put("Added Params.ts", `import { tweak } from "tangitweak"; tweak.params({ k: { type: "boolean", default: true } });`);
         await settled(sync);
         expect(await names()).toEqual(["Added Params", "added", "plain", "withParams"].sort());
         expect(shown).toEqual(["receiving"]);

@@ -96,7 +96,7 @@ function ScriptRow({ script, api, onChanged, version, activeHere }: { script: Sc
     const isLib = script.meta.active === false;
     const health = scriptHealth(script);
     const icon = script.iconUrl && !iconBroken ? script.iconUrl : undefined;
-    const desc = script.meta.description || script.bundleDescription;
+    const desc = script.bundleDescription;
     return (
         <>
             <li className={"script-item" + (isLib ? " utility" : "") + (activeHere ? " active-here" : "")}>

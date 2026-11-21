@@ -21,7 +21,7 @@
 import { builtinSpec } from "./builtinSpecs";
 import { isManifestPath, MANIFEST_FILE, parseManifest, type Manifest } from "./packageMetadata";
 import { isUrlSpec } from "./packageImports";
-import { bytesToImageDataUrl, importPath, importSpecs, isDataSpec, isImageDataPath, isRelativeIconSpec, metadataIconSpec } from "./scriptImports";
+import { bytesToImageDataUrl, importPath, importSpecs, isDataSpec, isImageDataPath, isRelativeIconSpec } from "./scriptImports";
 import { isScriptFilePath, isTestOrToolingTsPath } from "./scriptName";
 import { readZipEntries } from "./zip";
 
@@ -570,8 +570,7 @@ export async function crawl(start: string, read: (path: string) => Promise<strin
     while (queue.length) {
         const from = queue.shift()!;
         if (isDataSpec(from)) continue;
-        const iconSpec = metadataIconSpec(files[from]);
-        const specs = [...importSpecs(files[from]), ...(iconSpec ? [/^\.\.?(\/|$)/.test(iconSpec) ? iconSpec : `./${iconSpec}`] : [])];
+        const specs = importSpecs(files[from]);
         const freshTargets = new Set<string>();
         for (const spec of specs) {
             if (isUrlSpec(spec) || builtinSpec(spec) || !/^\.\.?(\/|$)/.test(spec)) continue;

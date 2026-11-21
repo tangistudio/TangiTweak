@@ -655,7 +655,7 @@ export function createPipeline(
             const a = analyzed.get(s.id);
             if (preview !== undefined) {
                 if (s.id !== preview) continue;
-                previewWhy = !a || a.error ? "the script doesn't compile" : "the script has no overlay handler (tt.onOverlay)";
+                previewWhy = !a || a.error ? "the script doesn't compile" : "the script has no overlay handler (tweak.onOverlay)";
             } else if (!s.enabled) continue;
             if (!a || a.error || !a.meta.active) continue;
             let main = false;
@@ -926,7 +926,7 @@ export function createPipeline(
             void (async () => {
                 const url = msg.url || "";
                 const { bundle } = await hookBundle(url, sender.frameId === 0 || sender.frameId === undefined);
-                // MV2: the bridge runs isolated onPage code — its stores' current state (this page's tt.pageStore copies), so they read synchronously
+                // MV2: the bridge runs isolated onPage code — its stores' current state (this page's tweak.pageStore copies), so they read synchronously
                 const tabId = sender.tab?.id;
                 const isoIds = !__MV3__ ? [...new Set([...bundle.isoHandlers.map((h) => h.scriptId), ...shippedLibIds(bundle.isoLibs)])] : [];
                 if (isoIds.length && typeof tabId === "number" && tabId >= 0) {

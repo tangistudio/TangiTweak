@@ -1,5 +1,5 @@
 // A library's exported function that registers handlers (`export function
-// install() { tt.onPage(…) }`), called from the importer's top level: the
+// install() { tweak.onPage(…) }`), called from the importer's top level: the
 // handlers are the importer's — in the background and in the page alike,
 // with the same keys.
 import { describe, it, expect } from "vitest";
@@ -10,10 +10,10 @@ import { makeLibRequire } from "../src/shared/scriptImports";
 import { scriptFunction } from "../src/shared/scriptFn";
 import { routeLabel } from "../src/shared/route";
 
-const A = `export function install(p: string) { tt.onPage(p, () => "a1"); return tt.onPage(p, () => "a2"); }\ntt.onPage("*", () => "a-own");`;
-const B = `export const install = () => tt.onPage("*", () => "b");\nexport const site = () => tt.onSite("*", () => "s");`;
-const ROOT = `import { install as a } from "./a";\nimport { install as b, site } from "./b";\na("*");\ntt.onPage("*", () => "root");\nb();\nsite();\na("*");`;
-const KEYS = ["onPage:0@a", "onPage:1@a", "onPage:0", "onPage:0@b", "onSite:0@b", "onPage:0@a#1", "onPage:1@a#1"];
+const A = `import { tweak } from "tangitweak"; export function install(p: string) { tweak.onPage(p, () => "a1"); return tweak.onPage(p, () => "a2"); }\ntweak.onPage("*", () => "a-own");`;
+const B = `import { tweak } from "tangitweak"; export const install = () => tweak.onPage("*", () => "b");\nexport const site = () => tweak.onSite("*", () => "s");`;
+const ROOT = `import { tweak } from "tangitweak"; import { install as a } from "./a";\nimport { install as b, site } from "./b";\na("*");\ntweak.onPage("*", () => "root");\nb();\nsite();\na("*");`;
+const KEYS = ["onPage:0@a", "onPage:1@a", "onPage:0", "onPage:0@b", "onSite:0@b", "onPage:2@a", "onPage:3@a"];
 
 const base = { params: {}, log: () => {}, storage: { get: () => undefined, set: () => undefined } };
 
@@ -22,11 +22,11 @@ function pageRun(world: "isolated" | "page") {
         { name: "a", src: toRunnableJs(A) },
         { name: "b", src: toRunnableJs(B) },
     ];
-    const requireFrom = makeLibRequire(libs, (lib, require, m) => scriptFunction(lib.src!, lib.name)(makePageShim({ ...base, world, lib: lib.name }).tt, console, require, m, m.exports));
+    const requireFrom = makeLibRequire(libs, (lib, require, m) => scriptFunction(lib.src!, lib.name)(makePageShim({ ...base, world, lib: lib.name }).host, console, require, m, m.exports));
     const run = (name: string, code: string) => {
         const shim = makePageShim({ ...base, world });
         const m = { exports: {} as any };
-        shim.top(() => scriptFunction(toRunnableJs(code), name)(shim.tt, console, requireFrom(name), m, m.exports));
+        shim.top(() => scriptFunction(toRunnableJs(code), name)(shim.host, console, requireFrom(name), m, m.exports));
         return shim;
     };
     return { run, requireFrom };
@@ -42,7 +42,7 @@ describe("handlers registered by a library's function, for the importer", () => 
         expect(c.error).toBeNull();
         const routes = c.meta.routes.filter((r) => r.kind === "onDocument");
         expect(routes.map((r) => r.key).sort()).toEqual([...KEYS].sort());
-        expect(routes.find((r) => r.key === "onPage:1@a#1")!.lib).toBe("a");
+        expect(routes.find((r) => r.key === "onPage:3@a")!.lib).toBe("a");
         expect(routes.find((r) => r.key === "onPage:0")!.lib).toBeUndefined();
         expect(routeLabel(routes.find((r) => r.key === "onPage:1@a")!)).toBe("onPage #2 (a)");
         expect(routeLabel(routes.find((r) => r.key === "onPage:0")!)).toBe("onPage #1");
@@ -55,8 +55,8 @@ describe("handlers registered by a library's function, for the importer", () => 
             ["onPage:1@a", "a2"],
             ["onPage:0", "root"],
             ["onPage:0@b", "b"],
-            ["onPage:0@a#1", "a1"],
-            ["onPage:1@a#1", "a2"],
+            ["onPage:2@a", "a1"],
+            ["onPage:3@a", "a2"],
         ]);
     });
 
@@ -83,7 +83,7 @@ describe("handlers registered by a library's function, for the importer", () => 
 
     it("onSite warnings check the importer's own calls only", () => {
         const scripts = [{ id: "b", name: "b", code: B }];
-        const code = `import { site } from "./b";\nconst ps = tt.pageStore("ps", {});\nsite();\ntt.onSite("*", () => ps);`;
+        const code = `import { tweak } from "tangitweak"; import { site } from "./b";\nconst ps = tweak.pageStore({});\nsite();\ntweak.onSite("*", () => ps);`;
         const c = compileScript(code, { name: "root", importModule: makeModuleResolver(scripts, () => ({})).resolveFrom("root") });
         expect(c.error).toBeNull();
         expect(siteProblems(code, c.meta.routes).map((m) => m.slice(0, m.indexOf(":")))).toEqual(["onSite #1"]);

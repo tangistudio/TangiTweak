@@ -1,5 +1,5 @@
 /**
- * stores.json ⇄ StoreOwner. Renders persisted `tt.globalStore` data as a
+ * stores.json ⇄ StoreOwner. Renders persisted `tweak.globalStore` data as a
  * single root JSON document (keyed by script name → store name → JSON object),
  * and applies full-file edits (Editor ⌘S or synced folder) or partial imports
  * live to StoreOwner so open tabs and overlays update immediately.
@@ -13,7 +13,7 @@ export { STORES_FILE };
 
 export const STORES_SCHEMA = {
     type: "object",
-    description: "Persisted tt.globalStore data for your scripts, keyed by script name → store name → JSON object.",
+    description: "Persisted tweak.globalStore data for your scripts, keyed by script name → store name → JSON object.",
     additionalProperties: {
         type: "object",
         description: "Persisted globalStore entries belonging to this script.",

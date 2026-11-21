@@ -1,16 +1,12 @@
 /**
- * A package's metadata. A single script declares it in its code, read when
- * it compiles:
- *
- *     tt.metadata({ name: "GitHub dark mode", version: "1.2.0", connect: ["api.github.com"] });
- *
- * A bundle — scripts that install and update together — is a folder with a
- * metadata.json at its root, which lists them:
+ * A package's metadata. A bundle — scripts that install and update
+ * together — is a folder with a metadata.json at its root, which lists them
+ * (a single script has none):
  *
  *     { "name": "GitHub tweaks", "version": "2.0.0",
  *       "scripts": ["dark.ts", "pr-tools.ts"] }
  *
- * `connect` names the hosts the scripts' tt.fetch calls reach; the install
+ * `connect` names the hosts the scripts' tweak.fetch calls reach; the install
  * page shows them and an update that adds one asks for approval.
  * `updateURL` is where updates come from instead of where it was installed
  * from (any source parseSource reads); a package from local files with
@@ -48,7 +44,7 @@ export const isManifestPath = (path: string): boolean => path === MANIFEST_FILE 
 const TEXT_KEYS = ["name", "version", "minTangiTweakVersion", "description", "icon", "homepage", "author", "license", "updateURL"] as const;
 const VERSION_RE = /^v?\d+(\.\d+){0,2}([-+][0-9A-Za-z.-]+)?$/;
 
-/** validate tt.metadata's argument or a manifest's fields (unknown keys are ignored: a newer script may add some) */
+/** validate a manifest's fields (unknown keys are ignored: a newer script may add some) */
 export function readMetadata(raw: unknown, where: string): PackageMetadata {
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error(`${where}: expected an object`);
     const r = raw as Record<string, unknown>;
@@ -114,7 +110,7 @@ export const MANIFEST_SCHEMA = {
             type: "string",
             description: "Where updates come from instead of where it was installed from: a metadata.json, script or .zip URL, a GitHub folder or file, a gist (an update that changes it waits for review)",
         },
-        connect: { type: "array", items: { type: "string" }, uniqueItems: true, description: "Hosts the scripts' tt.fetch calls reach; an update that adds one waits for review" },
+        connect: { type: "array", items: { type: "string" }, uniqueItems: true, description: "Hosts the scripts' tweak.fetch calls reach; an update that adds one waits for review" },
         scripts: {
             type: "array",
             minItems: 1,
@@ -171,11 +167,4 @@ export function minTangiTweakProblem(required: string | undefined, current = cur
         return `Requires TangiTweak ${req} or newer (you have ${current}).`;
     }
     return null;
-}
-
-/** literal `minTangiTweakVersion: "..."` inside a `tt.metadata({ ... })` call (for pre-compile zip import checks) */
-export function scriptMinTangiTweakVersion(code: string): string | undefined {
-    const m = /\btt\s*\.\s*metadata\s*\(\s*\{[\s\S]*?\bminTangiTweakVersion\s*:\s*(["'`])([^"'`\n]+)\1/.exec(code);
-    const v = m?.[2]?.trim().replace(/^v/i, "");
-    return v && VERSION_RE.test(v) ? v : undefined;
 }

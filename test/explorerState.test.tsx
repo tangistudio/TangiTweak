@@ -251,13 +251,13 @@ describe("explorer tree", () => {
         expect(list.querySelectorAll(":scope > li")[2].className).toBe("script-item creating");
     });
 
-    it("renders custom script and bundle icons on Explorer script and package folder rows", async () => {
+    it("renders a bundle's icon on its package folder and entry rows; other scripts get the file icon", async () => {
         const { s, row } = await mount();
         act(() =>
             s.syncExplorer({
                 ...fixture,
                 scripts: [
-                    script("s_a", "alpha", { meta: { name: "alpha", match: ["*://example.com/*"], active: true, metadata: { icon: "data:image/png;base64,BBBB", connect: [] } } }),
+                    script("s_a", "alpha", { meta: { name: "alpha", match: ["*://example.com/*"], active: true } }),
                     script("s_b", "mock/beta"),
                 ],
                 dataFiles: [
@@ -267,7 +267,7 @@ describe("explorer tree", () => {
                 ],
             })
         );
-        expect(row("s_a").querySelector<HTMLImageElement>(".file-icon img")?.getAttribute("src")).toBe("data:image/png;base64,BBBB");
+        expect(row("s_a").querySelector(".file-icon img")).toBeNull();
         expect(row("dir:mock").querySelector<HTMLImageElement>(".file-icon.package img")?.getAttribute("src")).toMatch(/^data:image\/svg\+xml/);
         expect(row("s_b").querySelector<HTMLImageElement>(".file-icon img")?.getAttribute("src")).toMatch(/^data:image\/svg\+xml/);
         expect(row("d_readme").querySelector(".file-icon.md")?.textContent).toBe("MD");

@@ -14,16 +14,18 @@ import { formatScriptError } from "../src/shared/scriptError";
 import { renderSettings, parseSettings, planSettings } from "../src/shared/settingsJson";
 import { buildSettingsSchema } from "../src/shared/settingsSchema";
 
-const CODE = `
-const cfg = tt.params({
+const CODE = `import { tweak } from "tangitweak"; 
+const cfg = tweak.params({
     origin: { type: "string", default: "https://a.com", parse: (s) => new URL(s) },
     n: { type: "number", default: 2, parse: (sec) => sec * 1000 },
     plain: { type: "boolean" },
 });
-const hosts = tt.defineParam("hosts", { type: "stringList", default: ["a.com"], parse: (l) => new Set(l) });
-const mode = tt.defineParam("mode", { type: "enum", choices: ["x", "y"], parse: (c) => c.toUpperCase() });
-tt.log(cfg.origin.host, cfg.n, cfg.plain, [...hosts].join("+"), mode);
-tt.onRequest({ url: \`*://\${cfg.origin.host}/*\`, strategy: "helper" }, () => {});
+const { hosts, mode } = tweak.params({
+    hosts: { type: "stringList", default: ["a.com"], parse: (l) => new Set(l) },
+    mode: { type: "enum", choices: ["x", "y"], parse: (c) => c.toUpperCase() },
+});
+tweak.log(cfg.origin.host, cfg.n, cfg.plain, [...hosts].join("+"), mode);
+tweak.onRequest({ url: \`*://\${cfg.origin.host}/*\`, strategy: "helper" }, () => {});
 `;
 
 function logged(code: string, paramValues?: Record<string, any>) {
@@ -58,7 +60,7 @@ describe("param parse (runtime)", () => {
 
     it("the parser gets a copy of list values", () => {
         const stored = { l: ["a"] };
-        compileScript(`tt.defineParam("l", { type: "stringList", parse: (l) => { l.push("x"); return l; } });`, { paramValues: stored });
+        compileScript(`import { tweak } from "tangitweak"; tweak.params({ l: { type: "stringList", parse: (l) => { l.push("x"); return l; } } });`, { paramValues: stored });
         expect(stored.l).toEqual(["a"]);
     });
 
@@ -68,8 +70,8 @@ describe("param parse (runtime)", () => {
         expect(c.meta.active).toBe(false);
         expect(c.paramDefs!.origin).toBeDefined(); // the ⚙ dialog can still fix the value
         expect(formatScriptError("my script", c.error).split("\n")[0]).toMatch(/^\[my script\] Error: param "origin": parse failed for value "xyz": Invalid URL/);
-        expect(compileScript(`tt.defineParam("a", { type: "number", parse: () => { throw "nope"; } });`).error).toMatch(/param "a": parse failed for value 0: nope/);
-        expect(compileScript(`tt.defineParam("a", { type: "number", parse: 5 });`).error).toMatch(/param "a": parse must be a function/);
+        expect(compileScript(`import { tweak } from "tangitweak"; tweak.params({ a: { type: "number", parse: () => { throw "nope"; } } });`).error).toMatch(/param "a": parse failed for value 0: nope/);
+        expect(compileScript(`import { tweak } from "tangitweak"; tweak.params({ a: { type: "number", parse: 5 } });`).error).toMatch(/param "a": parse must be a function/);
     });
 
     it("helpers: serializableParamDef / parseParamValue", () => {
@@ -82,12 +84,12 @@ describe("param parse (runtime)", () => {
     });
 
     it("page (onDocument) shim parses the raw bundle values", () => {
-        const { tt } = makePageShim({ params: { origin: "https://p.dev", hosts: ["h"] }, log: () => {}, storage: { get: () => undefined, set: () => undefined } });
-        const cfg = tt.params({ origin: { type: "string", parse: (s: string) => new URL(s) } });
+        const tweak = makePageShim({ params: { origin: "https://p.dev", hosts: ["h"] }, log: () => {}, storage: { get: () => undefined, set: () => undefined } }).host.module("main.ts").tweak;
+        const cfg = tweak.params({ origin: { type: "string", parse: (s: string) => new URL(s) }, hosts: { type: "stringList", parse: (l: string[]) => new Set(l) } });
         expect(cfg.origin).toBeInstanceOf(URL);
         expect(cfg.origin.host).toBe("p.dev");
-        expect(tt.defineParam("hosts", { type: "stringList", parse: (l: string[]) => new Set(l) })).toEqual(new Set(["h"]));
-        expect(() => tt.params({ origin: { type: "string", parse: () => { throw new Error("bad"); } } })).toThrow('param "origin": parse failed for value "https://p.dev": bad');
+        expect(cfg.hosts).toEqual(new Set(["h"]));
+        expect(() => tweak.params({ origin: { type: "string", parse: () => { throw new Error("bad"); } } })).toThrow('param "origin": parse failed for value "https://p.dev": bad');
     });
 });
 
@@ -133,8 +135,8 @@ function typesOf(snippet: string): { errors: string[]; types: Record<string, str
 
 describe("param parse (typings)", () => {
     it("contextually types the parser and resolves to its return type", () => {
-        const { errors, types } = typesOf(`export {};
-const cfg = tt.params({
+        const { errors, types } = typesOf(`import { tweak } from "tangitweak"; export {};
+const cfg = tweak.params({
     origin: { type: "string", default: "https://a.com", parse: (s) => new URL(s) },
     n: { type: "number" },
     secs: { type: "number", parse: (sec) => sec * 1000 },
@@ -144,8 +146,8 @@ const cfg = tt.params({
     list: { type: "stringList" },
 });
 const origin = cfg.origin, n = cfg.n, secs = cfg.secs, on = cfg.on, mode = cfg.mode, plainMode = cfg.plainMode, list = cfg.list;
-const hosts = tt.defineParam("hosts", { type: "stringList", parse: (l) => new Set(l) });
-const host = tt.defineParam("host", { type: "string" });
+const more = tweak.params({ hosts: { type: "stringList", parse: (l) => new Set(l) }, host: { type: "string" } });
+const hosts = more.hosts, host = more.host;
 `);
         expect(errors).toEqual([]);
         expect(types).toMatchObject({
@@ -167,15 +169,15 @@ const host = tt.defineParam("host", { type: "string" });
     });
 
     it("params without parse are assignable, with their raw type; with parse, read-only", () => {
-        const ok = typesOf(`export {};
-const cfg = tt.params({ on: { type: "boolean" }, mode: { type: "enum", choices: ["a", "b"] }, list: { type: "stringList" } });
+        const ok = typesOf(`import { tweak } from "tangitweak"; export {};
+const cfg = tweak.params({ on: { type: "boolean" }, mode: { type: "enum", choices: ["a", "b"] }, list: { type: "stringList" } });
 cfg.on = false;
 cfg.mode = "b";
 cfg.list.push("x");
 `);
         expect(ok.errors).toEqual([]);
-        const bad = typesOf(`export {};
-const cfg = tt.params({ mode: { type: "enum", choices: ["a", "b"] }, url: { type: "string", parse: (s) => new URL(s) } });
+        const bad = typesOf(`import { tweak } from "tangitweak"; export {};
+const cfg = tweak.params({ mode: { type: "enum", choices: ["a", "b"] }, url: { type: "string", parse: (s) => new URL(s) } });
 cfg.mode = "c";
 cfg.url = new URL("https://a.com");
 `);
@@ -184,13 +186,13 @@ cfg.url = new URL("https://a.com");
     });
 
     it("rejects a parser whose input doesn't match the param type", () => {
-        const { errors } = typesOf(`tt.params({ n: { type: "number", parse: (s: string) => s } });`);
+        const { errors } = typesOf(`import { tweak } from "tangitweak"; tweak.params({ n: { type: "number", parse: (s: string) => s } });`);
         expect(errors.join("\n")).toMatch(/not assignable/);
     });
 
     it("types nested section objects recursively, keeping leaf mutability and parse inference", () => {
-        const { errors, types } = typesOf(`export {};
-const cfg = tt.params({
+        const { errors, types } = typesOf(`import { tweak } from "tangitweak"; export {};
+const cfg = tweak.params({
     on: { type: "boolean", default: true },
     network: {
         host: { type: "string", default: "a.com" },
@@ -207,8 +209,8 @@ cfg.network.filter.type = "fetch";
         expect(errors).toEqual([]);
         expect(types).toMatchObject({ raw: "string", host: "string", origin: "URL", kind: '"xhr" | "fetch"' });
 
-        const bad = typesOf(`export {};
-const cfg = tt.params({ network: { host: { type: "string" }, origin: { type: "string", parse: (s) => new URL(s) } } });
+        const bad = typesOf(`import { tweak } from "tangitweak"; export {};
+const cfg = tweak.params({ network: { host: { type: "string" }, origin: { type: "string", parse: (s) => new URL(s) } } });
 cfg.network = {} as any;
 cfg.network.origin = new URL("https://b.com");
 `);
@@ -218,9 +220,9 @@ cfg.network.origin = new URL("https://b.com");
 });
 
 describe("shortcut params", () => {
-    const CODE = `const k = tt.defineParam("toggle", { type: "shortcut", default: "Alt+Shift+H", description: "Hide the box" });
-tt.log(JSON.stringify(k));
-tt.onRequest({ url: "*://a.com/*", strategy: "helper" }, () => {});`;
+    const CODE = `import { tweak } from "tangitweak"; const k = tweak.params({ toggle: { type: "shortcut", default: "Alt+Shift+H", description: "Hide the box" } }).toggle;
+tweak.log(JSON.stringify(k));
+tweak.onRequest({ url: "*://a.com/*", strategy: "helper" }, () => {});`;
 
     it("the script gets the keys: the default, a stored value, \"\" when cleared; invalid stored keys fall back", () => {
         expect(logged(CODE).lines).toEqual(['"Alt+Shift+H"']);
@@ -231,7 +233,7 @@ tt.onRequest({ url: "*://a.com/*", strategy: "helper" }, () => {});`;
     });
 
     it("a default that isn't a shortcut is a script error", () => {
-        const { c } = logged(`tt.params({ k: { type: "shortcut", default: "Hyper+K" } });`);
+        const { c } = logged(`import { tweak } from "tangitweak"; tweak.params({ k: { type: "shortcut", default: "Hyper+K" } });`);
         expect(c.error).toMatch(/shortcut parameter "k": "Hyper\+K" has an unknown modifier "Hyper"/);
     });
 

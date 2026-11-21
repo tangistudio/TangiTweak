@@ -29,9 +29,9 @@ const { addUiPort, getScriptErrors } = await import("../src/background/engine/lo
 const logs: { message: string; level: string; scriptId: string | null }[] = [];
 addUiPort({ postMessage: (m: any) => m?.type === "log" && logs.push(m.entry), onDisconnect: { addListener: () => {} } } as any);
 
-const CODE = `
-const cfg = tt.params({ origin: { type: "string", default: "https://a.com", parse: (s) => new URL(s) } });
-tt.onRequest({ url: \`*://\${cfg.origin.host}/*\`, strategy: "helper" }, () => {});
+const CODE = `import { tweak } from "tangitweak"; 
+const cfg = tweak.params({ origin: { type: "string", default: "https://a.com", parse: (s) => new URL(s) } });
+tweak.onRequest({ url: \`*://\${cfg.origin.host}/*\`, strategy: "helper" }, () => {});
 `;
 const get = async (id: string) => (await listScripts()).find((s) => s.id === id)!;
 

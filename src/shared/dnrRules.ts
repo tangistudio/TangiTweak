@@ -605,7 +605,7 @@ export interface RuleProbe {
     urlRead: boolean;
     /** read dynamic state (`params` / `globalStore` / `tabStore`), so returning nothing means "currently off" */
     conditional?: boolean;
-    /** `tt.tabStore` names read during the probe */
+    /** `tweak.tabStore` names read during the probe */
     tabStores?: string[];
     /** optional captures whose fallback differs from "" (what a rule substitutes for a missing one) */
     optionalMismatch?: string[];

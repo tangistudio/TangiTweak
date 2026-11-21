@@ -22,15 +22,15 @@ export type TweakSource = string | URL | InlineTweakSource;
 export interface LoadTweakOptions {
     /** Base directory for resolving relative string paths (defaults to caller file directory or `process.cwd()`). */
     cwd?: string;
-    /** Override `tt.params` defaults (`{ key: val }` or `{ [scriptName]: { key: val } }`). */
+    /** Override `tweak.params` defaults (`{ key: val }` or `{ [scriptName]: { key: val } }`). */
     params?: Record<string, any>;
-    /** Seed `tt.storage` values (`{ key: val }` or `{ [scriptName]: { key: val } }`). */
+    /** Seed `tweak.storage` values (`{ key: val }` or `{ [scriptName]: { key: val } }`). */
     storage?: Record<string, any>;
-    /** Seed `tt.globalStore` values by store name (`{ storeName: { ... } }`). */
+    /** Seed `tweak.globalStore` values by store name (`{ storeName: { ... } }`). */
     stores?: Record<string, Record<string, any>>;
     /** Mock imported modules or URL packages (`{ "https://unpkg.com/...": mockExports, "./lib": mockExports }`). */
     mocks?: Record<string, any>;
-    /** Custom upstream `fetch` used by `tt.fetch` and as fallback upstream in `simulate()`. */
+    /** Custom upstream `fetch` used by `tweak.fetch` and as fallback upstream in `simulate()`. */
     fetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
     /** Keep going instead of throwing when a script has compile, DNR rule, or `onSite` errors (inspect `t.errors`). */
     allowCompileErrors?: boolean;
@@ -74,7 +74,6 @@ export interface TweakCapabilities {
 export interface LoadedScriptInfo {
     id: string;
     name: string;
-    metadata?: Record<string, any>;
     paramDefs?: Record<string, any>;
     exports: any;
     rules: RuleSpec[];
@@ -136,7 +135,7 @@ export interface OpenPageOptions {
     html?: string;
     /** Initial document phase (`"document_start"`, `"document_end"` [default], or `"document_idle"`). */
     phase?: DocumentWhen;
-    /** Tab ID used for `tt.tabStore` and network simulation (default `1`). */
+    /** Tab ID used for `tweak.tabStore` and network simulation (default `1`). */
     tabId?: number;
     /** Wrap `ctx.mount(...)` in closed shadow roots just like TangiTweak in production (default `true`). */
     shadow?: boolean;
@@ -160,11 +159,11 @@ export interface TestPage {
     readonly mounts: PageMountSlot[];
     /** Returns the mount container whose anchor matches `selector` (or the first mount when omitted). */
     mountFor(selector?: string): HTMLElement | null;
-    /** Primary overlay frame `<body>`, or `null` when no script ran `tt.onOverlay` on this page. */
+    /** Primary overlay frame `<body>`, or `null` when no script ran `tweak.onOverlay` on this page. */
     readonly overlay: HTMLElement | null;
     /** Overlay frame `<body>` for a specific script name, or `null`. */
     overlayFor(scriptName?: string): HTMLElement | null;
-    /** Live Valtio proxy for `tt.siteStore(name)` in the page world. */
+    /** Live Valtio proxy for `tweak.siteStore(name)` in the page world. */
     siteStore<T extends Record<string, any> = Record<string, any>>(name: string, initial?: T, scriptName?: string): T;
     /** Advance document lifecycle to `"document_end"` or `"document_idle"`. */
     advanceTo(phase: DocumentWhen): Promise<void>;

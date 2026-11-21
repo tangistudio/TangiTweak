@@ -36,10 +36,10 @@ describe("import paths", () => {
     });
 });
 
-const LIMIT_SCRIPT = `import limits from "./mock/rate-limits.json";
+const LIMIT_SCRIPT = `import { tweak } from "tangitweak"; import limits from "./mock/rate-limits.json";
 import { max } from "./mock/rate-limits.json";
 export const both = [limits.max, max];
-tt.onRequest({ url: "*://a.test/*", strategy: "helper" }, () => {});`;
+tweak.onRequest({ url: "*://a.test/*", strategy: "helper" }, () => {});`;
 
 describe("JSON data file imports", () => {
     const data = [{ path: "mock/rate-limits.json", text: '{ "max": 7 }' }];
@@ -53,7 +53,7 @@ describe("JSON data file imports", () => {
 
     it("libraries in folders import relative to their own folder", () => {
         const lib = { id: "l", name: "mock/helpers", code: `import d from "./rate-limits.json"; export const max = d.max;` };
-        const main = { id: "m", name: "main", code: `import { max } from "./mock/helpers";\ntt.params({ n: { type: "number", default: max } });` };
+        const main = { id: "m", name: "main", code: `import { tweak } from "tangitweak"; import { max } from "./mock/helpers";\ntweak.params({ n: { type: "number", default: max } });` };
         const c = compileWithLibs(main, [lib], {}, data);
         expect(c.error).toBeNull();
         expect(c.paramDefs?.n.default).toBe(7);
@@ -62,7 +62,7 @@ describe("JSON data file imports", () => {
 
     it("parses fresh per import: a mutation doesn't leak", () => {
         const lib = { id: "l", name: "a", code: `import d from "./mock/rate-limits.json"; d.max = 99; export const x = 1;` };
-        const main = { id: "m", name: "main", code: `import "./a";\nimport d from "./mock/rate-limits.json";\ntt.params({ n: { type: "number", default: d.max } });` };
+        const main = { id: "m", name: "main", code: `import { tweak } from "tangitweak"; import "./a";\nimport d from "./mock/rate-limits.json";\ntweak.params({ n: { type: "number", default: d.max } });` };
         expect(compileWithLibs(main, [lib], {}, data).paramDefs?.n.default).toBe(7);
     });
 

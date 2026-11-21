@@ -1,5 +1,5 @@
 /**
- * `tt.fetch` on the script side: the request serialized for a link
+ * `tweak.fetch` on the script side: the request serialized for a link
  * (`WireRequest`) and the answer rebuilt as a real `Response`. The fetch
  * itself runs where `from` says — the background (src/background/engine/
  * ttFetch.ts) — so these work in any context that compiles scripts.
@@ -13,9 +13,9 @@ const NULL_BODY = new Set([101, 103, 204, 205, 304]);
 
 /** split `init` into the fetch options and tt's own (`from`, `bypass`) */
 export function splitFetchInit(init: WtFetchInit | undefined): { init: RequestInit; from?: string; bypass: boolean } {
-    if (init !== undefined && (init === null || typeof init !== "object")) throw new TypeError("tt.fetch: the second argument must be an options object");
+    if (init !== undefined && (init === null || typeof init !== "object")) throw new TypeError("tweak.fetch: the second argument must be an options object");
     const { from, bypass, ...rest } = init ?? {};
-    if (from !== undefined && from !== "page" && from !== "background") throw new TypeError(`tt.fetch: from must be "page" or "background" (got ${JSON.stringify(from)})`);
+    if (from !== undefined && from !== "page" && from !== "background") throw new TypeError(`tweak.fetch: from must be "page" or "background" (got ${JSON.stringify(from)})`);
     return { init: rest, from, bypass: !!bypass };
 }
 
@@ -29,7 +29,7 @@ export async function toWireRequest(input: RequestInfo | URL, init: RequestInit,
     try {
         raw = new URL(raw, base).href;
     } catch {
-        throw new TypeError(`tt.fetch: "${raw}" isn't an absolute URL — a background fetch has no page to resolve it against`);
+        throw new TypeError(`tweak.fetch: "${raw}" isn't an absolute URL — a background fetch has no page to resolve it against`);
     }
     if (typeof input === "string") input = raw;
     // a signal can't cross the link; drop it rather than fail
@@ -38,7 +38,7 @@ export async function toWireRequest(input: RequestInfo | URL, init: RequestInit,
     const out: WireRequest = { url: req.url, method: req.method, headers: [...req.headers] };
     if (req.method !== "GET" && req.method !== "HEAD") {
         const body = new Uint8Array(await req.arrayBuffer());
-        if (body.byteLength > FETCH_MAX_BYTES) throw new RangeError(`tt.fetch: the request body is larger than ${FETCH_MAX_BYTES / 1024 / 1024} MB`);
+        if (body.byteLength > FETCH_MAX_BYTES) throw new RangeError(`tweak.fetch: the request body is larger than ${FETCH_MAX_BYTES / 1024 / 1024} MB`);
         if (body.byteLength || init.body != null) out.body = body;
     }
     // only what the caller set: the background picks its own defaults (cookies: include)
@@ -85,7 +85,7 @@ export async function toWireResponse(r: Response, max = FETCH_MAX_BYTES): Promis
             size += value.byteLength;
             if (size > max) {
                 void reader.cancel();
-                throw new RangeError(`tt.fetch: the response from ${r.url} is larger than ${max / 1024 / 1024} MB`);
+                throw new RangeError(`tweak.fetch: the response from ${r.url} is larger than ${max / 1024 / 1024} MB`);
             }
             chunks.push(value);
         }

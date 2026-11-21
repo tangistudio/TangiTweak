@@ -1,5 +1,5 @@
 /**
- * Shared E2E check (MV2 + MV3): overlays (tt.onOverlay). A `.tsx` switch
+ * Shared E2E check (MV2 + MV3): overlays (tweak.onOverlay). A `.tsx` switch
  * with the built-in React and valtio toggles a page-strategy mock live;
  * clicks on empty areas reach the page; a strict-CSP page still shows the
  * overlay; the page can't find the frame or read the overlay's code; the
@@ -122,14 +122,14 @@ x.send();
     return false;
 }
 
-const switchCode = (origin: string, label: string) => `import { useSnapshot } from "valtio";
+const switchCode = (origin: string, label: string) => `import { tweak } from "tangitweak"; import { useSnapshot } from "valtio";
 
-const mock = tt.globalStore("ovmock", { enabled: false });
+const mock = tweak.globalStore("ovmock", { enabled: false });
 
-tt.replaceResponse({ url: "${origin}/ov-me", strategy: "page" }, () =>
+tweak.replaceResponse({ url: "${origin}/ov-me", strategy: "page" }, () =>
     mock.enabled ? JSON.stringify({ name: "MOCKED" }) : undefined);
 
-tt.onOverlay("${origin}/ov-*", (ctx) => {
+tweak.onOverlay("${origin}/ov-*", (ctx) => {
     const secret = "OV-SECRET-MARKER";
     void fetch("/ov-cookie");
     function Panel() {
@@ -144,7 +144,7 @@ tt.onOverlay("${origin}/ov-*", (ctx) => {
 });
 `;
 
-const rpcCode = (origin: string) => `const overlay = tt.onOverlay("${origin}/ov-*", (ctx) => {
+const rpcCode = (origin: string) => `import { tweak } from "tangitweak"; const overlay = tweak.onOverlay("${origin}/ov-*", (ctx) => {
     const out = document.body.appendChild(document.createElement("output"));
     out.id = "picked";
     out.style.cssText = "position:fixed;left:16px;bottom:16px;background:white;padding:8px";
@@ -170,7 +170,7 @@ const rpcCode = (origin: string) => `const overlay = tt.onOverlay("${origin}/ov-
     };
 });
 
-tt.onSite("${origin}/ov-app*", () => {
+tweak.onSite("${origin}/ov-app*", () => {
     try {
         void overlay.hit();
         document.documentElement.dataset.mainCall = "called";
@@ -179,7 +179,7 @@ tt.onSite("${origin}/ov-app*", () => {
     }
 });
 
-const iso = tt.onPage("${origin}/ov-*", () => {
+const iso = tweak.onPage("${origin}/ov-*", () => {
     document.addEventListener("click", (e) => {
         if (e.altKey) void overlay.picked((e.target as Element).tagName);
     }, true);
@@ -450,7 +450,7 @@ export async function checkOverlays(ctx: any, mgr: any, origin: string, check: C
     await send({ type: "deleteScript", id: "s_ov_rpc" });
 }
 
-const keysCode = (origin: string, id: string) => `tt.onOverlay("${origin}/ov-keys", (ctx) => {
+const keysCode = (origin: string, id: string) => `import { tweak } from "tangitweak"; tweak.onOverlay("${origin}/ov-keys", (ctx) => {
     const box = document.body.appendChild(document.createElement("div"));
     box.id = "${id}";
     box.textContent = "Hello";
@@ -554,7 +554,7 @@ export async function checkOverlayShortcuts(ctx: any, mgr: any, origin: string, 
     await send({ type: "deleteScript", id: "s_ov_keys2" });
 }
 
-const pageKeysCode = (origin: string, id: string) => `tt.onPage("${origin}/ov-keys*", (ctx) => {
+const pageKeysCode = (origin: string, id: string) => `import { tweak } from "tangitweak"; tweak.onPage("${origin}/ov-keys*", (ctx) => {
     const out = document.getElementById("${id}") ?? document.body.appendChild(Object.assign(document.createElement("output"), { id: "${id}" }));
     ctx.shortcut("Alt+Shift+J", () => (out.dataset.n = String(Number(out.dataset.n || 0) + 1)));
     ctx.shortcut("", () => {});
@@ -665,9 +665,9 @@ export async function checkOverlayPreview(ctx: any, mgr: any, origin: string, ch
     await send({ type: "deleteScript", id: "s_ov_prev" });
 }
 
-const twoTabCode = (origin: string) => `const ps = tt.pageStore("ps", { n: 0 });
+const twoTabCode = (origin: string) => `import { tweak } from "tangitweak"; const ps = tweak.pageStore({ n: 0 });
 
-tt.replaceResponse({ url: "${origin}/ov-ps", strategy: "page" }, () => {
+tweak.replaceResponse({ url: "${origin}/ov-ps", strategy: "page" }, () => {
     try {
         ps.n++;
         return String(ps.n);
@@ -676,7 +676,7 @@ tt.replaceResponse({ url: "${origin}/ov-ps", strategy: "page" }, () => {
     }
 });
 
-tt.onOverlay("${origin}/ov-two*", () => {
+tweak.onOverlay("${origin}/ov-two*", () => {
     const out = document.body.appendChild(document.createElement("output"));
     out.id = "two";
     out.value = "pending";
@@ -689,14 +689,14 @@ tt.onOverlay("${origin}/ov-two*", () => {
     void ask();
 });
 
-const pg = tt.onSite("${origin}/ov-two*", () => ({
+const pg = tweak.onSite("${origin}/ov-two*", () => ({
     whoami: () => ({ q: location.search }),
 }));
 `;
 
 /**
  * Two tabs, one overlay + onSite script: each overlay's calls reach
- * its own tab's page, and each page has its own tt.pageStore copy (a
+ * its own tab's page, and each page has its own tweak.pageStore copy (a
  * reload starts over; a pushState doesn't).
  */
 export async function checkPageStores(ctx: any, mgr: any, origin: string, check: Check, opts: { label?: string } = {}): Promise<void> {
@@ -750,26 +750,26 @@ export async function checkPageStores(ctx: any, mgr: any, origin: string, check:
     await send({ type: "deleteScript", id: "s_two" });
 }
 
-const placeCode = (origin: string) => `const site = tt.onSite({ url: "${origin}/ov-layer*", when: "document_end" }, (ctx) => {
+const placeCode = (origin: string) => `import { tweak } from "tangitweak"; const site = tweak.onSite({ url: "${origin}/ov-layer*", when: "document_end" }, (ctx) => {
     document.body.dataset.siteRan = String((window as any).__site);
     return { site: () => (window as any).__site + ":" + ctx.url };
 });
 
-tt.onOverlay("${origin}/ov-layer*", async () => {
+tweak.onOverlay("${origin}/ov-layer*", async () => {
     const o = document.body.appendChild(document.createElement("output"));
     o.id = "domov";
     o.value = "frame";
     o.value = await site.site();
 });
 
-tt.onPage("${origin}/ov-layer*", async () => {
+tweak.onPage("${origin}/ov-layer*", async () => {
     document.body.dataset.pageSaw = typeof (window as any).__site + "|" + (await site.site());
 });
 `;
 
 /**
- * The three places a page handler runs: tt.onSite (the site's own world),
- * tt.onPage (the isolated world) and tt.onOverlay (the overlay frame) — and
+ * The three places a page handler runs: tweak.onSite (the site's own world),
+ * tweak.onPage (the isolated world) and tweak.onOverlay (the overlay frame) — and
  * what each can reach.
  */
 export async function checkPlaces(ctx: any, mgr: any, origin: string, check: Check, opts: { label?: string } = {}): Promise<void> {
@@ -794,17 +794,17 @@ export async function checkPlaces(ctx: any, mgr: any, origin: string, check: Che
 
     // Handlers a library's exported function registers, called from the script's top level, are the script's.
     const u = `${origin}/ov-layer*`;
-    const lib = await send({ type: "saveScript", id: "s_layer_lib", name: "places-lib", code: `export function install() {
-    const site = tt.onSite({ url: "${u}", when: "document_end" }, () => ({ v: () => (window as any).__site }));
-    tt.onPage("${u}", async () => { document.body.dataset.libPage = typeof (window as any).__site + "|" + (await site.v()); });
-    tt.onOverlay("${u}", async () => {
+    const lib = await send({ type: "saveScript", id: "s_layer_lib", name: "places-lib", code: `import { tweak } from "tangitweak"; export function install() {
+    const site = tweak.onSite({ url: "${u}", when: "document_end" }, () => ({ v: () => (window as any).__site }));
+    tweak.onPage("${u}", async () => { document.body.dataset.libPage = typeof (window as any).__site + "|" + (await site.v()); });
+    tweak.onOverlay("${u}", async () => {
         const o = document.body.appendChild(document.createElement("output"));
         o.id = "libov";
         o.value = "frame";
         o.value = await site.v();
     });
 }` });
-    const user = await send({ type: "saveScript", id: "s_layer_user", name: "places-user.tangitweak", code: `import { install } from "./places-lib";\ntt.onPage("${u}", () => { document.body.dataset.rootPage = "1"; });\ninstall();` });
+    const user = await send({ type: "saveScript", id: "s_layer_user", name: "places-user.tangitweak", code: `import { tweak } from "tangitweak"; import { install } from "./places-lib";\ntweak.onPage("${u}", () => { document.body.dataset.rootPage = "1"; });\ninstall();` });
     check(t("a library and its importer save"), !lib?.error && !user?.error, lib?.error || user?.error);
     await mgr.waitForTimeout(800);
     const p2 = await ctx.newPage();
@@ -820,14 +820,14 @@ export async function checkPlaces(ctx: any, mgr: any, origin: string, check: Che
     await send({ type: "deleteScript", id: "s_layer_user" });
     await send({ type: "deleteScript", id: "s_layer_lib" });
 
-    // tt.params is assignable from onPage and onOverlay code: saved like a ⚙ change, and the script re-runs with it
-    const ps = await send({ type: "saveScript", id: "s_param_set", name: "param-set.tangitweak", code: `const cfg = tt.params({ on: { type: "boolean", default: true }, hits: { type: "stringList", default: [] } });
-tt.onPage("${u}", (ctx) => {
+    // tweak.params is assignable from onPage and onOverlay code: saved like a ⚙ change, and the script re-runs with it
+    const ps = await send({ type: "saveScript", id: "s_param_set", name: "param-set.tangitweak", code: `import { tweak } from "tangitweak"; const cfg = tweak.params({ on: { type: "boolean", default: true }, hits: { type: "stringList", default: [] } });
+tweak.onPage("${u}", (ctx) => {
     document.body.dataset.paramOn = cfg.on + "|" + cfg.hits.join(",");
     const b = ctx.once("b", () => { const b = document.body.appendChild(document.createElement("button")); b.id = "pflip"; return b; });
     b.onclick = () => { cfg.on = !cfg.on; cfg.hits.push("page"); };
 });
-tt.onOverlay("${u}", (ctx) => {
+tweak.onOverlay("${u}", (ctx) => {
     const o = ctx.once("o", () => { const o = document.body.appendChild(document.createElement("button")); o.id = "oflip"; return o; });
     o.textContent = cfg.on + "|" + cfg.hits.join(",");
     o.onclick = () => { cfg.on = !cfg.on; cfg.hits.push("ov"); };
@@ -855,16 +855,16 @@ tt.onOverlay("${u}", (ctx) => {
     await send({ type: "deleteScript", id: "s_param_set" });
 }
 
-const isoStoreCode = (origin: string) => `import { createElement } from "react";
+const isoStoreCode = (origin: string) => `import { tweak } from "tangitweak"; import { createElement } from "react";
 import { createRoot } from "react-dom/client";
 import { useSnapshot } from "valtio";
 
-const g = tt.globalStore("isog", { n: 0 }, { persist: false });
-const ps = tt.pageStore("isops", { hits: 0 });
+const g = tweak.globalStore("isog", { n: 0 }, { persist: false });
+const ps = tweak.pageStore({ hits: 0 });
 
-tt.replaceResponse({ url: "${origin}/ov-isops", strategy: "page" }, () => String(++ps.hits));
+tweak.replaceResponse({ url: "${origin}/ov-isops", strategy: "page" }, () => String(++ps.hits));
 
-tt.onOverlay("${origin}/ov-isost*", () => {
+tweak.onOverlay("${origin}/ov-isost*", () => {
     const out = document.body.appendChild(document.createElement("output"));
     out.id = "isost-ov";
     out.value = "overlay";
@@ -872,7 +872,7 @@ tt.onOverlay("${origin}/ov-isost*", () => {
     (window as any).bump = () => ++g.n;
 });
 
-const site = tt.onSite("${origin}/ov-isost*", (ctx) => {
+const site = tweak.onSite("${origin}/ov-isost*", (ctx) => {
     (window as any).__isoSecret = "PAGE-GLOBAL-42";
     try {
         document.documentElement.dataset.mainStore = "read " + ps.hits;
@@ -894,14 +894,14 @@ const site = tt.onSite("${origin}/ov-isost*", (ctx) => {
     };
 });
 
-tt.onPage("${origin}/ov-isost*", async (ctx) => {
+tweak.onPage("${origin}/ov-isost*", async (ctx) => {
     document.body.dataset.isoGlobal = String(typeof (window as any).__isoSecret);
     document.body.dataset.evaluated = await site.read("__isoSecret").then(String, (e) => "rejected: " + e.message);
     document.body.dataset.subscribed = "1";
     for await (const v of ctx.each(site.nextPing)) document.body.dataset.pinged = v + ":" + typeof (window as any).__isoSecret + ":" + g.n;
 })
 
-tt.onPage("${origin}/ov-isost*", () => {
+tweak.onPage("${origin}/ov-isost*", () => {
     const Hits = () => createElement("b", null, "react:" + useSnapshot(ps).hits);
     createRoot(document.body.appendChild(document.createElement("div"))).render(createElement(Hits));
     const out = document.body.appendChild(document.createElement("output"));
@@ -920,7 +920,7 @@ tt.onPage("${origin}/ov-isost*", () => {
 
 /**
  * Stores in isolated-world onPage code: primed, live both ways with the
- * overlay and the background, this page's tt.pageStore copy only; onSite
+ * overlay and the background, this page's tweak.pageStore copy only; onSite
  * code can't use them, and onPage code reads the site through an onSite
  * handle (promise-returning functions, and a ctx.each loop).
  */
@@ -946,7 +946,7 @@ export async function checkIsoStores(ctx: any, mgr: any, origin: string, check: 
     check(t("isolated code reads its stores (primed)"), v0?.ps === 0 && typeof v0?.g === "number", JSON.stringify(v0));
     const g0 = v0?.g ?? 0;
     const mainErr = await waitFor<string>(() => a.evaluate(() => document.documentElement.dataset.mainStore || ""), (v) => !!v, 8000);
-    check(t("onSite code can't use them, and is told to use them in tt.onPage"), mainErr.includes("aren't available in onSite code") && mainErr.includes("use them in tt.onPage"), mainErr);
+    check(t("onSite code can't use them, and is told to use them in tweak.onPage"), mainErr.includes("aren't available in onSite code") && mainErr.includes("use them in tweak.onPage"), mainErr);
     const evaluated = await waitFor<string>(() => a.evaluate(() => document.body.dataset.evaluated || ""), (v) => !!v, 8000);
     const isoGlobal = await a.evaluate(() => document.body.dataset.isoGlobal || "");
     check(t("onPage code is isolated: no page globals; an onSite handle reads them (promise-returning)"), isoGlobal === "undefined" && evaluated === "PAGE-GLOBAL-42|/ov-isost", JSON.stringify({ isoGlobal, evaluated }));
@@ -978,9 +978,9 @@ export async function checkIsoStores(ctx: any, mgr: any, origin: string, check: 
     await send({ type: "deleteScript", id: "s_isost" });
 }
 
-const siteHandlesCode = (origin: string) => `const g = tt.globalStore("unsg", { n: 0 }, { persist: false });
+const siteHandlesCode = (origin: string) => `import { tweak } from "tangitweak"; const g = tweak.globalStore("unsg", { n: 0 }, { persist: false });
 
-const overlay = tt.onOverlay("${origin}/ov-unsafe*", () => {
+const overlay = tweak.onOverlay("${origin}/ov-unsafe*", () => {
     const out = document.body.appendChild(document.createElement("output"));
     out.id = "uns-ov";
     (window as any).bump = () => ++g.n;
@@ -993,7 +993,7 @@ const overlay = tt.onOverlay("${origin}/ov-unsafe*", () => {
     return { greet: (who: string) => "hi " + who + " " + g.n };
 });
 
-const site = tt.onSite("${origin}/ov-unsafe*", () => {
+const site = tweak.onSite("${origin}/ov-unsafe*", () => {
     (window as any).__unsafeSite = "SITE-UNS";
     try {
         void overlay.greet("site");
@@ -1010,7 +1010,7 @@ const site = tt.onSite("${origin}/ov-unsafe*", () => {
     };
 });
 
-tt.onPage("${origin}/ov-unsafe*", (ctx) => {
+tweak.onPage("${origin}/ov-unsafe*", (ctx) => {
     addEventListener("tt-uns-call", async () => {
         const where = await site.where();
         const greet = await overlay.greet("page").catch((e) => "rejected: " + e.message);
@@ -1066,23 +1066,23 @@ export async function checkSiteHandles(ctx: any, mgr: any, origin: string, check
     await send({ type: "deleteScript", id: "s_uns" });
 }
 
-const siteStoreCode = (origin: string, v: number) => `import { subscribe } from "valtio";
+const siteStoreCode = (origin: string, v: number) => `import { tweak } from "tangitweak"; import { subscribe } from "valtio";
 import { useSnapshot } from "valtio";
 
 // v${v}
-const ss = tt.siteStore("ss", { n: 0, on: false });
+const ss = tweak.siteStore({ n: 0, on: false });
 
-tt.onSite("${origin}/ov-site*", () => {
+tweak.onSite("${origin}/ov-site*", () => {
     (window as any).__ss = { read: () => JSON.stringify({ n: ss.n, on: ss.on }), bump: () => ++ss.n };
 });
 
-tt.onPage("${origin}/ov-site*", (ctx) => {
+tweak.onPage("${origin}/ov-site*", (ctx) => {
     const show = () => (document.body.dataset.ssPage = String(ss.n));
     show();
     ctx.signal.addEventListener("abort", subscribe(ss, show));
 });
 
-tt.onOverlay("${origin}/ov-site*", (ctx) => {
+tweak.onOverlay("${origin}/ov-site*", (ctx) => {
     (window as any).toggleSS = () => (ss.on = !ss.on);
     function N() {
         const snap = useSnapshot(ss);
@@ -1093,7 +1093,7 @@ tt.onOverlay("${origin}/ov-site*", (ctx) => {
 `;
 
 /**
- * tt.siteStore: onSite code's writes re-render the overlay and reach onPage
+ * tweak.siteStore: onSite code's writes re-render the overlay and reach onPage
  * code; the overlay's write is read synchronously in the site's world; ten
  * saves keep the values and one subscription per mirror; a forged message
  * for an unknown subscription changes nothing.
@@ -1154,7 +1154,7 @@ export async function checkSiteStores(ctx: any, mgr: any, origin: string, check:
     await send({ type: "deleteScript", id: "s_site" });
 }
 
-const lifeCode = (origin: string, v: string, red: number, boom = false) => `const site = tt.onSite("${origin}/ov-life*", (ctx) => {
+const lifeCode = (origin: string, v: string, red: number, boom = false) => `import { tweak } from "tangitweak"; const site = tweak.onSite("${origin}/ov-life*", (ctx) => {
     if (${boom}) throw new Error("site boom ${v}");
     document.documentElement.dataset.siteVersion = "${v}";
     const queue: string[] = [], waiting: ((x: string) => void)[] = [];
@@ -1171,7 +1171,7 @@ const lifeCode = (origin: string, v: string, red: number, boom = false) => `cons
     };
 });
 
-tt.onPage("${origin}/ov-life*", (ctx) => {
+tweak.onPage("${origin}/ov-life*", (ctx) => {
     if (${boom}) throw new Error("page boom ${v}");
     const d = document.documentElement.dataset;
     const w = window as any;
@@ -1185,7 +1185,7 @@ tt.onPage("${origin}/ov-life*", (ctx) => {
     ctx.mount(<b>mount ${v}</b>);
 });
 
-tt.onPage("${origin}/ov-life*", async (ctx) => {
+tweak.onPage("${origin}/ov-life*", async (ctx) => {
     const d = document.documentElement.dataset;
     d.loopVersion = "${v}";
     d.siteAnswer = "${v}>" + (await site.version());
@@ -1301,7 +1301,7 @@ export async function checkHotReload(ctx: any, mgr: any, origin: string, check: 
 export async function checkEarlyRequests(ctx: any, mgr: any, origin: string, check: Check, opts: { label?: string } = {}): Promise<void> {
     const t = (s: string) => `early requests${opts.label ?? ""}: ${s}`;
     const send = (msg: any): Promise<any> => mgr.evaluate((m: any) => new Promise((r) => chrome.runtime.sendMessage(m, (x: any) => r(x ?? null))), msg);
-    const code = `tt.replaceResponse({ url: "${origin}/early-data*", strategy: "page" }, (ctx) => "MOD:" + new URL(ctx.url).searchParams.get("via"));\n`;
+    const code = `import { tweak } from "tangitweak"; tweak.replaceResponse({ url: "${origin}/early-data*", strategy: "page" }, (ctx) => "MOD:" + new URL(ctx.url).searchParams.get("via"));\n`;
     const saved = await send({ type: "saveScript", id: "s_early", code, name: "early.tangitweak" });
     check(t("the script saves"), !saved?.error, saved?.error);
     await mgr.waitForTimeout(800);

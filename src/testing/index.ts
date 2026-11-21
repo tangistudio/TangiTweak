@@ -87,15 +87,15 @@ export type TweakSource = string | URL | InlineTweakSource;
 export interface LoadTweakOptions {
     /** Base directory for resolving relative string paths (defaults to caller file directory or `process.cwd()`). */
     cwd?: string;
-    /** Override `tt.params` defaults (`{ key: val }` or `{ [scriptName]: { key: val } }`). */
+    /** Override `tweak.params` defaults (`{ key: val }` or `{ [scriptName]: { key: val } }`). */
     params?: Record<string, any>;
-    /** Seed `tt.storage` values (`{ key: val }` or `{ [scriptName]: { key: val } }`). */
+    /** Seed `tweak.storage` values (`{ key: val }` or `{ [scriptName]: { key: val } }`). */
     storage?: Record<string, any>;
-    /** Seed `tt.globalStore` values by store name (`{ storeName: { ... } }`). */
+    /** Seed `tweak.globalStore` values by store name (`{ storeName: { ... } }`). */
     stores?: Record<string, Record<string, any>>;
     /** Mock imported modules or URL packages (`{ "https://unpkg.com/...": mockExports, "./lib": mockExports }`). */
     mocks?: Record<string, any>;
-    /** Custom upstream `fetch` used by `tt.fetch` and as fallback upstream in `simulate()`. */
+    /** Custom upstream `fetch` used by `tweak.fetch` and as fallback upstream in `simulate()`. */
     fetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
     /** Keep going instead of throwing when a script has compile, DNR rule, or `onSite` errors (inspect `t.errors`). */
     allowCompileErrors?: boolean;
@@ -111,7 +111,6 @@ export interface TweakLogEntry {
 export interface LoadedScriptInfo {
     id: string;
     name: string;
-    metadata?: PackageMetadata;
     paramDefs?: ParamTree;
     exports: any;
     rules: RuleSpec[];
@@ -173,7 +172,7 @@ export interface OpenPageOptions {
     html?: string;
     /** Initial document phase (`"document_start"`, `"document_end"` [default], or `"document_idle"`). */
     phase?: DocumentWhen;
-    /** Tab ID used for `tt.tabStore` and network simulation (default `1`). */
+    /** Tab ID used for `tweak.tabStore` and network simulation (default `1`). */
     tabId?: number;
     /** Wrap `ctx.mount(...)` in closed shadow roots just like TangiTweak in production (default `true`). */
     shadow?: boolean;
@@ -197,11 +196,11 @@ export interface TestPage {
     readonly mounts: PageMountSlot[];
     /** Returns the mount container whose anchor matches `selector` (or the first mount when omitted). */
     mountFor(selector?: string): HTMLElement | null;
-    /** Primary overlay frame `<body>`, or `null` when no script ran `tt.onOverlay` on this page. */
+    /** Primary overlay frame `<body>`, or `null` when no script ran `tweak.onOverlay` on this page. */
     readonly overlay: HTMLElement | null;
     /** Overlay frame `<body>` for a specific script name, or `null`. */
     overlayFor(scriptName?: string): HTMLElement | null;
-    /** Live Valtio proxy for `tt.siteStore(name)` in the page world. */
+    /** Live Valtio proxy for `tweak.siteStore(name)` in the page world. */
     siteStore<T extends Record<string, any> = Record<string, any>>(name: string, initial?: T, scriptName?: string): T;
     /** Advance document lifecycle to `"document_end"` or `"document_idle"`. */
     advanceTo(phase: DocumentWhen): Promise<void>;
@@ -516,7 +515,7 @@ export async function loadTweak(source: TweakSource, options: LoadTweakOptions =
         logs.push({ script: scriptName, level, message: sourceLabel ? `[${sourceLabel}] ${text}` : text, ...(kind ? { kind } : {}) });
     };
 
-    // Per-script key-value storage (`tt.storage` + `$store:*` persistence)
+    // Per-script key-value storage (`tweak.storage` + `$store:*` persistence)
     const storageData = new Map<string, Record<string, any>>();
     for (const s of ws.scripts) storageData.set(s.id, {});
     if (options.storage) {
@@ -1201,7 +1200,7 @@ export async function loadTweak(source: TweakSource, options: LoadTweakOptions =
 
                 const wrapReq = (reqFn: (spec: string) => any) => (spec: string) => (mockObjs.has(spec) ? mockObjs.get(spec) : reqFn(spec));
 
-                // 1. Site world (`tt.onSite`)
+                // 1. Site world (`tweak.onSite`)
                 if (hasSite) {
                     if (hot) st.siteExposer.reset();
                     const g = st.siteLife.begin();
@@ -1226,19 +1225,19 @@ export async function loadTweak(source: TweakSource, options: LoadTweakOptions =
                     const requireFrom = makeLibRequire(
                         libs,
                         (lib, req, mod) =>
-                            scriptFunction(lib.src!, lib.name)(makeSiteShim(lib.name, lib.params, false).tt, consoleSite, wrapReq(req), mod, mod.exports),
+                            scriptFunction(lib.src!, lib.name)(makeSiteShim(lib.name, lib.params, false).host, consoleSite, wrapReq(req), mod, mod.exports),
                         { builtin: siteBuiltin, onSite: true }
                     );
                     const mod = { exports: {} as any };
                     const shim = makeSiteShim(undefined, undefined, true);
-                    shim.top(() => scriptFunction(src, s.name)(shim.tt, consoleSite, wrapReq(requireFrom(s.name)), mod, mod.exports));
+                    shim.top(() => scriptFunction(src, s.name)(shim.host, consoleSite, wrapReq(requireFrom(s.name)), mod, mod.exports));
                     st.sitePending = domHandlersFor(shim.dom, currentUrl, st.siteExposer);
                     st.siteExposer.done();
                     st.siteGen = g;
                     st.siteRan.clear();
                 }
 
-                // 2. Overlay frame (`tt.onOverlay`)
+                // 2. Overlay frame (`tweak.onOverlay`)
                 if (overlayRoutes.length) {
                     const libStores: Record<string, any> = {};
                     for (const l of libs) if (l.id && storeInit[l.id]) libStores[l.id] = storeInit[l.id];
@@ -1340,7 +1339,7 @@ export async function loadTweak(source: TweakSource, options: LoadTweakOptions =
                     }
                 }
 
-                // 3. Isolated world (`tt.onPage`)
+                // 3. Isolated world (`tweak.onPage`)
                 if (hasIso) {
                     if (hot) st.isoExposer.reset();
                     const g = st.isoLife.begin();
@@ -1402,12 +1401,12 @@ export async function loadTweak(source: TweakSource, options: LoadTweakOptions =
                     const requireFrom = makeLibRequire(
                         libs,
                         (lib, req, mod) =>
-                            scriptFunction(lib.src!, lib.name)(makeIsoShim(lib.id ?? s.id, lib.name, lib.params || {}, false).tt, consoleIso, wrapReq(req), mod, mod.exports),
+                            scriptFunction(lib.src!, lib.name)(makeIsoShim(lib.id ?? s.id, lib.name, lib.params || {}, false).host, consoleIso, wrapReq(req), mod, mod.exports),
                         { builtin: scriptBuiltin(codeOf, hotRegistry(s.name).begin()) }
                     );
                     const mod = { exports: {} as any };
                     const shim = makeIsoShim(s.id, s.name, resolvedParams, true);
-                    shim.top(() => scriptFunction(src, s.name)(shim.tt, consoleIso, wrapReq(requireFrom(s.name)), mod, mod.exports));
+                    shim.top(() => scriptFunction(src, s.name)(shim.host, consoleIso, wrapReq(requireFrom(s.name)), mod, mod.exports));
                     st.setIsoReact(() => {
                         try {
                             return reactOf(wrapReq(requireFrom(s.name)));
@@ -1539,17 +1538,15 @@ export async function loadTweak(source: TweakSource, options: LoadTweakOptions =
     const tweak: LoadedTweak = {
         manifest: ws.manifest,
         get metadata() {
-            return compiledMap.get(primaryScript.id)?.meta.metadata;
+            if (!ws.manifest) return undefined;
+            const { scripts: _, ...m } = ws.manifest;
+            return m;
         },
         get capabilities() {
             const routes = entryScripts.flatMap((s) => compiledMap.get(s.id)?.meta.routes || []);
-            const connect = [
-                ...(ws.manifest?.connect || []),
-                ...entryScripts.flatMap((s) => compiledMap.get(s.id)?.meta.metadata?.connect || []),
-            ];
             return capabilitiesOf(
                 routes,
-                connect,
+                ws.manifest?.connect || [],
                 ws.scripts.map((s) => s.code)
             );
         },
@@ -1559,7 +1556,6 @@ export async function loadTweak(source: TweakSource, options: LoadTweakOptions =
                 return {
                     id: s.id,
                     name: s.name,
-                    metadata: c.meta.metadata,
                     paramDefs: c.paramDefs,
                     exports: c.exports,
                     rules: [...(currentRulesByScript.get(s.id) || [])],

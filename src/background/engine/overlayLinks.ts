@@ -1,7 +1,7 @@
 /**
  * L2 for overlays: what a page's bridge may do for a script's overlay
- * (`tt.onOverlay`) over its `tt-bridge` port — get the script's code, use
- * its stores, `tt.fetch` from the background, and bypass page fetches.
+ * (`tweak.onOverlay`) over its `tt-bridge` port — get the script's code, use
+ * its stores, `tweak.fetch` from the background, and bypass page fetches.
  *
  * A renderer may be compromised, so the bridge is only trusted as far as
  * its frame: everything is per script and granted by `overlay.open`, which
@@ -13,7 +13,7 @@
  * `chrome.userScripts` world (background/userScripts.ts, hook/isolated.ts)
  * whose port comes here. It gets its code (`iso.load`, only where the
  * script has isolated onPage code for the frame's URL), its Log lines and
- * `tt.storage`, and — top frame only — the calls to and from the script's
+ * `tweak.storage`, and — top frame only — the calls to and from the script's
  * overlay, relayed through that tab's top-frame bridge (L2 `iso.call` /
  * `iso.result`). Each side only reaches the same tab's top frame and the
  * same script; anything else is dropped.
@@ -56,7 +56,7 @@ interface Grant {
     expires: number;
     /** the overlay's link to the store owner (created on first use) */
     store: Endpoint | null;
-    /** the page the overlay is on: the only one whose `tt.pageStore` copies it reaches */
+    /** the page the overlay is on: the only one whose `tweak.pageStore` copies it reaches */
     page: string;
     /** script ids of libraries imported by this overlay */
     libs: Set<string>;

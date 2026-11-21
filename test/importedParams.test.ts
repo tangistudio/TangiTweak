@@ -1,8 +1,8 @@
 /**
  * Param definitions imported from a utility script:
- *   import { envParam } from "./utils"; tt.params({ intercept_environments: envParam })
+ *   import { envParam } from "./utils"; tweak.params({ intercept_environments: envParam })
  * The save-time (meta-only) compile used to stub every import, so the def
- * reached tt.params as the stub proxy and the explorer showed a bogus
+ * reached tweak.params as the stub proxy and the explorer showed a bogus
  * "needs a type" compile error while the editor's TypeScript was happy.
  */
 import { describe, it, expect, beforeEach } from "vitest";
@@ -36,16 +36,16 @@ export const defs = {
 export const choices = ["x", "y"];
 `;
 
-const IMPORTER = `
+const IMPORTER = `import { tweak } from "tangitweak"; 
 import { envParam } from "./utils";
-const p = tt.params({ intercept_environments: envParam });
-tt.onRequest({ url: "*://*/*", strategy: "helper" }, () => { void p.intercept_environments; });
+const p = tweak.params({ intercept_environments: envParam });
+tweak.onRequest({ url: "*://*/*", strategy: "helper" }, () => { void p.intercept_environments; });
 `;
 
-const SPREAD = `
+const SPREAD = `import { tweak } from "tangitweak"; 
 import { defs, choices } from "./utils";
-const p = tt.params({ ...defs, pick: { type: "enum", choices, default: "y" } });
-tt.onRequest({ url: "*://*/*", strategy: "helper" }, () => { void p.mode; });
+const p = tweak.params({ ...defs, pick: { type: "enum", choices, default: "y" } });
+tweak.onRequest({ url: "*://*/*", strategy: "helper" }, () => { void p.mode; });
 `;
 
 describe("imported param definitions", () => {
@@ -53,9 +53,9 @@ describe("imported param definitions", () => {
         for (const code of [
             IMPORTER,
             SPREAD,
-            `import { envParam } from "./utils"; tt.defineParam("e", envParam); tt.onRequest({ url: "*://*/*", strategy: "helper" }, () => {});`,
-            `import { defs } from "./utils"; tt.params(defs); tt.onRequest({ url: "*://*/*", strategy: "helper" }, () => {});`,
-            `import { t } from "./utils"; tt.params({ x: { type: t, default: 1 } }); tt.onRequest({ url: "*://*/*", strategy: "helper" }, () => {});`,
+            `import { tweak } from "tangitweak"; import { envParam } from "./utils"; tweak.params({ e: envParam }); tweak.onRequest({ url: "*://*/*", strategy: "helper" }, () => {});`,
+            `import { tweak } from "tangitweak"; import { defs } from "./utils"; tweak.params(defs); tweak.onRequest({ url: "*://*/*", strategy: "helper" }, () => {});`,
+            `import { tweak } from "tangitweak"; import { t } from "./utils"; tweak.params({ x: { type: t, default: 1 } }); tweak.onRequest({ url: "*://*/*", strategy: "helper" }, () => {});`,
         ]) {
             const c = compileScript(code, { importModule: () => makeStubModule() });
             expect(c.error, code).toBeNull();
@@ -64,7 +64,7 @@ describe("imported param definitions", () => {
     });
 
     it("a genuinely invalid inline def still errors", () => {
-        const c = compileScript(`tt.params({ x: { default: 1 } }); tt.onRequest({ url: "*://*/*", strategy: "helper" }, () => {});`, { importModule: () => makeStubModule() });
+        const c = compileScript(`import { tweak } from "tangitweak"; tweak.params({ x: { default: 1 } }); tweak.onRequest({ url: "*://*/*", strategy: "helper" }, () => {});`, { importModule: () => makeStubModule() });
         expect(c.error).toMatch(/parameter "x" needs a type/);
     });
 
@@ -128,7 +128,7 @@ describe("saveScript with imported params", () => {
 
     it("param values of the importer apply to imported defs", async () => {
         await saveScript({ id: "u", name: "utils", code: UTILS });
-        await saveScript({ id: "m", name: "main.tangitweak", code: `import { envParam } from "./utils";\nconst p = tt.params({ e: envParam });\nif (p.e.includes("prod")) tt.onRequest({ url: "*://*/*", strategy: "helper" }, () => {});` });
+        await saveScript({ id: "m", name: "main.tangitweak", code: `import { tweak } from "tangitweak"; import { envParam } from "./utils";\nconst p = tweak.params({ e: envParam });\nif (p.e.includes("prod")) tweak.onRequest({ url: "*://*/*", strategy: "helper" }, () => {});` });
         await setParamValue("m", "e", ["prod"]);
         const main = (await listScripts()).find((x) => x.id === "m")!;
         expect(main.meta.active).toBe(true);

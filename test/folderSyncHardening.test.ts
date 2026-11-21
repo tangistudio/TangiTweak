@@ -54,6 +54,7 @@ const all = async () => (await (await ss()).listScripts()).map((s) => ({ id: s.i
 const scriptFiles = () => [...files.keys()].filter((n) => n.endsWith(".ts") && n !== "tt-api.d.ts").sort();
 
 async function started() {
+    await import("../src/shared/transpile");
     const sync = await import("../src/background/folderSync");
     await sync.startFromStoredHandle({ fresh: true });
     return sync;
@@ -156,7 +157,7 @@ describe("folder sync: the background is the only writer", () => {
     it("renaming in the store renames the script's settings.json entry", async () => {
         const sync = await started();
         const { saveScript } = await ss();
-        const code = `tt.params({ n: { type: "number", default: 1 } });`;
+        const code = `import { tweak } from "tangitweak"; tweak.params({ n: { type: "number", default: 1 } });`;
         await saveScript({ id: "p", code, name: "old" });
         await sync.flush();
         put("settings.json", JSON.stringify({ scripts: { "old.ts": { n: 9 } } }, null, 2) + "\n");
@@ -263,6 +264,7 @@ describe("folder sync: worker restart keeps the merge base", () => {
         await saveScript({ id: ids.m, code: "// m store", name: "m" }); // store-only change
         put("n.ts", "// n disk"); // disk-only change
         vi.resetModules();
+        await import("../src/shared/transpile");
         sync = await import("../src/background/folderSync");
         await sync.startFromStoredHandle();
         await sync.flush();

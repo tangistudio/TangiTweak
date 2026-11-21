@@ -7,9 +7,9 @@ const none = new Map<string, ProblemMarker[]>();
 describe("collectProblems", () => {
     it("an onSite handler's store/handle warning points at the name's first use in that handler", () => {
         const code = [
-            "const cfg = tt.pageStore(\"cfg\", { a: 1 });", //
-            'tt.onPage("*", () => cfg.a);',
-            'tt.onSite("*", () => {',
+            "import { tweak } from 'tangitweak'; const cfg = tweak.pageStore({ a: 1 });", //
+            'tweak.onPage("*", () => cfg.a);',
+            'tweak.onSite("*", () => {',
             "    const x = 1;",
             "    return cfg.a + x;",
             "});",
@@ -127,7 +127,7 @@ describe("collectProblems", () => {
 
     it("with the source: ranges on the URL pattern, the registration, the thrown-at token", () => {
         const pat = "https://a.test/:p+/:name";
-        const code = ["// x", "tt.onRequest({", `    url: ${JSON.stringify(pat)},`, '    strategy: "rules",', "}, () => ({ block: true }));", "", '  tt.onResponseBody({ url: "*://b.test/*", strategy: "helper" }, (c, b) => b);', "const v = boom();"].join("\n");
+        const code = ["// x", "import { tweak } from 'tangitweak'; tweak.onRequest({", `    url: ${JSON.stringify(pat)},`, '    strategy: "rules",', "}, () => ({ block: true }));", "", '  tweak.onResponseBody({ url: "*://b.test/*", strategy: "helper" }, (c, b) => b);', "const v = boom();"].join("\n");
         const routes = [
             { kind: "onRequest", index: 0, line: 2, url: [pat] },
             { kind: "onResponseBody", index: 0, line: 7, url: ["*://b.test/*"] },
@@ -152,13 +152,13 @@ describe("collectProblems", () => {
         const [stale] = collectProblems([script("b", { code, routes: routes.map(({ line, ...r }) => r), routeWarnings: ["onResponseBody #1: never runs"] })], none);
         expect(stale.problems[0]).toMatchObject({ line: 7, column: 3 });
         // a pattern held in a constant above the registration
-        const code2 = [`const P = ${JSON.stringify(pat)};`, "tt.onRequest({ url: P, strategy: \"rules\" }, () => ({ block: true }));"].join("\n");
+        const code2 = [`const P = ${JSON.stringify(pat)};`, "import { tweak } from 'tangitweak'; tweak.onRequest({ url: P, strategy: \"rules\" }, () => ({ block: true }));"].join("\n");
         const [c] = collectProblems([script("c", { code: code2, routes: [{ kind: "onRequest", index: 0, line: 2, url: [pat] }], ruleErrors: [`onRequest #1: url pattern "${pat}" is too complex`] })], none);
         expect(c.problems[0]).toMatchObject({ line: 1, column: 12, endColumn: 12 + pat.length });
     });
 
     it("places a library's handler (\"onPage #1 (lib)\") at the script's call of the library", () => {
-        const code = [`import { install } from "./lib";`, `tt.onPage("*", () => {});`, `install();`].join("\n");
+        const code = [`import { install } from "./lib";`, `import { tweak } from "tangitweak"; tweak.onPage("*", () => {});`, `install();`].join("\n");
         const routes = [
             { kind: "onDocument", api: "onPage", index: 0, line: 2, url: ["*"] },
             { kind: "onDocument", api: "onPage", index: 1, n: 0, lib: "lib", line: 3, url: ["*"] },

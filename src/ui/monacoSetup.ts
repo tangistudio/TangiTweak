@@ -1,6 +1,6 @@
 /**
  * Monaco loader + editor configuration. Uses the classic AMD build (copied
- * into dist/lib/monaco) and wires TS IntelliSense to the `tt` API typings.
+ * into dist/lib/monaco) and wires TS IntelliSense to the `tweak` API typings.
  */
 
 import {
@@ -33,7 +33,7 @@ import { buildSettingsSchema } from "../shared/settingsSchema";
 
 const STORES_SCHEMA = {
     type: "object",
-    description: "Persisted tt.globalStore data for your scripts, keyed by script name → store name → JSON object.",
+    description: "Persisted tweak.globalStore data for your scripts, keyed by script name → store name → JSON object.",
     additionalProperties: {
         type: "object",
         description: "Persisted globalStore entries belonging to this script.",
@@ -415,10 +415,10 @@ function registerTsHover(monaco: any): void {
     });
 }
 
-export const STARTER_TEMPLATE = `tt.metadata({ description: "What this script does" });
+export const STARTER_TEMPLATE = `import { tweak } from "tangitweak";
 
 // Adjustable parameters (editable in settings.json / the popup ⚙ dialog):
-const cfg = tt.params({
+const cfg = tweak.params({
     host: { type: "string", default: "*.example.com", description: "Host pattern to intercept" },
     debug: { type: "boolean", default: true, description: "Log every request" },
 });
@@ -426,19 +426,19 @@ const cfg = tt.params({
 // Each handler takes a route: its URL pattern(s) and the strategy that runs it
 // (helper | page | extension | debugger | rules — see Help → Reference → Strategies).
 // Modify request headers / redirect / cancel:
-tt.onRequest({ url: \`*://\${cfg.host}/*\`, strategy: "helper" }, (ctx) => {
-    if (cfg.debug) tt.log("request to", ctx.url);
+tweak.onRequest({ url: \`*://\${cfg.host}/*\`, strategy: "helper" }, (ctx) => {
+    if (cfg.debug) tweak.log("request to", ctx.url);
     // return { redirect: "https://example.com/other" };
     // return { block: true };
     // return { headers: { set: { "x-debug": "1" } } };
 });
 
 // Modify response headers:
-// tt.onResponseHeaders({ url: \`*://\${cfg.host}/*\`, strategy: "helper" }, (ctx) => ({ headers: { set: { "access-control-allow-origin": "*" } } }));
+// tweak.onResponseHeaders({ url: \`*://\${cfg.host}/*\`, strategy: "helper" }, (ctx) => ({ headers: { set: { "access-control-allow-origin": "*" } } }));
 
 // Replace the whole response body:
-// tt.replaceResponse({ url: \`*://\${cfg.host}/api/*\`, strategy: "helper" }, (ctx) => ({ mocked: true }));
+// tweak.replaceResponse({ url: \`*://\${cfg.host}/api/*\`, strategy: "helper" }, (ctx) => ({ mocked: true }));
 
 // Modify the response body (more route options: exclude / methods / resourceTypes):
-// tt.onResponseBody({ url: \`*://\${cfg.host}/*\`, exclude: "*://*/*.png", strategy: "page" }, (ctx, body) => body.replace("foo", "bar"));
+// tweak.onResponseBody({ url: \`*://\${cfg.host}/*\`, exclude: "*://*/*.png", strategy: "page" }, (ctx, body) => body.replace("foo", "bar"));
 `;

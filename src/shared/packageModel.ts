@@ -10,7 +10,7 @@
 import type { Capabilities } from "./packageCaps";
 import { MANIFEST_FILE, parseManifest, type PackageMetadata } from "./packageMetadata";
 import { ENTRY_FILE_RE } from "./packageSource";
-import { folderOf, isDataSpec, metadataIconValue, resolveIconSrc } from "./scriptImports";
+import { folderOf, isDataSpec, resolveIconSrc } from "./scriptImports";
 import { scriptFileKey } from "./scriptName";
 
 export const PACKAGES_KEY = "wtPackages"; // the extension's former name (Wiretrick): kept so stored data survives
@@ -172,25 +172,16 @@ export function singleScriptBundles(
 /**
  * Resolved `<img src>` icon URLs for scripts (`scriptIcons`: script id → src)
  * and package/bundle folders (`folderIcons`: folder path → src), from
- * `tt.metadata({ icon })`, `<folder>/metadata.json`'s `icon`, and installed
- * packages' metadata.
+ * `<folder>/metadata.json`'s `icon` and installed packages' metadata.
  */
 export function resolveWorkspaceIcons(
-    scripts: readonly { id: string; meta: { name: string; metadata?: Pick<PackageMetadata, "icon"> } }[],
+    scripts: readonly { id: string; meta: { name: string } }[],
     dataFiles: readonly { path: string; text: string }[] = [],
     installed: Record<string, InstalledPackage> = {}
 ): { scriptIcons: Map<string, string>; folderIcons: Map<string, string> } {
     const scriptIcons = new Map<string, string>();
     const folderIcons = new Map<string, string>();
     const byKey = new Map(scripts.map((s) => [scriptFileKey(s.meta.name), s]));
-    const ownIcon = (s: { meta: { name: string; metadata?: Pick<PackageMetadata, "icon"> } }) =>
-        resolveIconSrc(s.meta.metadata?.icon, folderOf(s.meta.name), dataFiles);
-
-    for (const s of scripts) {
-        const ic = ownIcon(s);
-        if (ic) scriptIcons.set(s.id, ic);
-    }
-
     for (const d of dataFiles) {
         if (!d.path.toLowerCase().endsWith("/" + MANIFEST_FILE)) continue;
         const folder = d.path.slice(0, -MANIFEST_FILE.length - 1);
@@ -205,9 +196,7 @@ export function resolveWorkspaceIcons(
             const s = byKey.get(scriptFileKey(storeItemOf(folder, rel).name));
             return s ? [s] : [];
         });
-        const bundleIcon =
-            resolveIconSrc(manifest.icon, folder, dataFiles) ??
-            (entryScripts.length === 1 ? scriptIcons.get(entryScripts[0].id) : undefined);
+        const bundleIcon = resolveIconSrc(manifest.icon, folder, dataFiles);
         if (bundleIcon) {
             folderIcons.set(folder, bundleIcon);
             for (const s of entryScripts) if (!scriptIcons.has(s.id)) scriptIcons.set(s.id, bundleIcon);
@@ -216,9 +205,7 @@ export function resolveWorkspaceIcons(
 
     for (const pkg of Object.values(installed)) {
         const ids = entryIds(pkg);
-        const pkgIcon =
-            resolveIconSrc(pkg.metadata.icon, pkg.folder, dataFiles) ??
-            (ids.length === 1 ? scriptIcons.get(ids[0]) : undefined);
+        const pkgIcon = resolveIconSrc(pkg.metadata.icon, pkg.folder, dataFiles);
         if (!pkgIcon) continue;
         if (pkg.folder && !folderIcons.has(pkg.folder)) folderIcons.set(pkg.folder, pkgIcon);
         for (const id of ids) if (!scriptIcons.has(id)) scriptIcons.set(id, pkgIcon);
@@ -229,12 +216,10 @@ export function resolveWorkspaceIcons(
 
 /**
  * Resolve a package version's `<img src>` icon URL from its `metadata.icon`
- * (or, for a single-entry bundle without one, its entry's `icon`) against the
- * package's own `files` (plus optional fallback `extraDataFiles`).
+ * against the package's own `files` (plus optional fallback `extraDataFiles`).
  */
 export function resolvePackageIcon(
     pkg: { entries: string[]; files: Record<string, string>; metadata?: Pick<PackageMetadata, "icon"> },
-    entryIcons?: readonly (string | undefined)[],
     extraDataFiles: readonly { path: string; text: string }[] = []
 ): string | undefined {
     const pkgData = [
@@ -247,10 +232,6 @@ export function resolvePackageIcon(
         const base = pkg.files[MANIFEST_FILE] !== undefined ? "" : folderOf(pkg.entries[0] ?? "");
         const resolved = resolveIconSrc(pkg.metadata.icon, base, pkgData);
         if (resolved) return resolved;
-    }
-    if (pkg.entries.length === 1) {
-        const rawEntryIcon = entryIcons?.[0] ?? metadataIconValue(pkg.files[pkg.entries[0]] ?? "");
-        if (rawEntryIcon) return resolveIconSrc(rawEntryIcon, folderOf(pkg.entries[0]), pkgData);
     }
     return undefined;
 }

@@ -12,6 +12,7 @@ export default defineConfig({
     },
     esbuild: { jsx: "automatic", jsxImportSource: "react" },
     test: {
+        setupFiles: ["test/setup.ts"],
         // UI component tests (*.test.tsx) need a DOM
         environmentMatchGlobs: [["test/**/*.test.tsx", "happy-dom"]],
     },

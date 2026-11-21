@@ -1,44 +1,41 @@
 /**
- * `import { tweak } from "tangitweak"`: the authoring API, next to the
- * `tt` parameter every script gets. A shim builder (compile.ts makeShim,
- * pageShim.ts makePageShim) makes `tt` and registers how to make the file's
- * `tweak` (provideTweak). scriptFunction wraps each file's `require` so
- * `require("tangitweak")` hands that file its own `tweak` (tweakRequire):
+ * `import { tweak } from "tangitweak"`: the authoring API. A shim builder
+ * (compile.ts makeShim, pageShim.ts makePageShim) makes a TweakHost: how
+ * each file's `tweak` is made. scriptFunction wraps each file's `require`
+ * so `require("tangitweak")` hands that file its own `tweak` (tweakRequire):
  * it knows its file's path, which names its unnamed stores. Nothing is
  * downloaded; it's never a package.
  *
- * What `tweak` differs in from `tt`:
- * - no `metadata`, no `defineParam`;
  * - `globalStore(id, …)`'s id is a file-name-safe string (checkStoreId);
  * - `tabStore` / `pageStore` / `siteStore` take no name (tweakStores);
- * - its onSite / onPage / onOverlay handlers are keyed by registration
- *   order, per file and API (`onPage:1`: the 2nd onPage registered by that
- *   file's code), not by keyPlaceCalls' source rewrite — every world runs
- *   the same code in the same order, so the keys agree;
- * - its messages say `tweak.onPage`, not `tt.onPage`.
+ * - onSite / onPage / onOverlay handlers are keyed by registration order,
+ *   per file and API (`onPage:1`: the 2nd onPage registered by that file's
+ *   code, route.ts placeKeyer) — every world runs the same code in the same
+ *   order, so the keys agree.
  */
 
 export const TWEAK_MODULE = "tangitweak";
 
-/** which API a call came through: the `tt` parameter or the imported `tweak` (labels its messages) */
-export type Via = "tt" | "tweak";
-
-const providers = new WeakMap<object, { make: (file: string) => object; modules: Map<string, object> }>();
-
-/** a file run with `tt` gets `make(file)` as its `tweak` (made once per file, on its first import) */
-export function provideTweak(tt: object, make: (file: string) => object): void {
-    providers.set(tt, { make, modules: new Map() });
+/** what a file's code runs with (scriptFunction): makes that file's `"tangitweak"` module, once per file */
+export interface TweakHost {
+    module(file: string): { readonly __esModule: true; readonly tweak: any };
 }
 
-/** `require` for `file`'s code run with `tt`: "tangitweak" is that file's `tweak`, anything else `require`'s */
-export function tweakRequire(tt: unknown, file: string, require: unknown): (spec: string) => any {
-    return (spec) => {
-        const p = spec === TWEAK_MODULE && tt && typeof tt === "object" ? providers.get(tt) : undefined;
-        if (p) {
-            let m = p.modules.get(file);
-            if (!m) p.modules.set(file, (m = Object.freeze({ __esModule: true, tweak: p.make(file) })));
+export function tweakHost(make: (file: string) => object): TweakHost {
+    const modules = new Map<string, { readonly __esModule: true; readonly tweak: any }>();
+    return {
+        module(file) {
+            let m = modules.get(file);
+            if (!m) modules.set(file, (m = Object.freeze({ __esModule: true as const, tweak: make(file) })));
             return m;
-        }
+        },
+    };
+}
+
+/** `require` for `file`'s code run with `host`: "tangitweak" is that file's `tweak`, anything else `require`'s */
+export function tweakRequire(host: TweakHost | undefined, file: string, require: unknown): (spec: string) => any {
+    return (spec) => {
+        if (spec === TWEAK_MODULE && host && typeof host.module === "function") return host.module(file);
         if (typeof require !== "function") throw new Error(`cannot import "${spec}" here`);
         return require(spec);
     };
@@ -54,7 +51,7 @@ export function checkStoreId(id: unknown): asserts id is string {
     }
 }
 
-/** a world's stores, by name, with `tweak.*` in their messages */
+/** a world's stores, by name */
 export interface NamedStores {
     globalStore(name: string, initial: object, opts?: unknown): object;
     tabStore(name: string, initial: object): object;
@@ -70,25 +67,45 @@ export interface TweakStores {
 }
 
 /**
+ * The script top level that's running: the stores its unnamed stores go to
+ * and how many each file's code has made in it. A library's exported
+ * function called from a script's top level makes the script's stores, like
+ * it registers the script's handlers.
+ */
+export interface StoreRun {
+    stores: NamedStores;
+    counts: Map<string, number>;
+}
+
+export const storeRun = (stores: NamedStores): StoreRun => ({ stores, counts: new Map() });
+
+/**
  * `tweak`'s stores for `file`. `tabStore` / `pageStore` / `siteStore` take
  * no name: a store is named after its file and its position among those
- * calls — counted across the three kinds together, in call order, per load
- * of the file (`features/state.ts#1`: the 2nd unnamed store that file's code
- * made). Every world runs the same code in the same order, and counts a
- * call even where the store can't be used, so the names agree; that name
- * goes through the same machinery as `tt`'s named stores. `globalStore`
- * isn't counted (its id names it).
+ * calls — counted across the three kinds together, in call order, per file
+ * per run (`features/state.ts#1`: the 2nd unnamed store that file's code
+ * made). Every world runs the same code in the same order, and counts a call
+ * even where the store can't be used, so the names agree. `run()`: the
+ * script top level running now; none (the file's own top level, a late
+ * call): `own`, the run of the shim that made this `tweak`. Counting per
+ * run, not per loaded file, keeps the names when a library is loaded once
+ * for several importers (the background's module cache). `globalStore`
+ * isn't counted (its id names it) and stays `own`'s.
  */
-export function tweakStores(file: string, s: NamedStores, isStub: (x: unknown) => boolean = () => false): TweakStores {
-    let n = 0;
-    const next = () => `${file}#${n++}`;
+export function tweakStores(file: string, own: StoreRun, run: () => StoreRun | undefined, isStub: (x: unknown) => boolean = () => false): TweakStores {
+    const unnamed = (kind: "tabStore" | "pageStore" | "siteStore") => (initial: object) => {
+        const r = run() ?? own;
+        const n = r.counts.get(file) ?? 0;
+        r.counts.set(file, n + 1);
+        return r.stores[kind](`${file}#${n}`, initial);
+    };
     return {
         globalStore: (id: string, initial: object, opts?: unknown) => {
             if (!isStub(id)) checkStoreId(id);
-            return s.globalStore(id, initial, opts);
+            return own.stores.globalStore(id, initial, opts);
         },
-        tabStore: (initial: object) => s.tabStore(next(), initial),
-        pageStore: (initial: object) => s.pageStore(next(), initial),
-        siteStore: (initial: object) => s.siteStore(next(), initial),
+        tabStore: unnamed("tabStore"),
+        pageStore: unnamed("pageStore"),
+        siteStore: unnamed("siteStore"),
     };
 }

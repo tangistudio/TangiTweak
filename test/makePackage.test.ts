@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fetchHosts, makeFolderPackagePlan, makePackagePlan, packageFolders, relativeSpec, withMetadata } from "../src/shared/makePackage";
+import { fetchHosts, makeFolderPackagePlan, makePackagePlan, packageFolders, relativeSpec } from "../src/shared/makePackage";
 import { readZip, writeZip } from "../src/shared/zip";
 import { parseManifest } from "../src/shared/packageMetadata";
 
@@ -8,7 +8,7 @@ const byFrom = (plan: ReturnType<typeof makePackagePlan>) => Object.fromEntries(
 describe("makePackagePlan", () => {
     it("moves a root script and what only it uses into a folder named after it, with a metadata.json", () => {
         const plan = makePackagePlan("dark.tangitweak.ts", {
-            "dark.tangitweak.ts": 'import { a } from "./lib";\nimport cfg from "./cfg.json";\ntt.fetch("https://api.example.com/x");\n',
+            "dark.tangitweak.ts": 'import { tweak } from "tangitweak"; import { a } from "./lib";\nimport cfg from "./cfg.json";\ntweak.fetch("https://api.example.com/x");\n',
             "lib.ts": "export const a = 1;\n",
             "cfg.json": "{}\n",
             "other.ts": "export const b = 2;\n",
@@ -85,29 +85,12 @@ describe("makePackagePlan", () => {
         expect(plan.missing).toEqual([{ from: "e.tangitweak.ts", spec: "./gone" }]);
     });
 
-    it("names a script that imports nothing in place, with tt.metadata", () => {
-        const plan = makePackagePlan("p/e.ts", { "p/e.ts": 'tt.fetch("https://x.io/a");\n', "p/o.ts": "" });
-        expect(plan.inPlace).toBe(true);
-        expect(plan.manifest).toBeUndefined();
-        expect(plan.files).toEqual([{ from: "p/e.ts", to: "p/e.ts", copy: false, text: 'tt.metadata({ name: "e", version: "1.0.0", connect: ["x.io"] });\n\ntt.fetch("https://x.io/a");\n' }]);
-    });
-});
-
-describe("withMetadata", () => {
-    it("adds what's missing to an existing call", () => {
-        expect(withMetadata('tt.metadata({ description: "Hi {x}" });\n', "x")).toBe('tt.metadata({ name: "x", version: "1.0.0", description: "Hi {x}" });\n');
-        expect(withMetadata("tt.metadata({});", "x")).toBe('tt.metadata({ name: "x", version: "1.0.0" });');
-        expect(withMetadata('tt.metadata({\n    version: "2.0.0",\n});', "x")).toBe('tt.metadata({\n    name: "x",\n    version: "2.0.0",\n});');
-    });
-
-    it("keeps a call that names the script", () => {
-        const code = 'tt.metadata({ name: "Mine", version: "3" });';
-        expect(withMetadata(code, "x", ["a.com"])).toBe(code);
-    });
-
-    it("adds a call after the imports", () => {
-        expect(withMetadata('import { a,\n  b } from "./lib";\nimport "./c";\n\nrun();\n', "x")).toBe('import { a,\n  b } from "./lib";\nimport "./c";\n\ntt.metadata({ name: "x", version: "1.0.0" });\n\nrun();\n');
-        expect(withMetadata("run();\n", "x")).toBe('tt.metadata({ name: "x", version: "1.0.0" });\n\nrun();\n');
+    it("moves a script that imports nothing into a folder of its own with a metadata.json, unchanged", () => {
+        const code = 'import { tweak } from "tangitweak"; tweak.fetch("https://x.io/a");\n';
+        const plan = makePackagePlan("p/e.ts", { "p/e.ts": code, "p/o.ts": "" });
+        expect(plan.inPlace).toBe(false);
+        expect(plan.files).toEqual([{ from: "p/e.ts", to: "p/e/e.ts", copy: false, text: code }]);
+        expect(parseManifest(plan.manifest.text)).toEqual({ name: "e", version: "1.0.0", connect: ["x.io"], scripts: ["e.ts"] });
     });
 });
 
@@ -139,8 +122,8 @@ describe("relativeSpec", () => {
 });
 
 describe("fetchHosts", () => {
-    it("reads literal tt.fetch URLs", () => {
-        expect(fetchHosts(['tt.fetch("https://A.example.com:8080/x"); tt.fetch(`https://b.io/${x}`); tt.fetch(url);'])).toEqual(["a.example.com", "b.io"]);
+    it("reads literal tweak.fetch URLs", () => {
+        expect(fetchHosts(['import { tweak } from "tangitweak"; tweak.fetch("https://A.example.com:8080/x"); tweak.fetch(`https://b.io/${x}`); tweak.fetch(url);'])).toEqual(["a.example.com", "b.io"]);
     });
 });
 

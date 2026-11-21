@@ -505,7 +505,7 @@ export function ExplorerTree() {
                 <FileIcon kind="stores" />
                 <span className={storesBad ? "script-name error" : "script-name"}>stores.json</span>
             </>,
-            { title: "Persisted stores — tt.globalStore data for your scripts (synced with stores.json; edit and save to update open pages live)", ...click(STORES_ID, () => actions.select(STORES_ID)) }
+            { title: "Persisted stores — tweak.globalStore data for your scripts (synced with stores.json; edit and save to update open pages live)", ...click(STORES_ID, () => actions.select(STORES_ID)) }
         ),
     ];
     for (const r of rows) {
@@ -564,8 +564,7 @@ export function ExplorerTree() {
             const health = scriptHealth(script);
             const title = [
                 r.depth ? scriptFileName(script.meta.name) : "",
-                script.meta.description ?? "",
-                isLib ? "Library — registers no handlers with its current params, importable by other scripts. Register a handler (e.g. tt.onRequest({ url, strategy }, fn)) to make it a script" : script.meta.match.join(", "),
+                isLib ? "Library — registers no handlers with its current params, importable by other scripts. Register a handler (e.g. tweak.onRequest({ url, strategy }, fn)) to make it a script" : script.meta.match.join(", "),
                 off ? "Disabled — enable it from the toolbar or the right-click menu" : "",
                 "Double-click or F2 to rename",
             ]

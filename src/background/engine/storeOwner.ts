@@ -1,5 +1,5 @@
 /**
- * The `tt.globalStore` owner (background): the one true state of every script's
+ * The `tweak.globalStore` owner (background): the one true state of every script's
  * stores. Replicas declare and change stores over wire endpoints
  * (src/shared/storeReplica.ts); the owner validates each change, applies
  * it, bumps the store's rev and patches every replica of the script.
@@ -9,7 +9,7 @@
  * `chrome.storage.session` so a service-worker restart resumes at the
  * same rev.
  *
- * `tt.pageStore`: a declare with `scope: "page"` sets the template; each
+ * `tweak.pageStore`: a declare with `scope: "page"` sets the template; each
  * page's copy is made from it when a context first uses it on that page
  * (rev 0) and dropped when the page ends (`dropPage`). Copies are keyed
  * `storeKey(name, page)` and never persisted (MV3: session only).
@@ -33,7 +33,7 @@ export interface OwnerStoreInfo {
 }
 
 export interface StoreOwnerDeps {
-    /** the script's storage object (`tt.storage`), where `$store:<name>` keys live */
+    /** the script's storage object (`tweak.storage`), where `$store:<name>` keys live */
     storageAll(scriptId: string): Promise<Record<string, any>>;
     storageSet(scriptId: string, key: string, value: unknown): Promise<void>;
     storageDelete?(scriptId: string, key: string): Promise<void>;
@@ -61,9 +61,9 @@ interface Entry {
 interface ScriptState {
     /** by `storeKey(name, page)` */
     stores: Map<string, Entry>;
-    /** `tt.globalStore` names → initial defaults from `declare` */
+    /** `tweak.globalStore` names → initial defaults from `declare` */
     globalTemplates: Map<string, Json>;
-    /** `tt.pageStore` names → the initial state of each page's copy */
+    /** `tweak.pageStore` names → the initial state of each page's copy */
     templates: Map<string, Json>;
     chain: Promise<unknown>;
     loaded: Promise<void> | null;
@@ -131,7 +131,7 @@ export class StoreOwner {
         return out;
     }
 
-    /** live browser `tabId`s whose `tt.tabStore` state differs from `initial` on any of `scriptIds` */
+    /** live browser `tabId`s whose `tweak.tabStore` state differs from `initial` on any of `scriptIds` */
     async tabsOf(scriptIds: string[]): Promise<number[]> {
         const ids = new Set<number>();
         await Promise.all(
@@ -155,7 +155,7 @@ export class StoreOwner {
         return e && { rev: e.rev, data: cloneJson(e.data) };
     }
 
-    /** the pages a script has `tt.pageStore` copies on */
+    /** the pages a script has `tweak.pageStore` copies on */
     pagesOf(scriptId: string): Set<string> {
         const out = new Set<string>();
         for (const k of this.scripts.get(scriptId)?.stores.keys() ?? []) {
@@ -409,7 +409,7 @@ export class StoreOwner {
         return e;
     }
 
-    /** `tt.pageStore(name, initial)`: the template, its new fields merged into the copies too */
+    /** `tweak.pageStore(name, initial)`: the template, its new fields merged into the copies too */
     private declarePage(s: string, name: string, initial: Json): void {
         if (typeof name !== "string" || !name || badValue(initial) || !isPlainObject(initial)) return;
         const st = this.state(s);

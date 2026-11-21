@@ -1,5 +1,5 @@
 /**
- * The Editor's Preview tab: one script's overlay (tt.onOverlay) in an
+ * The Editor's Preview tab: one script's overlay (tweak.onOverlay) in an
  * `overlay.html` frame over a checkerboard "page", as if on a URL the
  * user picks. This module is the frame's host — what a page's bridge is
  * to a page's overlay (hook/bridge.ts) — over L5: a `tt-preview` port to
@@ -213,7 +213,7 @@ export function attachFrame(win: Window | null | undefined): void {
     ep.handle("param.set", mine((a: ReqOf<"param.set">) => up.call("param.set", a, s)));
     ep.on("log", (a) => proven && up.push("log", a, s));
     ep.on("rpc.call", (c) => proven && isRpcCall(c) && ep.push("rpc.result", { cid: c.cid, ok: false, error: { name: "WtCallError", message: NO_PAGE_IN_PREVIEW } }));
-    // the checkerboard "page" holds the overlay's `tt.siteStore`s, for the frame's life
+    // the checkerboard "page" holds the overlay's `tweak.siteStore`s, for the frame's life
     const site = new SiteStoreHost({ post: (m) => !ep.closed && ep.push("site.down", m), log: (_s, msg, level) => up.push("log", { level, msg }, s) });
     ep.on("site.up", (m) => proven && SITE_UP_KINDS.has(m?.kind) && (m.kind === "site.disconnect" || m.s === s) && site.receive(m));
     // the frame fills the "page"; keys pressed in it are matched in it

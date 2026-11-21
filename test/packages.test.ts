@@ -27,8 +27,10 @@ const { filesHash } = await import("../src/shared/packageSource");
 const { entryIds } = await import("../src/shared/packageModel");
 
 const SRC = "https://example.com/dark.tangitweak.ts";
-const entry = (url: string, extra = "") => `import { tint } from "./lib";\nimport cfg from "./cfg.json";\ntt.metadata({ name: "Dark", version: "1.0.0" });\n${extra}tt.onRequest({ url: "${url}", strategy: "page" }, async (req) => { tint(cfg.n); return req; });\n`;
-const files = (e: string, lib = "export const tint = (n: number) => n;\n") => ({ "dark.tangitweak.ts": e, "lib.ts": lib, "cfg.json": '{"n": 1}' });
+const entry = (url: string, extra = "") => `import { tweak } from "tangitweak"; import { tint } from "./lib";\nimport cfg from "./cfg.json";\n${extra}tweak.onRequest({ url: "${url}", strategy: "page" }, async (req) => { tint(cfg.n); return req; });\n`;
+const LIB = "export const tint = (n: number) => n;\n";
+const manifest = (m: Record<string, string> = {}) => JSON.stringify({ name: "dark", version: "1.0.0", ...m, scripts: ["dark.tangitweak.ts"] });
+const files = (e: string, lib = LIB, m: Record<string, string> = {}) => ({ "metadata.json": manifest(m), "dark.tangitweak.ts": e, "lib.ts": lib, "cfg.json": '{"n": 1}' });
 const fetched = async (f: Record<string, string>, source = SRC) => ({ source, entries: ["dark.tangitweak.ts"], files: f, revision: await filesHash(f) });
 
 beforeEach(() => {
@@ -46,9 +48,9 @@ describe("installed packages", () => {
         const pkg = await pk.installPackage(v1, { enabled: true, autoUpdate: true });
         const scripts = await ss.listScripts();
         expect(scripts.map((s) => s.meta.name).sort()).toEqual(["dark/dark.tangitweak", "dark/lib"]);
-        expect((await ss.listDataFiles()).map((d) => d.path)).toEqual(["dark/cfg.json"]);
+        expect((await ss.listDataFiles()).map((d) => d.path).sort()).toEqual(["dark/cfg.json", "dark/metadata.json"]);
 
-        const v2 = await fetched(files(entry("*://a.com/*").replace("1.0.0", "1.1.0"), "export const tint = (n: number) => n * 2;\n"));
+        const v2 = await fetched(files(entry("*://a.com/*"), "export const tint = (n: number) => n * 2;\n", { version: "1.1.0" }));
         const after = await pk.offerPackage(pkg.id, v2, false);
         expect(after!.pending).toBeUndefined();
         expect(after!.metadata.version).toBe("1.1.0");
@@ -90,7 +92,7 @@ describe("installed packages", () => {
     });
 
     it("refuses an update that doesn't compile and keeps a single file at the root", async () => {
-        const single = { "solo.tangitweak.ts": 'tt.onRequest({ url: "*://a.com/*", strategy: "page" }, async (r) => r);\n' };
+        const single = { "solo.tangitweak.ts": 'import { tweak } from "tangitweak"; tweak.onRequest({ url: "*://a.com/*", strategy: "page" }, async (r) => r);\n' };
         const f = { source: "https://example.com/solo.tangitweak.ts", entries: ["solo.tangitweak.ts"], files: single, revision: await filesHash(single) };
         const pkg = await pk.installPackage(f, { enabled: false, autoUpdate: true });
         expect(pkg.folder).toBe("");
@@ -101,14 +103,14 @@ describe("installed packages", () => {
         const pkg2 = await pk.installPackage(f, { enabled: true, autoUpdate: true });
         expect((await ss.listScripts()).find((x) => x.id === entryIds(pkg2)[0])!.meta.name).toBe("solo (2).tangitweak");
 
-        const broken = { "solo.tangitweak.ts": "tt.onRequest({ url: \"*://a.com/*\", strategy: \"page\" }, async (r) => r;\n" };
+        const broken = { "solo.tangitweak.ts": "import { tweak } from 'tangitweak'; tweak.onRequest({ url: \"*://a.com/*\", strategy: \"page\" }, async (r) => r;\n" };
         const out = await pk.offerPackage(pkg.id, { ...f, files: broken, revision: await filesHash(broken) }, false);
         expect(out!.lastError).toMatch(/doesn't compile/);
         expect(out!.revision).toBe(pkg.revision);
     });
 
     it("installs a bundle: its scripts together, metadata and iconUrl from metadata.json", async () => {
-        const run = (u: string) => `import { k } from "./shared";\ntt.onRequest({ url: "${u}", strategy: "page" }, async (r) => (k, r));\n`;
+        const run = (u: string) => `import { tweak } from "tangitweak"; import { k } from "./shared";\ntweak.onRequest({ url: "${u}", strategy: "page" }, async (r) => (k, r));\n`;
         const b = {
             "metadata.json": JSON.stringify({ name: "Kit", version: "2.0.0", icon: "./logo.svg", connect: ["api.x.com"], scripts: ["a.ts", "tools/b.ts"] }),
             "logo.svg": '<svg viewBox="0 0 8 8"><circle r="4"/></svg>',
@@ -135,13 +137,13 @@ describe("installed packages", () => {
     });
 
     it("updates from metadata's updateURL, even installed from local files", async () => {
-        const U = "https://example.com/u/dark.tangitweak.ts";
-        const withUrl = (url: string, ver = "1.0.0") => entry("*://a.com/*").replace('version: "1.0.0"', `version: "${ver}", updateURL: "${url}"`);
+        const U = "https://example.com/u/metadata.json";
+        const withUrl = (url: string, ver = "1.0.0", lib = LIB) => files(entry("*://a.com/*"), lib, { version: ver, updateURL: url });
         let remote: Record<string, string> = {};
         const serve = (f: Record<string, string>) => (remote = Object.fromEntries(Object.entries(f).map(([k, v]) => [`https://example.com/u/${k}`, v])));
         (globalThis as any).fetch = async (url: string) => (url in remote ? { ok: true, status: 200, text: async () => remote[url] } : { ok: false, status: 404 });
 
-        const v1 = files(withUrl(U));
+        const v1 = withUrl(U);
         const pkg = await pk.installPackage(await fetched(v1, ""), { enabled: true, autoUpdate: true });
         expect(pkg).toMatchObject({ source: "", autoUpdate: true, metadata: { updateURL: U } });
 
@@ -152,13 +154,13 @@ describe("installed packages", () => {
         expect(same.lastError).toBeUndefined();
         expect(same.updatedAt).toBe(pkg.updatedAt);
 
-        serve(files(withUrl(U, "1.1.0"), "export const tint = (n: number) => n * 3;\n"));
+        serve(withUrl(U, "1.1.0", "export const tint = (n: number) => n * 3;\n"));
         const after = (await pk.checkPackages())[pkg.id];
         expect(after).toMatchObject({ source: "", metadata: { version: "1.1.0" } });
         expect((await ss.listScripts()).find((s) => s.meta.name === "dark/lib")!.code).toContain("n * 3");
 
         // moving the updates elsewhere waits for review
-        serve(files(withUrl("https://github.com/me/s/tree/main/dark", "1.2.0")));
+        serve(withUrl("https://github.com/me/s/tree/main/dark", "1.2.0"));
         const moved = (await pk.checkPackages())[pkg.id];
         expect(moved.pending?.reasons).toEqual(["it updates from somewhere else: https://github.com/me/s/tree/main/dark"]);
         expect(moved.metadata.version).toBe("1.1.0");
@@ -176,9 +178,9 @@ describe("installed packages", () => {
         const pkg1 = await pk.installPackage(v1, { enabled: true, autoUpdate: true });
         const origIds = entryIds(pkg1);
 
-        // Incoming v1.2.0 from local files (source = "") with same package name "Dark"
+        // Incoming v1.2.0 from local files (source = "") with same package name "dark"
         const v2Files = {
-            ...files(entry("*://a.com/*").replace("1.0.0", "1.2.0"), "export const tint = (n: number) => n * 10;\n"),
+            ...files(entry("*://a.com/*"), "export const tint = (n: number) => n * 10;\n", { version: "1.2.0" }),
             "extra.json": '{"added": true}',
         };
         const v2 = await fetched(v2Files, "");
@@ -186,7 +188,7 @@ describe("installed packages", () => {
         expect(a.folder).toBe("dark");
         expect(a.existing).toMatchObject({
             packageId: pkg1.id,
-            name: "Dark",
+            name: "dark",
             version: "1.0.0",
             copyName: "dark (2)",
         });
@@ -199,13 +201,13 @@ describe("installed packages", () => {
         expect(entryIds(upgraded)).toEqual(origIds);
         expect(upgraded.previous?.metadata.version).toBe("1.0.0");
         expect((await ss.listScripts()).find((s) => s.meta.name === "dark/lib")!.code).toContain("n * 10");
-        expect((await ss.listDataFiles()).map((d) => d.path).sort()).toEqual(["dark/cfg.json", "dark/extra.json"]);
+        expect((await ss.listDataFiles()).map((d) => d.path).sort()).toEqual(["dark/cfg.json", "dark/extra.json", "dark/metadata.json"]);
     });
 
     it("detects an unmanaged Explorer folder or root script with the same name, diffs only crawled package files, and preserves unimported companion files", async () => {
         // Unmanaged bundle folder already in Explorer (e.g. from folder sync with a git checkout)
         await ss.saveDataFile({ path: "bonsai/metadata.json", text: JSON.stringify({ name: "bonsai", version: "0.0.1-alpha", scripts: ["index.tsx"] }) });
-        const existingEntry = await ss.saveScript({ id: ss.newId(), name: "bonsai/index.tsx", code: 'import "./old.json";\ntt.onPage("*://a.com/*", () => {});\n', enabled: false });
+        const existingEntry = await ss.saveScript({ id: ss.newId(), name: "bonsai/index.tsx", code: 'import { tweak } from "tangitweak"; import "./old.json";\ntweak.onPage("*://a.com/*", () => {});\n', enabled: false });
         await ss.saveDataFile({ path: "bonsai/old.json", text: "{}" });
         // Unimported companion files in the synced repo folder (must NOT be reported removed or deleted)
         const readme = await ss.saveDataFile({ path: "bonsai/README.md", text: "# Bonsai\n" });
@@ -213,7 +215,7 @@ describe("installed packages", () => {
 
         const incomingFiles = {
             "metadata.json": JSON.stringify({ name: "bonsai", version: "0.0.2-alpha", scripts: ["index.tsx"] }),
-            "index.tsx": 'tt.onPage("*://a.com/*", () => { console.log("v2"); });\n',
+            "index.tsx": 'import { tweak } from "tangitweak"; tweak.onPage("*://a.com/*", () => { console.log("v2"); });\n',
         };
         const incoming = { source: "https://github.com/me/bonsai", entries: ["index.tsx"], files: incomingFiles, revision: "abc12345" };
         const a = await pk.analyzePackage(incoming);
@@ -247,7 +249,7 @@ describe("installed packages", () => {
             entries: ["index.tsx"],
             files: {
                 "metadata.json": JSON.stringify({ name: "bonsai", version: "0.0.3-alpha", scripts: ["index.tsx"] }),
-                "index.tsx": 'import "./README.md";\nimport { trim } from "./shared/util/text";\ntt.onPage("*://a.com/*", () => trim("x"));\n',
+                "index.tsx": 'import { tweak } from "tangitweak"; import "./README.md";\nimport { trim } from "./shared/util/text";\ntweak.onPage("*://a.com/*", () => trim("x"));\n',
                 "README.md": "# Bonsai v3\n",
                 "shared/util/text.ts": "export const trim = (s: string) => s.trim();\n",
             },
@@ -259,12 +261,12 @@ describe("installed packages", () => {
         expect((await ss.listScripts()).filter((s) => s.meta.name === "bonsai/shared/util/text")).toHaveLength(1);
     });
 
-    it("unwraps stringList tt.params Proxies in route.url and recovers legacy object-serialized route.url entries", async () => {
+    it("unwraps stringList tweak.params Proxies in route.url and recovers legacy object-serialized route.url entries", async () => {
         const { describeCapabilities } = await import("../src/shared/packageCaps");
         const paramCode = [
-            `const cfg = tt.params({ pages: { type: "stringList", default: ["http://localhost:8080/*", "https://cloud.mongodb.com/*"] } });`,
-            `tt.onSite(cfg.pages, () => {});`,
-            `tt.onPage({ url: cfg.pages, when: "document_start" }, () => {});`,
+            `import { tweak } from "tangitweak"; const cfg = tweak.params({ pages: { type: "stringList", default: ["http://localhost:8080/*", "https://cloud.mongodb.com/*"] } });`,
+            `tweak.onSite(cfg.pages, () => {});`,
+            `tweak.onPage({ url: cfg.pages, when: "document_start" }, () => {});`,
         ].join("\n");
 
         // Saving to structuredClone-backed storage succeeds (plain string[], not Proxy)
@@ -297,7 +299,7 @@ describe("installed packages", () => {
 
         // Update requires TangiTweak 0.99.0 -> analyzed with versionWarning AND held as pending instead of auto-applying
         const v2Files = {
-            ...files(entry("*://a.com/*").replace('version: "1.0.0"', 'version: "2.0.0", minTangiTweakVersion: "0.99.0"')),
+            ...files(entry("*://a.com/*"), LIB, { version: "2.0.0", minTangiTweakVersion: "0.99.0" }),
         };
         const v2 = await fetched(v2Files);
         const analysis = await pk.analyzePackage(v2, pkg.id);

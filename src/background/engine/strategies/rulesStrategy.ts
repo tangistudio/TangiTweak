@@ -244,7 +244,7 @@ export class RulesStrategy {
         return out;
     }
 
-    /** remove every session rule (the extension owns them all, `tt.fetch` bypass rules aside), then add `rules` */
+    /** remove every session rule (the extension owns them all, `tweak.fetch` bypass rules aside), then add `rules` */
     private async replace(rules: any[]): Promise<void> {
         const existing: any[] = ((await dnrCall("getSessionRules")) || []).filter((r: any) => r.id < BYPASS_RULE_BASE);
         if (!existing.length && !rules.length) return;

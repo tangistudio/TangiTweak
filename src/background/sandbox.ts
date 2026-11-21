@@ -24,7 +24,7 @@
  *             responseHeaders) with the same semantics as PageStrategy's
  *             MV2 in-SW execution, mirroring its log lines
  *
- * Reverse calls (tt.storage.* and script logging) travel the other way
+ * Reverse calls (tweak.storage.* and script logging) travel the other way
  * with the same reqId pattern.
  */
 import { compileManyWithLibs, compileScript, compileWithLibs, withData, isFatalImportError, makeModuleResolver, makeStubModule, type CompiledScript, type DataFileSource, type ResApiOverrides } from "../shared/compile";
@@ -45,8 +45,8 @@ import { ensureBuiltins } from "../shared/builtins";
  * A script touching chrome before registering its handlers would die
  * inside its own try/catch and silently compile as a utility (𝑓) — so
  * the sandbox provides a minimal chrome/browser shim (metadata + in-memory
- * storage; reverse-channel ops like tt.storage still go over postMessage
- * via the tt shim, NOT this one).
+ * storage; reverse-channel ops like tweak.storage still go over postMessage
+ * via the tweak shim, NOT this one).
  */
 const EXT_ID = new URLSearchParams(location.search).get("extId") || "sandboxed-extension";
 const chromeShim: any = {
@@ -128,7 +128,7 @@ function sandboxLog(msg: string, level: "debug" | "info" | "warn" | "error" = "d
     void reverseCall({ op: "log", scriptId: null, level, msg: `[sandbox] ${msg}` });
 }
 
-// ---- the L1 link to the service worker: tt.globalStore replicas, tt.fetch ----
+// ---- the L1 link to the service worker: tweak.globalStore replicas, tweak.fetch ----
 
 /** wire messages ride the same postMessage channel, relayed by the offscreen document */
 const link = new Endpoint((msg) => post({ kind: "wire", msg }));
@@ -147,7 +147,7 @@ function noteEpoch(e: unknown): void {
     }
 }
 
-/** load the owner's state of scripts this hub hasn't seen, so their tt.globalStore calls return it synchronously */
+/** load the owner's state of scripts this hub hasn't seen, so their tweak.globalStore calls return it synchronously */
 async function primeStores(scripts: PlainScript[]): Promise<void> {
     hub.retain(scripts.map((s) => s.id));
     const missing = scripts.filter((s) => !hub.isPrimed(s.id)).map((s) => s.id);
@@ -155,7 +155,7 @@ async function primeStores(scripts: PlainScript[]): Promise<void> {
     try {
         hub.prime(await link.call("store.init", { scripts: missing }));
     } catch (e: any) {
-        sandboxLog(`couldn't load the stores (${e?.message || e}) — tt.globalStore starts from initial values until the owner answers`, "warn");
+        sandboxLog(`couldn't load the stores (${e?.message || e}) — tweak.globalStore starts from initial values until the owner answers`, "warn");
     }
 }
 
@@ -181,12 +181,12 @@ function compileSignature(scripts: PlainScript[], paramValues: Record<string, an
 
 /**
  * Compile every script with the overrides MV2 compiles with: REAL stored
- * param values (the tt shim resolves tt.params over them —
+ * param values (the tweak shim resolves tweak.params over them —
  * handlers that decide via params get the user's values, not defaults) and
  * a reverse-channel storage/log. Recompiles only when the script set or
  * the param values change (runs are per-request — reuse the handlers).
  */
-/** a script's tt.globalStore / tt.pageStore (hub replicas) and tt.fetch (run by the SW) */
+/** a script's tweak.globalStore / tweak.pageStore (hub replicas) and tweak.fetch (run by the SW) */
 function liveApis(sid: string): Pick<ResApiOverrides, "store" | "tabStore" | "pageStore" | "fetch" | "setParam"> {
     return {
         setParam: (key, value) => reverseCall({ op: "paramSet", scriptId: sid, key, value }).then(() => undefined),
@@ -263,7 +263,7 @@ function ensureCompiled(scripts: PlainScript[], paramValues: Record<string, any>
 }
 
 function analyze(scripts: PlainScript[], paramValues: Record<string, any>): { results: Record<string, AnalyzeResult> } {
-    // routes may be built from params (tt.onRequest(cfg.hosts.map(...)))
+    // routes may be built from params (tweak.onRequest(cfg.hosts.map(...)))
     ensureCompiled(scripts, paramValues ?? {});
     const results: Record<string, AnalyzeResult> = {};
     for (const [, c] of cache) {
@@ -272,9 +272,9 @@ function analyze(scripts: PlainScript[], paramValues: Record<string, any>): { re
         // identify by the CALLER's name (meta.name is a default here)
         const summary = `analyze "${c.s.name}" (${c.s.code.length}b) → active=${a.meta.active} routes=${a.meta.routes.length} match=${JSON.stringify(a.meta.match)} params=[${Object.keys(a.paramDefs).join(", ")}] deps=[${a.deps.join(", ")}]`;
         sandboxLog(a.error ? `${summary} ERROR ${a.error.split("\n")[0]}` : summary, a.error ? "error" : "debug");
-        if (!a.error && !a.meta.active && /\b(?:tt|tweak)\.(onRequest|onResponseHeaders|replaceResponse|onResponseBody|onPage)\b/.test(c.s.code)) {
+        if (!a.error && !a.meta.active && /\btweak\.(onRequest|onResponseHeaders|replaceResponse|onResponseBody|onPage)\b/.test(c.s.code)) {
             // mentions handlers but none registered at top level (guarded/late calls)
-            sandboxLog(`"${c.s.name}" mentions tt.on…/tweak.on…/replace… but registered no handler at top level — it compiles as a library (𝑓)`, "warn");
+            sandboxLog(`"${c.s.name}" mentions tweak.on…/replace… but registered no handler at top level — it compiles as a library (𝑓)`, "warn");
         }
     }
     return { results };

@@ -20,11 +20,10 @@ describe("@tangitweak/test harness", () => {
             writeFileSync(join(dir, "tool/icon.svg"), `<svg viewBox="0 0 8 8"><circle cx="4" cy="4" r="3"/></svg>`);
             writeFileSync(
                 join(dir, "tool/main.ts"),
-                `
+                `import { tweak } from "tangitweak"; 
                 import { badge } from "../shared/fmt";
                 import cfg from "./config.json";
                 import icon from "./icon.svg";
-                tt.metadata({ name: "PR Badge", version: "1.0.0" });
                 export function formatTitle(n: number) {
                     return \`\${cfg.prefix} \${badge(n)} \${icon.startsWith("<svg") ? "ok" : "bad"}\`;
                 }
@@ -37,7 +36,7 @@ describe("@tangitweak/test harness", () => {
 
             expect(pickStart(["main.ts", "main.test.ts", "__tests__/smoke.ts", "vitest.config.ts"], "tool", "pick one")).toBe("main.ts");
             const planned = makeFolderPackagePlan("tool", {
-                "tool/main.ts": "tt.onPage('*://example.com/*', () => {});",
+                "tool/main.ts": "import { tweak } from 'tangitweak'; tweak.onPage('*://example.com/*', () => {});",
                 "tool/main.test.ts": "import { loadTweak } from '@tangitweak/test';",
                 "tool/__tests__/smoke.ts": "export {};",
                 "tool/vitest.config.ts": "export default {};",
@@ -46,7 +45,7 @@ describe("@tangitweak/test harness", () => {
 
             // Folder load auto-picks main.ts AND resolves ../shared/fmt + JSON + SVG imports
             const single = await loadTweak(join(dir, "tool"));
-            expect(single.metadata?.name).toBe("PR Badge");
+            expect(single.metadata).toBeUndefined(); // a script outside a bundle has no package metadata
             expect(single.exports.formatTitle(42)).toBe("PR [42] ok");
             await single.dispose();
 
@@ -64,15 +63,16 @@ describe("@tangitweak/test harness", () => {
             );
             writeFileSync(
                 join(bundleDir, "headers.ts"),
-                `tt.onRequest({ url: "*://api.example.com/*", strategy: "helper" }, () => ({ headers: { set: { "x-suite": "1" } } }));\n`
+                `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*://api.example.com/*", strategy: "helper" }, () => ({ headers: { set: { "x-suite": "1" } } }));\n`
             );
             writeFileSync(
                 join(bundleDir, "body.ts"),
-                `tt.onResponseBody({ url: "*://api.example.com/*", strategy: "helper" }, (_ctx, body) => ({ ...JSON.parse(String(body)), patched: true }));\n`
+                `import { tweak } from "tangitweak"; tweak.onResponseBody({ url: "*://api.example.com/*", strategy: "helper" }, (_ctx, body) => ({ ...JSON.parse(String(body)), patched: true }));\n`
             );
 
             const bundle = await loadTweak(bundleDir);
             expect(bundle.manifest?.name).toBe("Dev Suite");
+            expect(bundle.metadata?.version).toBe("2.1.0");
             expect(bundle.scripts.map((s) => s.name)).toEqual(["headers", "body"]);
             expect(bundle.capabilities.connect).toContain("api.example.com");
 
@@ -92,23 +92,23 @@ describe("@tangitweak/test harness", () => {
         const t = await loadTweak(
             {
                 name: "pipeline",
-                code: `
+                code: `import { tweak } from "tangitweak";
                 import { sign } from "https://unpkg.com/fake-signer@1.0.0/index.js";
 
-                const p = tt.params({
+                const p = tweak.params({
                     env: { type: "string", default: "staging" },
                     blockAds: { type: "boolean", default: true },
                 });
 
-                tt.onRequest({ url: "*://ads.example.com/*", strategy: "rules" }, () => {
+                tweak.onRequest({ url: "*://ads.example.com/*", strategy: "rules" }, () => {
                     if (p.blockAds) return { block: true };
                 });
 
-                tt.onRequest({ url: "*://old.example.com/*", strategy: "helper" }, () => ({
+                tweak.onRequest({ url: "*://old.example.com/*", strategy: "helper" }, () => ({
                     redirect: "https://new.example.com/landed",
                 }));
 
-                tt.onRequest({ url: "*://api.example.com/short", strategy: "helper" }, () => ({
+                tweak.onRequest({ url: "*://api.example.com/short", strategy: "helper" }, () => ({
                     replaceResponse: {
                         status: 201,
                         headers: { set: { "x-short": "yes" } },
@@ -116,8 +116,8 @@ describe("@tangitweak/test harness", () => {
                     },
                 }));
 
-                tt.onRequest({ url: "*://api.example.com/*", strategy: "helper" }, (ctx) => {
-                    tt.storage.set("lastMethod", ctx.method);
+                tweak.onRequest({ url: "*://api.example.com/*", strategy: "helper" }, (ctx) => {
+                    tweak.storage.set("lastMethod", ctx.method);
                     return {
                         headers: {
                             set: { "x-env": p.env, "x-sig": sign(typeof ctx.requestBody === "string" ? ctx.requestBody : "") },
@@ -126,24 +126,24 @@ describe("@tangitweak/test harness", () => {
                     };
                 });
 
-                tt.replaceResponse({ url: "*://api.example.com/mock", strategy: "helper" }, () => ({
+                tweak.replaceResponse({ url: "*://api.example.com/mock", strategy: "helper" }, () => ({
                     mocked: true,
                     env: p.env,
                 }));
 
-                tt.onResponseHeaders({ url: "*://api.example.com/*", strategy: "helper" }, () => ({
+                tweak.onResponseHeaders({ url: "*://api.example.com/*", strategy: "helper" }, () => ({
                     headers: {
                         set: { "x-powered": "tangitweak" },
                         remove: ["server"],
                     },
                 }));
 
-                tt.onResponseBody({ url: "*://api.example.com/items", strategy: "helper" }, (_ctx, body) => {
+                tweak.onResponseBody({ url: "*://api.example.com/items", strategy: "helper" }, (_ctx, body) => {
                     const data = JSON.parse(String(body));
                     return { ...data, count: data.items.length, env: p.env };
                 });
 
-                tt.onResponseBody({ url: "*://cdn.example.com/*.bin", strategy: "helper", binary: true }, (_ctx, bytes) => {
+                tweak.onResponseBody({ url: "*://cdn.example.com/*.bin", strategy: "helper", binary: true }, (_ctx, bytes) => {
                     const out = new Uint8Array(bytes.length + 1);
                     out.set(bytes, 0);
                     out[bytes.length] = 0xff;
@@ -231,14 +231,14 @@ describe("@tangitweak/test harness", () => {
         const t = await loadTweak(
             {
                 name: "github-pr-helper",
-                code: `
+                code: `import { tweak } from "tangitweak"; 
                 import { useSnapshot } from "valtio";
 
-                const appStore = tt.globalStore("prHelper", { approvals: 1 });
-                const tabState = tt.tabStore("prTab", { panelOpen: false });
-                const sharedSite = tt.siteStore("siteBridge", { theme: "dark" });
+                const appStore = tweak.globalStore("pr-helper", { approvals: 1 });
+                const tabState = tweak.tabStore({ panelOpen: false });
+                const sharedSite = tweak.siteStore({ theme: "dark" });
 
-                const site = tt.onSite("*://github.com/*", (ctx) => {
+                const site = tweak.onSite("*://github.com/*", (ctx) => {
                     ctx.patch(window as any, "__ttSiteVersion", (orig) => () => orig() + "+v1");
                     return {
                         readPageGlobal() {
@@ -247,7 +247,7 @@ describe("@tangitweak/test harness", () => {
                     };
                 });
 
-                tt.onPage("*://github.com/*", (ctx) => {
+                tweak.onPage("*://github.com/*", (ctx) => {
                     ctx.style(".pr-widget { font-weight: 600; }");
                     ctx.shortcut("Alt+Shift+P", () => {
                         tabState.panelOpen = !tabState.panelOpen;
@@ -276,11 +276,11 @@ describe("@tangitweak/test harness", () => {
                     ctx.mount(".pr-toolbar", <ApproveWidget />);
                 });
 
-                tt.replaceResponse({ url: "*://github.com/api/approve", strategy: "page" }, () => ({
+                tweak.replaceResponse({ url: "*://github.com/api/approve", strategy: "page" }, () => ({
                     nextCount: appStore.approvals + 1,
                 }));
 
-                tt.onOverlay("*://github.com/*", (ctx) => {
+                tweak.onOverlay("*://github.com/*", (ctx) => {
                     function OverlayPanel() {
                         const snap = useSnapshot(appStore);
                         const tabSnap = useSnapshot(tabState);
@@ -295,7 +295,7 @@ describe("@tangitweak/test harness", () => {
                 `,
             },
             {
-                stores: { prHelper: { approvals: 2 } },
+                stores: { "pr-helper": { approvals: 2 } },
             }
         );
 
@@ -333,7 +333,7 @@ describe("@tangitweak/test harness", () => {
         fireEvent.click(mount.querySelector('[data-testid="approve-btn"]')!);
         await page.flush();
 
-        expect(t.store("prHelper").approvals).toBe(3);
+        expect(t.store("pr-helper").approvals).toBe(3);
         expect(mount.querySelector('[data-testid="count"]')!.textContent).toBe("Approvals: 3");
         expect(mount.querySelector('[data-testid="pr-widget"]')!.getAttribute("data-theme")).toBe("light");
         expect(page.overlay?.textContent).toContain("Overlay count: 3 / open: true");
@@ -407,8 +407,8 @@ describe("@tangitweak/test harness", () => {
         await expect(
             loadTweak({
                 name: "bad-rule",
-                code: `
-                tt.onRequest({ url: "*://example.com/*", strategy: "rules" }, (ctx) => {
+                code: `import { tweak } from "tangitweak"; 
+                tweak.onRequest({ url: "*://example.com/*", strategy: "rules" }, (ctx) => {
                     if (ctx.method === "POST") return { block: true };
                 });
                 `,

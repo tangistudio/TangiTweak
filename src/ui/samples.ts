@@ -16,8 +16,8 @@ export function sampleStrategies(code: string): string[] {
     const out = new Set<string>();
     for (const route of code.matchAll(/strategy:([^}\n]*)/g)) for (const name of route[1].matchAll(/"(\w+)"/g)) out.add(name[1]);
     const list = [...out].sort();
-    if (code.includes("tt.onOverlay(")) list.push("overlay");
-    if (!list.length && /tt\.on(Page|Site)\(/.test(code)) list.push("onPage");
+    if (code.includes("tweak.onOverlay(")) list.push("overlay");
+    if (!list.length && /tweak\.on(Page|Site)\(/.test(code)) list.push("onPage");
     return list;
 }
 
@@ -35,9 +35,9 @@ export const SAMPLES: SampleScript[] = [
         name: "Redirect a URL",
         blurb: "Send any request to a different URL — a browser-native rule (strategy \"rules\"): no banner, nothing to install. Try it: open en.wikipedia.org/wiki/Cat — you land on Dog.",
         code: `// Try it: open https://en.wikipedia.org/wiki/Cat
-tt.metadata({ description: "Cat → Dog on Wikipedia" });
+import { tweak } from "tangitweak";
 
-tt.onRequest({ url: "*://en.wikipedia.org/wiki/Cat", strategy: "rules" }, () => ({
+tweak.onRequest({ url: "*://en.wikipedia.org/wiki/Cat", strategy: "rules" }, () => ({
     redirect: "https://en.wikipedia.org/wiki/Dog",
 }));`,
     },
@@ -45,17 +45,17 @@ tt.onRequest({ url: "*://en.wikipedia.org/wiki/Cat", strategy: "rules" }, () => 
         name: "Block requests",
         blurb: "Block matching requests — here only images, via the route's resourceTypes filter. Try it: open any Wikipedia article — every image is gone.",
         code: `// Try it: open https://en.wikipedia.org/wiki/Cat
-tt.metadata({ description: "Block Wikipedia images" });
+import { tweak } from "tangitweak";
 
-tt.onRequest({ url: "*://upload.wikimedia.org/*", resourceTypes: ["image"], strategy: "rules" }, () => ({ block: true }));`,
+tweak.onRequest({ url: "*://upload.wikimedia.org/*", resourceTypes: ["image"], strategy: "rules" }, () => ({ block: true }));`,
     },
     {
         name: "Modify request headers",
         blurb: "Set or remove request headers before they leave the browser. Try it: postman-echo.com/headers echoes them back.",
         code: `// Try it: open https://postman-echo.com/headers
-tt.metadata({ description: "Add debug headers, drop Accept-Language" });
+import { tweak } from "tangitweak";
 
-tt.onRequest({ url: "*://postman-echo.com/*", strategy: "rules" }, () => ({
+tweak.onRequest({ url: "*://postman-echo.com/*", strategy: "rules" }, () => ({
     headers: {
         set: { "x-debug": "1", "x-greeting": "hello from TangiTweak" },
         remove: ["accept-language"],
@@ -68,9 +68,9 @@ tt.onRequest({ url: "*://postman-echo.com/*", strategy: "rules" }, () => ({
         code: `// Try it: open https://example.org/ — a line at the top says whether the
 // page could read https://example.com/. Comment out the onResponseHeaders
 // handler, save and reload to see the browser block it with a CORS error.
-tt.metadata({ description: "Let any origin read example.com" });
+import { tweak } from "tangitweak";
 
-tt.onResponseHeaders({ url: "*://example.com/*", strategy: "rules" }, () => ({
+tweak.onResponseHeaders({ url: "*://example.com/*", strategy: "rules" }, () => ({
     headers: {
         set: {
             "access-control-allow-origin": "*",
@@ -101,7 +101,7 @@ function demo() {
         });
 }
 
-tt.onPage("*://example.org/*", () => {
+tweak.onPage("*://example.org/*", () => {
     // add it as the page's own <script>
     const s = document.createElement("script");
     s.textContent = \`(\${demo})()\`;
@@ -113,18 +113,18 @@ tt.onPage("*://example.org/*", () => {
         blurb: "Replace a JSON API response the page's own code fetches (strategy \"page\": no banner, nothing to install); :id in the route is read back as ctx.groups.id. Try it: open dummyjson.com — a box at the top shows what /users/1 returned.",
         code: `// Try it: open https://dummyjson.com/ — a box at the top shows what the
 // page got from /users/1. Disable the script and reload to see the real user.
-tt.metadata({ description: "Replace the users API response" });
+import { tweak } from "tangitweak";
 
 // "page" sees the page's own fetch/XHR calls (not the URL typed in the address bar)
-tt.replaceResponse({ url: "*://dummyjson.com/users/:id", strategy: "page" }, (ctx) => ({
+tweak.replaceResponse({ url: "*://dummyjson.com/users/:id", strategy: "page" }, (ctx) => ({
     id: Number(ctx.groups.id),
     name: "Mocked User",
     role: "admin",
 }));
 
-// the demo: a fetch made from dummyjson.com's own JavaScript world (tt.onSite, so the "page" strategy sees it),
+// the demo: a fetch made from dummyjson.com's own JavaScript world (tweak.onSite, so the "page" strategy sees it),
 // once the DOM is ready (onSite runs before the site's own scripts by default; it draws here)
-tt.onSite({ url: "https://dummyjson.com/", when: "document_end" }, async () => {
+tweak.onSite({ url: "https://dummyjson.com/", when: "document_end" }, async () => {
     const out = document.createElement("pre");
     out.style.cssText = "margin: 0; padding: 8px; font: 14px monospace; color: #fff; background: #2a7";
     document.body.prepend(out);
@@ -137,18 +137,18 @@ tt.onSite({ url: "https://dummyjson.com/", when: "document_end" }, async () => {
         blurb: "Modify a JSON body the page's own code fetches — flip fields, inject values (strategy \"page\"). Try it: open dummyjson.com — a box at the top shows what /todos/1 returned.",
         code: `// Try it: open https://dummyjson.com/ — a box at the top shows what the
 // page got from /todos/1. Disable the script and reload to see the real todo.
-tt.metadata({ description: "Mark every todo completed" });
+import { tweak } from "tangitweak";
 
-tt.onResponseBody({ url: "*://dummyjson.com/todos/*", strategy: "page" }, (ctx, body) => {
+tweak.onResponseBody({ url: "*://dummyjson.com/todos/*", strategy: "page" }, (ctx, body) => {
     const json = JSON.parse(typeof body === "string" ? body : new TextDecoder().decode(body));
     json.completed = true;
     json.todo = "Transformed by TangiTweak";
     return JSON.stringify(json, null, 2);
 });
 
-// the demo: a fetch made from dummyjson.com's own JavaScript world (tt.onSite, so the "page" strategy sees it),
+// the demo: a fetch made from dummyjson.com's own JavaScript world (tweak.onSite, so the "page" strategy sees it),
 // once the DOM is ready (onSite runs before the site's own scripts by default; it draws here)
-tt.onSite({ url: "https://dummyjson.com/", when: "document_end" }, async () => {
+tweak.onSite({ url: "https://dummyjson.com/", when: "document_end" }, async () => {
     const out = document.createElement("pre");
     out.style.cssText = "margin: 0; padding: 8px; font: 14px monospace; color: #fff; background: #27a";
     document.body.prepend(out);
@@ -160,10 +160,10 @@ tt.onSite({ url: "https://dummyjson.com/", when: "document_end" }, async () => {
         name: "Rewrite page HTML",
         blurb: "Transform the document itself. Needs a strategy that reads page bodies: debugger on Chrome (shows Chrome's \"being debugged\" bar), extension on Firefox — not page. For title/DOM tweaks, onPage needs neither. Try it: open example.com — a red banner appears.",
         code: `// Try it: open https://example.com/
-tt.metadata({ description: "Rewrite example.com's HTML" });
+import { tweak } from "tangitweak";
 
 // Chrome shows its "being debugged" bar while the debugger strategy is attached
-tt.onResponseBody({ url: "*://example.com/*", resourceTypes: ["main_frame"], strategy: tt.isFirefox ? "extension" : "debugger" }, (ctx, body) => {
+tweak.onResponseBody({ url: "*://example.com/*", resourceTypes: ["main_frame"], strategy: tweak.isFirefox ? "extension" : "debugger" }, (ctx, body) => {
     const html = typeof body === "string" ? body : new TextDecoder().decode(body);
     return html
         .replace("<title>Example Domain", "<title>Rewritten Domain")
@@ -174,9 +174,9 @@ tt.onResponseBody({ url: "*://example.com/*", resourceTypes: ["main_frame"], str
         name: "DOM / title changes",
         blurb: "Runs at DOM-ready in the page. Best for titles and DOM text — works even when the HTML is service-worker served or hydration re-renders it. Try it: open any Wikipedia article.",
         code: `// Try it: open https://en.wikipedia.org/wiki/Cat
-tt.metadata({ description: "Retitle Wikipedia articles" });
+import { tweak } from "tangitweak";
 
-tt.onPage("*://en.wikipedia.org/wiki/*", () => {
+tweak.onPage("*://en.wikipedia.org/wiki/*", () => {
     document.title = "🎯 " + document.title;
     const el = document.querySelector("h1");
     if (el) el.textContent = "Hello from TangiTweak";
@@ -186,37 +186,36 @@ tt.onPage("*://en.wikipedia.org/wiki/*", () => {
         name: "Serve a local file",
         blurb: "Replace a response with file content (path or data: URL). The page loads it itself, so this uses debugger on Chrome (shows Chrome's \"being debugged\" bar), extension on Firefox. Try it: open en.wikipedia.org/robots.txt.",
         code: `// Try it: open https://en.wikipedia.org/robots.txt
-tt.metadata({ description: "Serve our own robots.txt" });
+import { tweak } from "tangitweak";
 
 // Chrome shows its "being debugged" bar while the debugger strategy is attached
-tt.replaceResponse({ url: "*://en.wikipedia.org/robots.txt", strategy: tt.isFirefox ? "extension" : "debugger" }, () => ({
+tweak.replaceResponse({ url: "*://en.wikipedia.org/robots.txt", strategy: tweak.isFirefox ? "extension" : "debugger" }, () => ({
     file: "data:text/plain;base64," + btoa("Served by TangiTweak instead of the real robots.txt"),
 }));`,
     },
     {
-        name: "Overlay panel (React + tt.globalStore)",
-        blurb: "Give a script its own GUI on the page: a React panel in an overlay that flips a mock on and off through a shared tt.globalStore, and asks the page to fetch through it. Try it: open dummyjson.com — use the panel at the bottom right.",
+        name: "Overlay panel (React + tweak.globalStore)",
+        blurb: "Give a script its own GUI on the page: a React panel in an overlay that flips a mock on and off through a shared tweak.globalStore, and asks the page to fetch through it. Try it: open dummyjson.com — use the panel at the bottom right.",
         code: `// Try it: open https://dummyjson.com/ — tick and untick "Mock /users/1" in
 // the panel at the bottom right, then click Fetch
 import { useState } from "react";
 import { useSnapshot } from "valtio";
-
-tt.metadata({ description: "A panel that turns a mock on and off" });
+import { tweak } from "tangitweak";
 
 // one live object for the handler and the panel; it survives restarts
-const mock = tt.globalStore("mock", { enabled: true });
+const mock = tweak.globalStore("mock", { enabled: true });
 
-tt.replaceResponse({ url: "*://dummyjson.com/users/:id", strategy: "page" }, (ctx) =>
+tweak.replaceResponse({ url: "*://dummyjson.com/users/:id", strategy: "page" }, (ctx) =>
     mock.enabled ? { id: Number(ctx.groups.id), firstName: "Mocked", lastName: "User" } : undefined
 );
 
 // functions the panel calls in the site's own world (the "page" strategy sees only the site's own fetches)
-const site = tt.onSite("https://dummyjson.com/*", () => ({
+const site = tweak.onSite("https://dummyjson.com/*", () => ({
     user: () => fetch("/users/1").then((r) => r.json()),
 }));
 
 // the panel, drawn in this script's overlay: the page can't see or restyle it
-tt.onOverlay("https://dummyjson.com/*", (ctx) => {
+tweak.onOverlay("https://dummyjson.com/*", (ctx) => {
     function Panel() {
         const snap = useSnapshot(mock);
         const [user, setUser] = useState("");
@@ -240,16 +239,16 @@ tt.onOverlay("https://dummyjson.com/*", (ctx) => {
     },
     {
         name: "Overlay outline (calls + shortcut)",
-        blurb: "An overlay that asks the page for its headings and scrolls it on click — tt.onPage returns functions, the overlay awaits them — with a keyboard shortcut (a param you can re-record in ⚙) to hide it. Try it: open any Wikipedia article and press Alt+Shift+O.",
+        blurb: "An overlay that asks the page for its headings and scrolls it on click — tweak.onPage returns functions, the overlay awaits them — with a keyboard shortcut (a param you can re-record in ⚙) to hide it. Try it: open any Wikipedia article and press Alt+Shift+O.",
         code: `// Try it: open https://en.wikipedia.org/wiki/Cat — press Alt+Shift+O to hide
 // or show the outline (change the keys in the popup's ⚙)
-tt.metadata({ description: "Floating outline for Wikipedia articles" });
-const cfg = tt.params({
+import { tweak } from "tangitweak";
+const cfg = tweak.params({
     toggle: { type: "shortcut", default: "Alt+Shift+O", description: "Hide or show the outline" },
 });
 
 // runs in the page (isolated world); returns the functions the overlay calls
-const page = tt.onPage("*://en.wikipedia.org/wiki/*", () => {
+const page = tweak.onPage("*://en.wikipedia.org/wiki/*", () => {
     const headings = () => document.querySelectorAll("#mw-content-text h2");
     return {
         titles: () => [...headings()].map((h) => h.textContent ?? ""),
@@ -260,7 +259,7 @@ const page = tt.onPage("*://en.wikipedia.org/wiki/*", () => {
 });
 
 // runs in this script's overlay; ctx.mount keeps one outline across saves
-tt.onOverlay("*://en.wikipedia.org/wiki/*", async (ctx) => {
+tweak.onOverlay("*://en.wikipedia.org/wiki/*", async (ctx) => {
     const titles = await page.titles(); // string[], typed from the onPage handler
     let hidden = false;
     const render = () =>
@@ -281,20 +280,19 @@ tt.onOverlay("*://en.wikipedia.org/wiki/*", async (ctx) => {
 });`,
     },
     {
-        name: "Watch and mock the site's fetch (tt.siteStore)",
-        blurb: "Share state with the site's own JavaScript: onSite code wraps the site's fetch, records the last URL and mocks /users/1 when the panel's switch is on — all through a tt.siteStore the overlay sees live. Try it: open dummyjson.com — use the panel at the bottom left.",
+        name: "Watch and mock the site's fetch (tweak.siteStore)",
+        blurb: "Share state with the site's own JavaScript: onSite code wraps the site's fetch, records the last URL and mocks /users/1 when the panel's switch is on — all through a tweak.siteStore the overlay sees live. Try it: open dummyjson.com — use the panel at the bottom left.",
         code: `// Try it: open https://dummyjson.com/ — click Fetch, then tick "Mock /users/1"
 // in the panel at the bottom left and click Fetch again
 import { useState } from "react";
 import { useSnapshot } from "valtio";
-
-tt.metadata({ description: "Watch and mock the site's own fetch from a panel" });
+import { tweak } from "tangitweak";
 
 // lives in the site's world: onSite code reads it synchronously, the panel gets a
 // live copy. It's page data — the site can read and change it too
-const shared = tt.siteStore("shared", { mock: false, lastUrl: "" });
+const shared = tweak.siteStore({ mock: false, lastUrl: "" });
 
-const site = tt.onSite("https://dummyjson.com/*", (ctx) => {
+const site = tweak.onSite("https://dummyjson.com/*", (ctx) => {
     const realFetch = window.fetch;
     window.fetch = (input, init) => {
         const url = input instanceof Request ? input.url : String(input);
@@ -307,7 +305,7 @@ const site = tt.onSite("https://dummyjson.com/*", (ctx) => {
     return { user: () => window.fetch("/users/1").then((r) => r.json()) };
 });
 
-tt.onOverlay("https://dummyjson.com/*", (ctx) => {
+tweak.onOverlay("https://dummyjson.com/*", (ctx) => {
     function Panel() {
         const snap = useSnapshot(shared);
         const [user, setUser] = useState("");
@@ -331,14 +329,14 @@ tt.onOverlay("https://dummyjson.com/*", (ctx) => {
     },
     {
         name: "Per-script storage",
-        blurb: "Keep state between page loads with tt.storage. Try it: open any Wikipedia article and reload — the counter at the top goes up.",
+        blurb: "Keep state between page loads with tweak.storage. Try it: open any Wikipedia article and reload — the counter at the top goes up.",
         code: `// Try it: open https://en.wikipedia.org/wiki/Cat and reload a few times
-tt.metadata({ description: "Count Wikipedia article visits" });
+import { tweak } from "tangitweak";
 
-tt.onPage("*://en.wikipedia.org/wiki/*", async (ctx) => {
-    const visits = ((await tt.storage.get("visits")) || 0) + 1;
-    await tt.storage.set("visits", visits);
-    tt.log("visit #" + visits, ctx.url);
+tweak.onPage("*://en.wikipedia.org/wiki/*", async (ctx) => {
+    const visits = ((await tweak.storage.get("visits")) || 0) + 1;
+    await tweak.storage.set("visits", visits);
+    tweak.log("visit #" + visits, ctx.url);
     const out = document.createElement("p");
     out.id = "tt-visits";
     out.style.cssText = "margin: 0; padding: 8px; font: bold 16px system-ui; color: #fff; background: #555";
@@ -347,13 +345,13 @@ tt.onPage("*://en.wikipedia.org/wiki/*", async (ctx) => {
 });`,
     },
     {
-        name: "Parameters (tt.params)",
-        blurb: "Adjustable knobs (tt.params) the user changes from the popup's ⚙ dialog — no code edits. Try it: open postman-echo.com/headers — the knobs come back as x-* headers.",
+        name: "Parameters (tweak.params)",
+        blurb: "Adjustable knobs (tweak.params) the user changes from the popup's ⚙ dialog — no code edits. Try it: open postman-echo.com/headers — the knobs come back as x-* headers.",
         code: `// Try it: open https://postman-echo.com/headers, then change
 // the knobs from the popup's ⚙ dialog and reload
-tt.metadata({ description: "Send the knobs as request headers" });
+import { tweak } from "tangitweak";
 
-const cfg = tt.params({
+const cfg = tweak.params({
     greeting: { type: "string", default: "hello", description: "Sent as x-greeting" },
     mode: { type: "enum", choices: ["dev", "staging", "prod"], default: "dev", description: "Sent as x-mode" },
     retries: { type: "number", default: 3, min: 0, max: 10, description: "Sent as x-retries" },
@@ -363,7 +361,7 @@ const cfg = tt.params({
 
 // "rules" runs the handler once and turns its result into a browser rule;
 // changing a knob reloads the script, so the rule picks the new values up
-tt.onRequest({ url: "*://postman-echo.com/headers", strategy: "rules" }, () => ({
+tweak.onRequest({ url: "*://postman-echo.com/headers", strategy: "rules" }, () => ({
     headers: {
         set: {
             "x-greeting": cfg.greeting,

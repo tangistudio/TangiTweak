@@ -67,7 +67,7 @@ function entriesFor(dist, mv3) {
             output: { file: path.join(dist, "builtins-react.js"), format: "iife" },
         },
         {
-            // a script's overlay frame (tt.onOverlay), framed into pages by the bridge
+            // a script's overlay frame (tweak.onOverlay), framed into pages by the bridge
             input: path.join(root, "src/overlay/overlayRuntime.ts"),
             output: { file: path.join(dist, "overlay.js"), format: "iife" },
         },

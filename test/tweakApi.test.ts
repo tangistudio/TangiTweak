@@ -1,4 +1,4 @@
-// `import { tweak } from "tangitweak"`: the imported API, next to `tt`. Each
+// `import { tweak } from "tangitweak"`: the scripting API. Each
 // file gets its own `tweak`; its handlers are keyed by registration order and
 // its unnamed stores by file + position — the same in every world.
 import { describe, it, expect } from "vitest";
@@ -7,6 +7,7 @@ import { compileScript, makeModuleResolver, onSiteUses, rulesProblems, siteProbl
 import { makePageShim, type PageStores } from "../src/shared/pageShim";
 import { badPackageImports, makeLibRequire, packageUrls } from "../src/shared/scriptImports";
 import { scriptFunction } from "../src/shared/scriptFn";
+import { formatScriptError, TT_REMOVED } from "../src/shared/scriptError";
 import { builtinModule } from "../src/shared/builtins";
 import { needsBuiltinTypings } from "../src/ui/tsWorkspace";
 import { onPageEdit, siteStoreEdits } from "../src/ui/placeFix";
@@ -56,15 +57,15 @@ function page(world: "isolated" | "page") {
     const stores: PageStores = { store: (n, i) => r.store(n, i), tabStore: r.tabStore, pageStore: r.pageStore };
     const base = { params: {}, log: () => {}, storage: { get: () => undefined, set: () => undefined }, world, siteStore: r.siteStore, ...(world === "isolated" ? { stores } : {}) };
     const libs = [{ name: "state", src: toRunnableJs(STATE) }];
-    const requireFrom = makeLibRequire(libs, (lib, require, m) => scriptFunction(lib.src!, lib.name)(makePageShim({ ...base, lib: lib.name }).tt, console, require, m, m.exports));
+    const requireFrom = makeLibRequire(libs, (lib, require, m) => scriptFunction(lib.src!, lib.name)(makePageShim({ ...base, lib: lib.name }).host, console, require, m, m.exports));
     const shim = makePageShim(base);
     const m = { exports: {} as any };
-    shim.top(() => scriptFunction(toRunnableJs(MAIN), "main")(shim.tt, console, requireFrom("main"), m, m.exports));
+    shim.top(() => scriptFunction(toRunnableJs(MAIN), "main")(shim.host, console, requireFrom("main"), m, m.exports));
     return { shim, names: r.names };
 }
 
 describe("tweak: handler keys by registration order, the same in every world", () => {
-    it("background (and the overlay, which compiles the same way): keys without keyPlaceCalls", () => {
+    it("background (and the overlay, which compiles the same way): keys by registration order", () => {
         const { c } = background();
         expect(c.error).toBeNull();
         expect(c.meta.active).toBe(true);
@@ -95,16 +96,57 @@ describe("tweak: handler keys by registration order, the same in every world", (
     });
 });
 
+describe("tweak: stores a library's function creates", () => {
+    const LIB = [`import { tweak } from "tangitweak";`, `export function counter() { return tweak.pageStore({ n: 0 }); }`].join("\n");
+    const caller = (pre: string) => [`import { tweak } from "tangitweak";`, `import { counter } from "./lib";`, pre, `counter();`, `counter();`].join("\n");
+    const scripts = [
+        { id: "lib", name: "lib", code: LIB },
+        { id: "a", name: "a", code: caller(`tweak.tabStore({});`) },
+        { id: "b", name: "b", code: caller("") },
+    ];
+
+    it("belong to the caller's run: the same names on every compile, with the library cached", () => {
+        const r = recorder();
+        const overrides = { tabStore: r.tabStore, pageStore: r.pageStore, siteStore: r.siteStore, store: r.store };
+        // one resolver for every compile, as the background keeps one: the library module is loaded once
+        const resolver = makeModuleResolver(scripts, () => overrides);
+        const compile = (s: (typeof scripts)[number]) => {
+            r.names.length = 0;
+            const c = compileScript(s.code, { name: s.name, ...overrides, importModule: resolver.resolveFrom(s.id) });
+            expect(c.error).toBeNull();
+            return [...r.names];
+        };
+        // named after the library file, counted per caller run (not per loaded module), kept in the caller's stores
+        const a = ["tab a#0", "page lib#0", "page lib#1"];
+        expect(compile(scripts[1])).toEqual(a);
+        expect(compile(scripts[2])).toEqual(["page lib#0", "page lib#1"]);
+        expect(compile(scripts[1])).toEqual(a);
+    });
+
+    it("the page worlds name them the same", () => {
+        const r = recorder();
+        const stores: PageStores = { store: (n, i) => r.store(n, i), tabStore: r.tabStore, pageStore: r.pageStore };
+        const base = { params: {}, log: () => {}, storage: { get: () => undefined, set: () => undefined }, world: "isolated" as const, siteStore: r.siteStore, stores };
+        const requireFrom = makeLibRequire([{ name: "lib", src: toRunnableJs(LIB) }], (lib, require, m) =>
+            scriptFunction(lib.src!, lib.name)(makePageShim({ ...base, lib: lib.name }).host, console, require, m, m.exports),
+        );
+        const shim = makePageShim(base);
+        const m = { exports: {} as any };
+        shim.top(() => scriptFunction(toRunnableJs(scripts[1].code), "a")(shim.host, console, requireFrom("a"), m, m.exports));
+        expect(r.names).toEqual(["tab a#0", "page lib#0", "page lib#1"]);
+    });
+});
+
 describe("tweak: the API", () => {
     const run = (code: string) => compileScript(code, { name: "main" });
 
-    it("has no metadata or defineParam, but tt's env fields", () => {
+    it("has no metadata or defineParam, but the env fields", () => {
         const c = run(`import { tweak } from "tangitweak";\nexport const has = ["metadata" in tweak, "defineParam" in tweak, typeof tweak.isMV3, typeof tweak.params];`);
         expect(c.error).toBeNull();
         expect(c.exports.has).toEqual([false, false, "boolean", "function"]);
     });
 
-    it("the network handlers and params work like tt's", () => {
+    it("the network handlers and params work", () => {
         const c = run(`import { tweak } from "tangitweak";\nconst cfg = tweak.params({ on: { type: "boolean", default: true } });\ntweak.onRequest({ url: "*://a.com/*", strategy: "helper" }, () => cfg.on ? { block: true } : undefined);`);
         expect(c.error).toBeNull();
         expect(c.paramDefs?.on).toMatchObject({ type: "boolean", default: true });
@@ -117,10 +159,28 @@ describe("tweak: the API", () => {
         expect(run(`import { tweak } from "tangitweak";\ntweak.globalStore("s", {});\ntweak.globalStore("s", {});`).error).toMatch(/tweak\.globalStore\("s"\)/);
     });
 
-    it("its messages say tweak, not tt", () => {
+    it("its messages say tweak", () => {
         const c = run(`import { tweak } from "tangitweak";\ntweak.onPage(42 as any, () => {});`);
         expect(c.error).toContain("tweak.onPage");
-        expect(c.error).not.toContain("tt.onPage");
+    });
+
+    it("the removed `tt` global: a clear error, at load and in a handler, in the background and the page", () => {
+        const c = run(`tt.onPage("*", () => {});`);
+        expect(c.error).toContain("ReferenceError: tt is not defined");
+        expect(c.error).toContain(TT_REMOVED);
+        expect(c.meta.active).toBe(false);
+        const late = run(`import { tweak } from "tangitweak";\ntweak.onRequest({ url: "*://a.com/*", strategy: "helper" }, () => tt.log(1));`);
+        expect(late.error).toBeNull();
+        let thrown: unknown;
+        try {
+            late.handlers.onRequest[0].fn({} as any);
+        } catch (e) {
+            thrown = e;
+        }
+        expect(formatScriptError("main", thrown)).toContain(TT_REMOVED);
+        const shim = makePageShim({ params: {}, log: () => {}, storage: { get: () => undefined, set: () => undefined }, world: "isolated" });
+        const m = { exports: {} };
+        expect(() => shim.top(() => scriptFunction(toRunnableJs(`const cfg = tt.params({});`), "main")(shim.host, console, () => ({}), m, m.exports))).toThrow(TT_REMOVED);
     });
 
     it("each importing file gets its own tweak", () => {

@@ -145,18 +145,18 @@ try {
         type: "saveScript",
         id: "p_local",
         name: "Proc local.tangitweak",
-        code: `tt.onRequest({ url: "${ORIGIN}/*", strategy: "helper" }, (c) => {
+        code: `import { tweak } from "tangitweak"; tweak.onRequest({ url: "${ORIGIN}/*", strategy: "helper" }, (c) => {
     if (c.url.endsWith("/redir")) return { redirect: "${ORIGIN}/target" };
     if (c.url.endsWith("/mock")) return { replaceResponse: { body: { mocked: true, type: c.resourceType }, mime: "application/json" } };
 });
-tt.onResponseHeaders({ url: "${ORIGIN}/*", strategy: "helper" }, (c) => (c.url.endsWith("/doc") ? { headers: { set: { "x-proc": "yes" } } } : undefined));
-tt.onResponseBody({ url: "${ORIGIN}/*", strategy: "helper" }, (c, body) => (c.url.endsWith("/plain") ? undefined : body.replace("ORIGINAL", "PROCESSED")));`,
+tweak.onResponseHeaders({ url: "${ORIGIN}/*", strategy: "helper" }, (c) => (c.url.endsWith("/doc") ? { headers: { set: { "x-proc": "yes" } } } : undefined));
+tweak.onResponseBody({ url: "${ORIGIN}/*", strategy: "helper" }, (c, body) => (c.url.endsWith("/plain") ? undefined : body.replace("ORIGINAL", "PROCESSED")));`,
     });
     await send({
         type: "saveScript",
         id: "p_https",
         name: "Proc https.tangitweak",
-        code: `tt.onResponseBody({ url: "https://example.com/*", strategy: "helper" }, (c, body) => body.replace("<title>Example Domain", "<title>Process Domain"));`,
+        code: `import { tweak } from "tangitweak"; tweak.onResponseBody({ url: "https://example.com/*", strategy: "helper" }, (c, body) => body.replace("<title>Example Domain", "<title>Process Domain"));`,
     });
 
     check("store build: nativeMessaging and browsingData are optional", OPTIONAL_HELPER, JSON.stringify({ permissions: BUILT.permissions, optional: BUILT.optional_permissions }));

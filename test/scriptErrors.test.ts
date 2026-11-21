@@ -71,16 +71,16 @@ const details = (over: Record<string, any> = {}) => ({
 
 // line 4 throws (x is undefined):
 // line 4 throws inside the handler
-const throws = (strategy: string, async = "") => `// a handler that throws
-tt.onRequest({ url: "*", strategy: "${strategy}" }, ${async}(ctx) => {
+const throws = (strategy: string, async = "") => `import { tweak } from "tangitweak"; // a handler that throws
+tweak.onRequest({ url: "*", strategy: "${strategy}" }, ${async}(ctx) => {
     const x = undefined;
     return x.split(".");
 });`;
 const THROWS = throws("extension");
 
 // line 4 throws at module top level (compile-time):
-const TOPLEVEL = `
-tt.onRequest({ url: "*", strategy: "extension" }, () => {});
+const TOPLEVEL = `import { tweak } from "tangitweak"; 
+tweak.onRequest({ url: "*", strategy: "extension" }, () => {});
 const x = undefined;
 x.split(".");
 `;
@@ -135,10 +135,10 @@ describe("formatScriptError / rewriteFrame", () => {
     it("a real scriptFunction names its frames; EVAL_WRAPPER_LINES matches the wrapper", () => {
         const lib = scriptFunction(`module.exports = () => {\n    throw new Error("x");\n};`, "lib/a b.ts");
         const libMod: any = { exports: {} };
-        lib({}, console, null, libMod, libMod.exports);
+        lib({} as any, console, null, libMod, libMod.exports);
         let err: any;
         try {
-            scriptFunction(`// one\nrequire()();`, "redwood/main.tsx")({}, console, () => libMod.exports, {}, {});
+            scriptFunction(`// one\nrequire()();`, "redwood/main.tsx")({} as any, console, () => libMod.exports, {}, {});
         } catch (e) {
             err = e;
         }
@@ -195,7 +195,7 @@ describe("CDP tier: error logs carry name + user line:col", () => {
 
 describe("compile: positions for the Problems view", () => {
     it("each route records the line of its registration (also in a loop / helper)", () => {
-        const c = compileScript(["// a", 'tt.onRequest({ url: "*://a.test/*", strategy: "helper" }, () => {});', "", "function reg(u) {", "    tt.onResponseBody({ url: u, strategy: \"helper\" }, (ctx, b) => b);", "}", 'reg("*://b.test/*");', 'tt.onRequest({ url: "*://c.test/*", strategy: "helper" }, () => {});'].join("\n"));
+        const c = compileScript(["// a", 'import { tweak } from "tangitweak"; tweak.onRequest({ url: "*://a.test/*", strategy: "helper" }, () => {});', "", "function reg(u) {", "    tweak.onResponseBody({ url: u, strategy: \"helper\" }, (ctx, b) => b);", "}", 'reg("*://b.test/*");', 'tweak.onRequest({ url: "*://c.test/*", strategy: "helper" }, () => {});'].join("\n"));
         expect(c.error).toBeNull();
         expect(c.meta.routes.map((r) => [r.kind, r.index, r.line])).toEqual([
             ["onRequest", 0, 2],
@@ -206,7 +206,7 @@ describe("compile: positions for the Problems view", () => {
 
     it("a syntax error names the line the transpiler found", async () => {
         await import("../src/shared/transpile");
-        const c = compileScript(["const a: number = 1;", 'tt.onRequest({ url: "*://a.test/*", strategy: "helper" }, () => {});', "foo(", "const b = 2;"].join("\n"));
+        const c = compileScript(["const a: number = 1;", 'import { tweak } from "tangitweak"; tweak.onRequest({ url: "*://a.test/*", strategy: "helper" }, () => {});', "foo(", "const b = 2;"].join("\n"));
         expect(c.error).toMatch(/^SyntaxError: .* \(line 4\)$/);
     });
 });

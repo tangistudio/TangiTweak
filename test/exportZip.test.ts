@@ -170,7 +170,7 @@ describe("settings.json in the zip", () => {
     it("lands enabled state, params and globals through the real apply path without touching unpicked scripts", async () => {
         const ss = await import("../src/background/engine/scriptStore");
         const sf = await import("../src/background/settingsFile");
-        const code = `tt.params({ level: { type: "string", default: "warn" } });\ntt.onRequest({ url: "*", strategy: "extension" }, () => {});\n`;
+        const code = `import { tweak } from "tangitweak"; tweak.params({ level: { type: "string", default: "warn" } });\ntweak.onRequest({ url: "*", strategy: "extension" }, () => {});\n`;
         const untouchedId = ss.newId();
         await ss.saveScript({ id: untouchedId, name: "Untouched", code });
         await ss.setEnabled(untouchedId, false);

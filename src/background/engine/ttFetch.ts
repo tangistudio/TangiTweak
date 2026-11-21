@@ -1,5 +1,5 @@
 /**
- * `tt.fetch(..., { from: "background" })`: the fetch runs here, with the
+ * `tweak.fetch(..., { from: "background" })`: the fetch runs here, with the
  * extension's host permissions (no CORS) and the browser's own cookie jar.
  * `bypass` registers the request so no script's handlers touch it.
  */

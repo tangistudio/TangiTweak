@@ -1,5 +1,5 @@
 /**
- * Script parameters: tt.params({...}) / tt.defineParam(name, def).
+ * Script parameters: tweak.params({...}).
  * Values are edited in the manager / popup / settings.json.
  */
 import { isShortcut } from "./shortcut";

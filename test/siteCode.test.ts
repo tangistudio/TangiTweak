@@ -7,16 +7,16 @@ const run = (unit: string, g: any) => new Function("globalThis", unit)(g);
 
 describe("onSite units (Chrome MV3 userScripts in the MAIN world)", () => {
     it("a script unit keeps the user's line 1 at EVAL_WRAPPER_LINES + 1 and runs strict", () => {
-        const js = 'exports.x = tt + 1;\nexports.strict = this === undefined;';
+        const js = 'exports.x = module.n + 1;\nexports.strict = this === undefined;';
         const u = scriptUnit("hello.ts", js);
-        expect(u.split("\n").indexOf("exports.x = tt + 1;")).toBe(EVAL_WRAPPER_LINES);
+        expect(u.split("\n").indexOf("exports.x = module.n + 1;")).toBe(EVAL_WRAPPER_LINES);
         expect(u).toMatch(/\/\/# sourceURL=\S+$/);
         const g: any = {};
         run(u, g);
         const [[key, fn]] = g[Symbol.for(SITE_QUEUE)];
         expect(key).toBe(siteKey("hello.ts", js));
         const exports: any = {};
-        fn.call(undefined, 1, console, null, { exports }, exports);
+        fn.call(undefined, console, null, { exports, n: 1 }, exports);
         expect(exports).toEqual({ x: 2, strict: true });
     });
 

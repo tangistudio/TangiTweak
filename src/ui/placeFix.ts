@@ -1,7 +1,7 @@
 /**
  * Editor quick fixes for where a handler runs: an onSite handler using a
  * store or a handle (which the site's world can't have) moves to
- * tt.onPage — or the stores it uses become `tt.siteStore`s.
+ * tweak.onPage — or the stores it uses become `tweak.siteStore`s.
  */
 import { apiPattern, closeOf, codeOnly } from "../shared/codeScan";
 
@@ -11,7 +11,7 @@ export interface TextEdit {
     text: string;
 }
 
-/** `tt.onSite` (or `tweak.onSite`) registrations' `onSite` name, at or before `offset`: the nearest one becomes `onPage` */
+/** `tweak.onSite` registrations' `onSite` name, at or before `offset`: the nearest one becomes `onPage` */
 export function onPageEdit(code: string, offset: number): TextEdit | null {
     const re = new RegExp(`\\b${apiPattern(code)}\\s*\\.\\s*(onSite)\\s*\\(`, "g");
     let at = -1;
@@ -20,12 +20,11 @@ export function onPageEdit(code: string, offset: number): TextEdit | null {
 }
 
 /**
- * The nearest `tt.onSite(` handler at or before `offset`: the
- * `tt.pageStore` / `tt.globalStore` it uses — directly, or through the
- * top-level variables bound to them — become `tt.siteStore` (a
- * `tt.globalStore`'s persist option goes: site stores aren't saved). The
- * same for the imported `tweak`, whose stores but `globalStore` take no
- * name: a `tweak.globalStore`'s ID goes too. Empty when it uses none.
+ * The nearest `tweak.onSite(` handler at or before `offset`: the
+ * `tweak.pageStore` / `tweak.globalStore` it uses — directly, or through the
+ * top-level variables bound to them — become `tweak.siteStore` (a
+ * `tweak.globalStore`'s ID and persist option go: site stores take no name
+ * and aren't saved). Empty when it uses none.
  */
 export function siteStoreEdits(code: string, offset: number): TextEdit[] {
     const src = codeOnly(code);
@@ -37,26 +36,26 @@ export function siteStoreEdits(code: string, offset: number): TextEdit[] {
     const to = closeOf(src, from) - 1;
     const args = src.slice(from, to);
     const out: TextEdit[] = [];
-    const change = (kindAt: number, kind: string, via: string) => {
+    const change = (kindAt: number, kind: string) => {
         out.push({ start: kindAt, end: kindAt + kind.length, text: "siteStore" });
-        if (kind === "globalStore") out.push(...globalArgs(src, kindAt + kind.length, via !== "tt"));
+        if (kind === "globalStore") out.push(...globalArgs(src, kindAt + kind.length));
     };
     for (const d of args.matchAll(new RegExp(`(?<![\\w$.])(${api})\\s*\\.\\s*(pageStore|tabStore|globalStore)\\b`, "g")))
-        change(from + d.index! + d[0].length - d[2].length, d[2], d[1]);
+        change(from + d.index! + d[0].length - d[2].length, d[2]);
     for (const b of src.matchAll(new RegExp(`\\b(?:const|let|var)\\s+([A-Za-z_$][\\w$]*)\\s*(?::[^=;]+)?=\\s*(${api})\\s*\\.\\s*(pageStore|tabStore|globalStore)\\b`, "g"))) {
         if (b.index! >= from && b.index! < to) continue;
         if (!new RegExp(`(?<![\\w$.])${b[1].replace(/\$/g, "\\$")}(?![\\w$]|\\s*:(?!:))`).test(args)) continue;
-        change(b.index! + b[0].length - b[3].length, b[3], b[2]);
+        change(b.index! + b[0].length - b[3].length, b[3]);
     }
     return out.sort((a, b) => a.start - b.start);
 }
 
 /**
- * The edits dropping a `tt.globalStore(name, initial, persist)` call's third
- * argument, from just past `globalStore` — and with `id` (`tweak.globalStore`,
- * whose siteStore takes no name) its first one too.
+ * The edits dropping a `tweak.globalStore(id, initial, persist)` call's first
+ * and third arguments, from just past `globalStore` (a siteStore takes no
+ * name and isn't saved).
  */
-function globalArgs(src: string, at: number, id: boolean): TextEdit[] {
+function globalArgs(src: string, at: number): TextEdit[] {
     const open = /^\s*(?:<[^()]*>\s*)?\(/.exec(src.slice(at));
     if (!open) return [];
     const from = at + open[0].length;
@@ -70,7 +69,7 @@ function globalArgs(src: string, at: number, id: boolean): TextEdit[] {
         else if (c === "," && !depth) commas.push(i);
     }
     const out: TextEdit[] = [];
-    if (id && commas.length) out.push({ start: from, end: commas[0] + 1 + /^\s*/.exec(src.slice(commas[0] + 1))![0].length, text: "" });
+    if (commas.length) out.push({ start: from, end: commas[0] + 1 + /^\s*/.exec(src.slice(commas[0] + 1))![0].length, text: "" });
     if (commas.length >= 2 && src.slice(commas[1] + 1, close).trim()) out.push({ start: commas[1], end: close, text: "" });
     return out;
 }

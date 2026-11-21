@@ -122,7 +122,7 @@ const folders = async () => (await ss()).listFolders();
 /** the ops on synced files and folders (not the generated support files) */
 const syncedOps = () => ops.filter((o) => !/ (settings\.yaml|settings\.schema\.json|tsconfig\.json|tangitweak\.d\.ts|\.tangitweak-backup.*)$/.test(o));
 
-const IMPORTER = `import limits from "./mock/rate-limits.json";\ntt.params({ max: { type: "number", default: limits.max } });`;
+const IMPORTER = `import { tweak } from "tangitweak";\nimport limits from "./mock/rate-limits.json";\ntweak.params({ max: { type: "number", default: limits.max } });`;
 
 /** a synced folder with a folder `mock` (a library, a data file), an importer at the root and an empty folder */
 async function setup() {

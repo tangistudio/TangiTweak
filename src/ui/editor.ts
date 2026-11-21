@@ -10,7 +10,7 @@ import { NavHistory } from "./navHistory";
 import type { SampleScript } from "./samples";
 import { badPackageImports, folderOf, imageDataUrlToBytes, isImageDataPath, isMarkdownPath, isSvgPath, missingImports } from "../shared/scriptImports";
 import { makeFolderPackagePlan, makePackagePlan } from "../shared/makePackage";
-import { highestVersion, isManifestPath, MANIFEST_FILE, minTangiTweakProblem, parseManifest, scriptMinTangiTweakVersion } from "../shared/packageMetadata";
+import { highestVersion, isManifestPath, MANIFEST_FILE, minTangiTweakProblem, parseManifest } from "../shared/packageMetadata";
 import { manifestScriptCompletions, manifestScriptProblems } from "./manifestAssist";
 import { entryStem } from "../shared/packageModel";
 import { localPackage } from "../shared/localPackage";
@@ -474,10 +474,9 @@ async function saveQuietly(msg: Record<string, unknown>, path: string): Promise<
 }
 
 /**
- * Explorer → Make Package… on a script: name it with tt.metadata, or — when
- * it imports files — move it and them into a folder of their own with a
- * metadata.json (copying those other scripts use too) and rewrite their
- * imports (shared/makePackage).
+ * Explorer → Make Package… on a script: move it and the files it imports
+ * into a folder of their own with a metadata.json (copying those other
+ * scripts use too) and rewrite their imports (shared/makePackage).
  */
 async function makePackage(id: string): Promise<void> {
     const s = scripts.find((x) => x.id === id);
@@ -487,13 +486,10 @@ async function makePackage(id: string): Promise<void> {
     const changed = [...plan.files.filter((f) => !f.copy && (f.to !== f.from || f.text !== files[f.from])).map((f) => f.from), ...plan.edits.map((e) => e.path)];
     const open = changed.map((p) => owner.get(p)?.script?.id ?? owner.get(p)?.data?.id).find((x) => x === selectedId);
     if (open && dirty) return void status(`save "${treeRow(open)?.path ?? ""}" first — making the package changes it`, "error");
-    if (!plan.manifest && !changed.length) return void status(`"${s.meta.name}" names itself (tt.metadata) already — share its URL, or Export Package…`);
     const moved = plan.files.filter((f) => !f.copy && f.to !== f.from);
     const copied = plan.files.filter((f) => f.copy);
     const lines = [
-        !plan.manifest
-            ? `Make "${scriptFileName(s.meta.name)}" a package? It gets a tt.metadata({ name, version… }) to fill in.`
-            : plan.inPlace
+        plan.inPlace
               ? `"${plan.folder}/" holds this script and what it imports: make it a package with a ${MANIFEST_FILE}?`
               : `Make "${scriptFileName(s.meta.name)}" a package in the folder "${plan.folder}/" (with a ${MANIFEST_FILE})?`,
         moved.length ? `\nMoves:\n${pathList(moved.map((f) => `${f.from} → ${f.to}`))}` : "",
@@ -512,14 +508,12 @@ async function makePackage(id: string): Promise<void> {
         else if (f.to !== f.from || f.text !== files[f.from]) ok = (await saveQuietly({ type: "saveScript", id: o.script!.id, code: f.text, ...(f.to !== f.from ? { name: scriptNameFromFile(f.to) } : {}) }, f.to)) && ok;
     }
     for (const e of plan.edits) ok = (await saveQuietly({ type: "saveScript", id: owner.get(e.path)!.script!.id, code: e.text }, e.path)) && ok;
-    if (plan.manifest) ok = (await saveQuietly({ type: "saveDataFile", path: plan.manifest.path, text: plan.manifest.text }, plan.manifest.path)) && ok;
+    ok = (await saveQuietly({ type: "saveDataFile", path: plan.manifest.path, text: plan.manifest.text }, plan.manifest.path)) && ok;
     await refresh();
-    revealInExplorer(plan.manifest?.path ?? plan.files[0].to);
-    if (plan.manifest) {
-        const m = dataFiles.find((d) => d.path === plan.manifest!.path);
-        await select(m?.id ?? id);
-    } else await select(id);
-    if (ok) status(plan.manifest ? `"${plan.folder}/" is a package — fill in its ${MANIFEST_FILE}, then share the folder (or Export Package…)` : `"${s.meta.name}" is a package — fill in its tt.metadata, then share its URL (or Export Package…)`);
+    revealInExplorer(plan.manifest.path);
+    const m = dataFiles.find((d) => d.path === plan.manifest.path);
+    await select(m?.id ?? id);
+    if (ok) status(`"${plan.folder}/" is a package — fill in its ${MANIFEST_FILE}, then share the folder (or Export Package…)`);
 }
 
 /** Explorer → Make Package… on a folder: a metadata.json listing its scripts (shared/makePackage) */
@@ -700,8 +694,8 @@ function registerPinImportFix(): void {
 /**
  * Quick fixes for where a handler runs: an onSite handler calling a handle
  * (a runtime Problem) or using a store / handle (a route warning) moves to
- * tt.onPage; one using a store can keep running in the site, its stores
- * becoming `tt.siteStore`s.
+ * tweak.onPage; one using a store can keep running in the site, its stores
+ * becoming `tweak.siteStore`s.
  */
 function registerPlaceFixes(): void {
     const monaco = (window as any).monaco;
@@ -711,7 +705,7 @@ function registerPlaceFixes(): void {
             for (const mk of context.markers) {
                 const msg = String(mk.message);
                 if (!msg.includes(SITE_DISALLOWED)) continue;
-                // the marker's end: inside the call, or (a route warning, on the registration line) past `tt.onSite(`
+                // the marker's end: inside the call, or (a route warning, on the registration line) past `tweak.onSite(`
                 const offset = model.getOffsetAt({ lineNumber: mk.endLineNumber, column: mk.endColumn });
                 const textEdit = (fix: TextEdit) => {
                     const a = model.getPositionAt(fix.start);
@@ -721,7 +715,7 @@ function registerPlaceFixes(): void {
                 const fix = onPageEdit(model.getValue(), offset);
                 if (!fix) continue;
                 actions.push({
-                    title: "Move this handler to tt.onPage (the isolated world)",
+                    title: "Move this handler to tweak.onPage (the isolated world)",
                     kind: "quickfix",
                     isPreferred: true,
                     diagnostics: [mk],
@@ -730,7 +724,7 @@ function registerPlaceFixes(): void {
                 const site = msg.includes(SITE_NO_STORES) ? siteStoreEdits(model.getValue(), offset) : [];
                 if (site.length)
                     actions.push({
-                        title: "Change to tt.siteStore (its data becomes page data)",
+                        title: "Change to tweak.siteStore (its data becomes page data)",
                         kind: "quickfix",
                         diagnostics: [mk],
                         edit: { edits: site.map(textEdit) },
@@ -1384,7 +1378,6 @@ function updateProblems(): void {
             runtimeError: s.runtimeError,
             typeErrors: s.typeErrors,
             routeWarnings: s.routeWarnings,
-            versionWarning: minTangiTweakProblem(s.meta.metadata?.minTangiTweakVersion),
             routes: s.meta.routes,
             code: s.code,
         })),
@@ -1929,10 +1922,8 @@ function importBundle(): void {
         const text = await file.text();
         const base = cleanScriptName(file.name.replace(/\.ts$/i, "")) || "Imported script";
         const name = uniqueScriptName(base, scripts.map((s) => s.meta.name));
-        const saved = await send({ type: "saveScript", id: uuid(), code: text, name });
-        const verWarn = minTangiTweakProblem(saved?.meta?.metadata?.minTangiTweakVersion ?? scriptMinTangiTweakVersion(text));
-        if (verWarn) status(`imported script — ⚠ ${verWarn}`, "error");
-        else status("imported script ✓");
+        await send({ type: "saveScript", id: uuid(), code: text, name });
+        status("imported script ✓");
         await refresh();
     };
     input.click();
@@ -1969,7 +1960,6 @@ async function importZip(file: File): Promise<void> {
             storesError = (e as Error).message;
         }
     }
-    const scriptMinVers = zip.scripts.map((s) => scriptMinTangiTweakVersion(s.code));
     const dataMinVers = zip.dataFiles.map((d) => {
         if (!isManifestPath(d.path)) return undefined;
         try {
@@ -1993,15 +1983,7 @@ async function importZip(file: File): Promise<void> {
         title: `Import ${file.name}`,
         intro: `Pick what to import. A script (data file) replaces the existing script (data file) at the same path; ${SETTINGS_FILE} applies the globals and the picked scripts' enabled state and params.${gone.length ? " Files marked deleted are in the package here but not in this version: checked, they're deleted." : ""}${ignored}`,
         items: [
-            ...zip.scripts.map((s, idx) => {
-                const verProb = minTangiTweakProblem(scriptMinVers[idx]);
-                return {
-                    path: s.file,
-                    kind: "script" as const,
-                    badge: verProb ? `needs TangiTweak ≥ ${scriptMinVers[idx]}` : existsBadge(s.name),
-                    detail: verProb ?? undefined,
-                };
-            }),
+            ...zip.scripts.map((s) => ({ path: s.file, kind: "script" as const, badge: existsBadge(s.name) })),
             ...zip.dataFiles.map((d, idx) => {
                 const verProb = minTangiTweakProblem(dataMinVers[idx]);
                 return {
@@ -2029,13 +2011,7 @@ async function importZip(file: File): Promise<void> {
             const miss = missingWarn(picked);
             if (miss) return miss;
             const req = highestVersion(
-                picked.map((i) =>
-                    i < zip.scripts.length
-                        ? scriptMinVers[i]
-                        : i < named.length
-                          ? dataMinVers[i - zip.scripts.length]
-                          : undefined
-                )
+                picked.map((i) => (i >= zip.scripts.length && i < named.length ? dataMinVers[i - zip.scripts.length] : undefined))
             );
             const verProb = minTangiTweakProblem(req);
             return verProb ? { text: verProb } : null;

@@ -1,10 +1,10 @@
 /**
- * Handler routes: the first argument of every tt.onXxx registration.
+ * Handler routes: the first argument of every tweak.onXxx registration.
  *
- *   tt.onRequest({ url: "*://api.example.com/*", strategy: "helper" }, fn)
- *   tt.onResponseBody({ url: [...], exclude, methods, resourceTypes, strategy, binary }, fn)
- *   tt.onSite / tt.onPage ("*://example.com/*" or { url, exclude, when }, fn): kind
- *   "onDocument" (world "page" / "isolated"); tt.onOverlay: kind "onOverlay"
+ *   tweak.onRequest({ url: "*://api.example.com/*", strategy: "helper" }, fn)
+ *   tweak.onResponseBody({ url: [...], exclude, methods, resourceTypes, strategy, binary }, fn)
+ *   tweak.onSite / tweak.onPage ("*://example.com/*" or { url, exclude, when }, fn): kind
+ *   "onDocument" (world "page" / "isolated"); tweak.onOverlay: kind "onOverlay"
  *
  * Each network route is owned by exactly one strategy: its own, required,
  * `strategy` — there is no default.
@@ -15,7 +15,7 @@ export type Strategy = "page" | "extension" | "debugger" | "helper" | "rules";
 export const STRATEGIES: Strategy[] = ["helper", "page", "extension", "debugger", "rules"];
 
 export type NetKind = "onRequest" | "onResponseHeaders" | "replaceResponse" | "onResponseBody";
-/** page handlers (tt.onSite, tt.onPage) and overlay handlers (tt.onOverlay) */
+/** page handlers (tweak.onSite, tweak.onPage) and overlay handlers (tweak.onOverlay) */
 export type DocKind = "onDocument" | "onOverlay";
 export type RouteKind = NetKind | DocKind;
 export const NET_KINDS: NetKind[] = ["onRequest", "onResponseHeaders", "replaceResponse", "onResponseBody"];
@@ -23,7 +23,7 @@ export const NET_KINDS: NetKind[] = ["onRequest", "onResponseHeaders", "replaceR
 /** a network handler's kind (one that a strategy runs), not a page/overlay one */
 export const isNetKind = (kind: RouteKind): kind is NetKind => kind !== "onDocument" && kind !== "onOverlay";
 
-/** where a page handler's JavaScript runs: a private world (tt.onPage), or the site's own JS world (tt.onSite) */
+/** where a page handler's JavaScript runs: a private world (tweak.onPage), or the site's own JS world (tweak.onSite) */
 export type PageWorld = "isolated" | "page";
 
 /** the three places: the site's JS world, the isolated world, the overlay frame */
@@ -35,47 +35,22 @@ export const placeWorld = (api: PlaceApi): PageWorld | undefined => (api === "on
 export const placeOf = (route: Pick<RouteMeta, "kind" | "world">): PlaceApi => (route.kind === "onOverlay" ? "onOverlay" : route.world === "isolated" ? "onPage" : "onSite");
 
 /**
- * Names a script's onSite / onPage / onOverlay handlers (RouteMeta.key).
- * The compiler numbers each API's calls in the source (`tt.onPage(` →
- * `tt.onPage.k(2)(`, keyPlaceCalls), so a name doesn't depend on which
- * calls ran before it; a call it couldn't see (an alias) is numbered by
- * call order (`onPage:~0`). A call in a library's code (its exported
- * function, called by the script) is numbered in the library's source and
- * named after it (`onPage:0@utils/x`). A call that runs again (a helper
- * registering twice) gets `#1`, `#2`, ….
- *
- * The imported `tweak`'s calls aren't rewritten: their `n` is their
- * registration order in the script's run, per file and API (orderKeyer).
+ * Names a script's onSite / onPage / onOverlay handlers (RouteMeta.key) by
+ * registration order, per API, in one run of the script's top level:
+ * `onPage:1` is the 2nd `tweak.onPage` its code registered. Every world runs
+ * the same code in the same order, so the names agree — nothing is
+ * rewritten in the source. A call in a library's code (its exported
+ * function, called by the script) is counted separately and named after it
+ * (`onPage:0@utils/x`).
  */
-export function placeKeyer(): (api: PlaceApi, n?: number, lib?: string) => { key: string; n: number } {
-    const seen = new Map<string, number>();
-    const counts: Partial<Record<PlaceApi, number>> = {};
-    return (api, n, lib) => {
-        const count = counts[api] ?? 0;
-        counts[api] = count + 1;
-        const base = (typeof n === "number" ? `${api}:${n}` : `${api}:~${count}`) + (lib === undefined ? "" : `@${lib}`);
-        const again = seen.get(base) ?? 0;
-        seen.set(base, again + 1);
-        return { key: again ? `${base}#${again}` : base, n: typeof n === "number" ? n : count };
-    };
-}
-
-/** `tweak.onX`'s `n`: the how-manyth call to `api` from `lib`'s code (the script's own: undefined) this is */
-export function orderKeyer(): (api: PlaceApi, lib?: string) => number {
+export function placeKeyer(): (api: PlaceApi, lib?: string) => { key: string; n: number } {
     const counts = new Map<string, number>();
     return (api, lib) => {
         const at = `${api}@${lib ?? ""}`;
         const n = counts.get(at) ?? 0;
         counts.set(at, n + 1);
-        return n;
+        return { key: `${api}:${n}${lib === undefined ? "" : `@${lib}`}`, n };
     };
-}
-
-/** `register(route, fn, n?)` as `tt.onX`: callable, plus the compiler's `.k(n)` form */
-export function placeApi<R>(register: (route: unknown, fn: unknown, n?: number) => R): ((route: unknown, fn: unknown) => R) & { k(n: number): (route: unknown, fn: unknown) => R } {
-    const api = (route: unknown, fn: unknown) => register(route, fn);
-    api.k = (n: number) => (route: unknown, fn: unknown) => register(route, fn, n);
-    return api;
 }
 
 export type DocumentWhen = "document_start" | "document_end" | "document_idle";
@@ -91,7 +66,7 @@ export interface RouteMeta {
     kind: RouteKind;
     /** registration order within kind (0-based) */
     index: number;
-    /** the source line of the tt.* call that registered it (Problems view) */
+    /** the source line of the tweak.* call that registered it (Problems view) */
     line?: number;
     /** URLPatterns; [] matches nothing */
     url: string[];
@@ -104,11 +79,11 @@ export interface RouteMeta {
     strategy?: Strategy;
     /** onDocument / onOverlay only */
     when?: DocumentWhen;
-    /** onDocument: the JavaScript world — "isolated" (tt.onPage) or "page" (tt.onSite) */
+    /** onDocument: the JavaScript world — "isolated" (tweak.onPage) or "page" (tweak.onSite) */
     world?: PageWorld;
-    /** the API name it was registered with, when it differs from `kind` (tt.onSite / tt.onPage → kind "onDocument") */
+    /** the API name it was registered with, when it differs from `kind` (tweak.onSite / tweak.onPage → kind "onDocument") */
     api?: "onSite" | "onPage";
-    /** tt.onSite / tt.onPage: which of the script's calls to that API it is (0-based), when it differs from `index` */
+    /** tweak.onSite / tweak.onPage: which of the script's calls to that API it is (0-based), when it differs from `index` */
     n?: number;
     /** a call in this library's code (a function it exports, called by the script): `n` counts that library's calls */
     lib?: string;
@@ -162,11 +137,11 @@ function checkPatterns(ps: string[], what: string, where: string): void {
  * Validate and normalize a registration's route argument. Throws a
  * script error on anything unusable (it surfaces like a syntax error).
  */
-export function normalizeRoute(kind: RouteKind, raw: unknown, index: number, api?: PlaceApi, via: "tt" | "tweak" = "tt"): RouteMeta {
+export function normalizeRoute(kind: RouteKind, raw: unknown, index: number, api?: PlaceApi): RouteMeta {
     const name = api || kind;
-    const where = `${via}.${name}`;
+    const where = `tweak.${name}`;
     const doc = !isNetKind(kind);
-    const example = doc ? `${via}.${name}("*://example.com/*", handler)` : `${via}.${kind}({ url: "*://example.com/*", strategy: "helper" }, handler)`;
+    const example = doc ? `tweak.${name}("*://example.com/*", handler)` : `tweak.${kind}({ url: "*://example.com/*", strategy: "helper" }, handler)`;
     const shape = doc ? "a URL pattern (string, string[] or { url })" : "a route { url, strategy }";
     if (typeof raw === "function" || raw === undefined || raw === null) throw new Error(`${where}: first argument must be ${shape} — e.g. ${example}`);
     let obj: any;

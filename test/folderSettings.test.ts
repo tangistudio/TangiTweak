@@ -53,7 +53,7 @@ describe("settings.json folder sync", () => {
         await ss.saveScript({
             id,
             name: "S",
-            code: `tt.params({ n: { type: "number", default: 1 } });`,
+            code: `import { tweak } from "tangitweak"; tweak.params({ n: { type: "number", default: 1 } });`,
         });
         await sync.startFromStoredHandle();
         await sleep(600);
@@ -97,7 +97,7 @@ describe("settings.json folder sync", () => {
         const ss = await import("../src/background/engine/scriptStore");
         const { applySettingsText } = await import("../src/background/settingsFile");
         const id = ss.newId();
-        await ss.saveScript({ id, name: "S", code: `tt.params({ n: { type: "number", default: 1 } });` });
+        await ss.saveScript({ id, name: "S", code: `import { tweak } from "tangitweak"; tweak.params({ n: { type: "number", default: 1 } });` });
         await sync.startFromStoredHandle();
         await sleep(600);
         const edited = JSON.stringify({ logLevel: "error", scripts: { "S.ts": { n: 3 } } }, null, 2) + "\n";
@@ -111,14 +111,14 @@ describe("settings.json folder sync", () => {
         await sync.stop();
     }, 20000);
 
-    it("omits removed tt.params keys from settings.json while keeping schema updated", async () => {
+    it("omits removed tweak.params keys from settings.json while keeping schema updated", async () => {
         const sync = await import("../src/background/folderSync");
         const ss = await import("../src/background/engine/scriptStore");
         const id = ss.newId();
         await ss.saveScript({
             id,
             name: "S",
-            code: `tt.params({ n: { type: "number", default: 1 } });`,
+            code: `import { tweak } from "tangitweak"; tweak.params({ n: { type: "number", default: 1 } });`,
         });
         await sync.startFromStoredHandle();
         await sleep(600);
@@ -131,7 +131,7 @@ describe("settings.json folder sync", () => {
         await ss.saveScript({
             id,
             name: "S",
-            code: `tt.metadata({ description: "Extra knob" }); tt.params({ extra: { type: "string", default: "x", description: "Extra knob" } });`,
+            code: `import { tweak } from "tangitweak"; tweak.params({ extra: { type: "string", default: "x", description: "Extra knob" } });`,
         });
         await sleep(800);
         expect(files.get("settings.json")!.text).toBe("{}\n");

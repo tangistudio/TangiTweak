@@ -50,7 +50,7 @@ export function toJson(v: unknown, seen = new Set<object>()): Json {
 }
 
 /** `initial` → its JSON data fields + its local (function/accessor) field descriptors */
-export function splitInitial(name: string, initial: object, api = "tt.globalStore"): Template {
+export function splitInitial(name: string, initial: object, api = "tweak.globalStore"): Template {
     const json: Record<string, Json> = {};
     const local: [string, PropertyDescriptor][] = [];
     for (const k of Object.keys(initial)) {

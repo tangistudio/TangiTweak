@@ -82,7 +82,7 @@ vi.mock("../src/shared/folderSync", async (orig) => ({ ...(await orig<any>()), l
 
 describe("folder sync support files", () => {
     it("writes typings, tsconfig, test harness and schema on start and preserves user package.json fields", async () => {
-        files.set("feature.ts", { text: "tt.onPage('*://example.com/*', () => {});\n", t: clock++ });
+        files.set("feature.ts", { text: "import { tweak } from 'tangitweak'; tweak.onPage('*://example.com/*', () => {});\n", t: clock++ });
         files.set("feature.test.ts", { text: "import { loadTweak } from '@tangitweak/test';\n", t: clock++ });
         files.set("ui.spec.tsx", { text: "export {};\n", t: clock++ });
         files.set("__tests__/helper.ts", { text: "export const x = 1;\n", t: clock++ });

@@ -5,7 +5,7 @@
  */
 import { compileForStorage } from "../compileHost";
 import { addedCapabilities, capabilitiesOf, type Capabilities } from "../../shared/packageCaps";
-import { compareVersions, highestVersion, MANIFEST_FILE, minTangiTweakProblem, parseManifest, type PackageMetadata } from "../../shared/packageMetadata";
+import { compareVersions, MANIFEST_FILE, minTangiTweakProblem, parseManifest, type PackageMetadata } from "../../shared/packageMetadata";
 import {
     PACKAGES_KEY,
     entryIds,
@@ -180,17 +180,11 @@ async function analyze(version: Pick<FetchedPackage, "entries" | "files">, pkg?:
         const libs = pkgScripts.filter((s) => s.rel !== e).map(({ id, name, code }) => ({ id, name, code }));
         compiled.push({ e, c: await compileForStorage(files[e], items[e].name, values[id], { id, scripts: [...libs, ...others], paramValues: values, data }) });
     }
-    const declared = compiled.map(({ c }) => c.meta.metadata);
-    let metadata: PackageMetadata;
+    let metadata: PackageMetadata = { connect: [] };
     if (manifest) {
         const { scripts: _, ...m } = manifest;
-        const minVer = highestVersion([m.minTangiTweakVersion, ...declared.map((d) => d?.minTangiTweakVersion)]);
-        metadata = {
-            ...m,
-            ...(minVer ? { minTangiTweakVersion: minVer } : {}),
-            connect: [...new Set([...m.connect, ...declared.flatMap((d) => d?.connect ?? [])])],
-        };
-    } else metadata = declared[0] ?? { connect: [] };
+        metadata = m;
+    }
     const failed = compiled.find(({ c }) => c.error);
     const error = failed ? (entries.length > 1 ? `${failed.e}: ${failed.c.error}` : failed.c.error) : null;
     const versionWarning = minTangiTweakProblem(metadata.minTangiTweakVersion);
@@ -199,11 +193,7 @@ async function analyze(version: Pick<FetchedPackage, "entries" | "files">, pkg?:
         metadata.connect,
         Object.keys(files).filter((rel) => !isDataPath(rel)).map((rel) => files[rel])
     );
-    const iconUrl = resolvePackageIcon(
-        { entries, files, metadata },
-        declared.map((d) => d?.icon),
-        dataFiles
-    );
+    const iconUrl = resolvePackageIcon({ entries, files, metadata }, dataFiles);
     return { name: packageName({ entries, metadata }), metadata, ...(iconUrl ? { iconUrl } : {}), bundle: !!manifest, caps, error, ...(versionWarning ? { versionWarning } : {}), folder, items };
 }
 
@@ -254,7 +244,6 @@ async function synthesizeFolderTarget(
     if (!entries.length) {
         const active = dirScripts.filter((s) => s.meta.active !== false);
         entries = (active.length ? active : dirScripts).map((s) => scriptFileName(s.meta.name.slice(dir.length + 1)));
-        if (dirScripts.length === 1 && dirScripts[0].meta.metadata) metadata = dirScripts[0].meta.metadata;
     }
 
     // Crawl the local package so unimported companion files (README.md, unused
@@ -286,9 +275,6 @@ async function synthesizeFolderTarget(
 
     const pkgScripts = dirScripts.filter((s) => includedLower.has(scriptFileName(s.meta.name.slice(dir.length + 1)).toLowerCase()));
     const pkgData = dirData.filter((d) => includedLower.has(d.path.slice(dir.length + 1).toLowerCase()));
-    if (hasValidManifest) {
-        metadata = { ...metadata, connect: [...new Set([...metadata.connect, ...pkgScripts.flatMap((s) => s.meta.metadata?.connect ?? [])])] };
-    }
 
     const files: Record<string, InstalledFile> = {};
     const rawTexts: Record<string, string> = {};
@@ -327,7 +313,7 @@ async function synthesizeFolderTarget(
 }
 
 async function synthesizeScriptTarget(s: Script, entryRel: string): Promise<InstalledPackage> {
-    const metadata: PackageMetadata = s.meta.metadata ?? { connect: [] };
+    const metadata: PackageMetadata = { connect: [] };
     const caps = capabilitiesOf(s.meta.routes ?? [], metadata.connect, [s.code]);
     const now = Date.now();
     return {
@@ -404,8 +390,7 @@ async function findExistingTarget(
         const rootScripts = scripts.filter((s) => !s.meta.name.includes("/"));
         const hit =
             rootScripts.find((s) => scriptFileKey(s.meta.name) === scriptFileKey(wantEntry)) ??
-            rootScripts.find((s) => scriptFileKey(entryStem(s.meta.name)) === scriptFileKey(entryStem(onlyEntry))) ??
-            (wantedName ? rootScripts.find((s) => s.meta.metadata?.name?.toLowerCase() === wantedName) : undefined);
+            rootScripts.find((s) => scriptFileKey(entryStem(s.meta.name)) === scriptFileKey(entryStem(onlyEntry)));
         if (hit) return { pkg: await synthesizeScriptTarget(hit, onlyEntry), managed: false, copyName };
     }
     return undefined;

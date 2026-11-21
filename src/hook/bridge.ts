@@ -5,15 +5,15 @@
  *
  *   hook (MAIN, no eval) ← postMessage → bridge (isolated) ⇄ background
  *
- * Also runs tt.onPage code in the isolated world (MV2; MV3 has no eval in
+ * Also runs tweak.onPage code in the isolated world (MV2; MV3 has no eval in
  * content scripts, so it runs in chrome.userScripts worlds —
  * src/hook/isolated.ts — and the bridge relays the overlay's calls to it
- * through the background, L2), and tt.onSite code when the page CSP
+ * through the background, L2), and tweak.onSite code when the page CSP
  * blocks eval in the page. The background sends the scripts'
  * SOURCES, the bridge compiles them and runs them at the requested DOM
  * moment — the isolated world shares the page's DOM, not its JS world.
  *
- * In the top frame it also hosts the scripts' overlays (`tt.onOverlay`): one
+ * In the top frame it also hosts the scripts' overlays (`tweak.onOverlay`): one
  * iframe per script inside a closed shadow root, linked to this bridge by
  * a MessagePort (L3). The bridge relays what each overlay may do to the
  * background over the `tt-bridge` port (L2), fetches as the page for it,
@@ -233,7 +233,7 @@ import type { RanApi } from "../shared/netTypes";
         // too: only a cid we sent and are still waiting for is accepted, and
         // the value is page data either way. A call from the page never
         // reaches trusted code.
-        // the site's world's `tt.siteStore` answers: to this world's mirrors and the overlays' (page data, for their own subscriptions)
+        // the site's world's `tweak.siteStore` answers: to this world's mirrors and the overlays' (page data, for their own subscriptions)
         if (SITE_DOWN_KINDS.has(data.kind)) {
             siteMirrors?.receive(data);
             relaySiteDown(data);
@@ -329,7 +329,7 @@ import type { RanApi } from "../shared/netTypes";
 
     // ---- isolated onPage code's stores (MV2: it runs here) ----
     //
-    // Replicas, primed by the bundle (`isoStores`, this page's tt.pageStore
+    // Replicas, primed by the bundle (`isoStores`, this page's tweak.pageStore
     // copies). Their ops go over L2 tagged `ISO_STORE_TAG + s`, once the
     // background granted the script (`iso.stores`) on that link.
     let isoHub: ReplicaHub | null = null;
@@ -391,7 +391,7 @@ import type { RanApi } from "../shared/netTypes";
         return isoHub;
     }
 
-    // ---- `tt.siteStore`: the hook holds them; mirrors here (MV2 onPage code,
+    // ---- `tweak.siteStore`: the hook holds them; mirrors here (MV2 onPage code,
     // the onSite fallback) and in the overlays (relayed) connect over window messages ----
     let siteMirrors: SiteMirrors | null = null;
     const postSite = (m: SiteUp) => window.postMessage({ source: MAIN_SOURCE, ...m }, location.origin);
@@ -539,13 +539,13 @@ import type { RanApi } from "../shared/netTypes";
                 const requireFrom = makeLibRequire(
                     libSources,
                     (lib, require, moduleObj) =>
-                        scriptFunction(lib.src!, lib.name)(shimFor(null, lib.name, lib.params || {}, undefined, lib.id ?? h.scriptId, h.scriptId).tt, consoleProxy, require, moduleObj, moduleObj.exports),
+                        scriptFunction(lib.src!, lib.name)(shimFor(null, lib.name, lib.params || {}, undefined, lib.id ?? h.scriptId, h.scriptId).host, consoleProxy, require, moduleObj, moduleObj.exports),
                     // the built-ins: isolated code all of them, the onSite fallback valtio's core
                     world === "isolated" ? { builtin: scriptBuiltin(codeOf, hotRegistry(h.scriptId).begin()) } : { builtin: siteBuiltin, onSite: true }
                 );
                 const moduleObj = { exports: {} as any };
                 const shim = shimFor(h.scriptId, h.name, h.params || {}, exposer, h.scriptId, h.scriptId, gen);
-                shim.top(() => scriptFunction(h.src, h.name)(shim.tt, consoleProxy, requireFrom(h.name), moduleObj, moduleObj.exports));
+                shim.top(() => scriptFunction(h.src, h.name)(shim.host, consoleProxy, requireFrom(h.name), moduleObj, moduleObj.exports));
                 dom = shim.dom;
                 if (world === "isolated") reactDoms.set(h.scriptId, () => reactOf(requireFrom(h.name)));
             } catch (e: any) {
@@ -1077,7 +1077,7 @@ import type { RanApi } from "../shared/netTypes";
         return c;
     }
 
-    /** `tt.fetch(…, { from: "page" })` and the overlay's `fetch`: this frame fetches, as the page (Firefox: the page's own fetch) */
+    /** `tweak.fetch(…, { from: "page" })` and the overlay's `fetch`: this frame fetches, as the page (Firefox: the page's own fetch) */
     async function pageFetch(s: string, request: ReqOf<"pagefetch">["request"], bypass: boolean): Promise<ResOf<"pagefetch">> {
         const [url, init] = fromWireRequest(request, { credentials: "include" });
         const abs = new URL(url, location.href).href;

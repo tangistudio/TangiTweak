@@ -187,18 +187,6 @@ export function isRelativeIconSpec(icon: string | undefined): icon is string {
     return !!s && !/^(data:|https?:\/\/|<svg[\s>])/i.test(s) && !/^[a-z][a-z0-9+.-]*:/i.test(s);
 }
 
-/** literal `icon: "..."` inside a `tt.metadata({ ... })` call */
-export function metadataIconValue(code: string): string | undefined {
-    const m = /\btt\s*\.\s*metadata\s*\(\s*\{[\s\S]*?\bicon\s*:\s*(["'`])([^"'`\n]+)\1/.exec(code);
-    return m ? m[2].trim() : undefined;
-}
-
-/** literal `icon: "..."` inside a `tt.metadata({ ... })` call, if relative, so package export/crawl includes the file */
-export function metadataIconSpec(code: string): string | undefined {
-    const v = metadataIconValue(code);
-    return isRelativeIconSpec(v) ? v : undefined;
-}
-
 /**
  * Resolve a script or package `icon` (`./icon.svg`, `icon.png`, `data:image/...`,
  * `https://...`, or inline `<svg>...</svg>`) against `baseFolder` and `dataFiles`
@@ -329,7 +317,7 @@ export function missingImports<T extends { name: string; code: string; data?: bo
 
 /** a library source, data file or package module shipped to the page (getHookBundle `libs`) */
 export interface ShippedLib {
-    /** a library script's id (when `src` is set), so its `tt.globalStore` / `tt.pageStore` belong to it */
+    /** a library script's id (when `src` is set), so its `tweak.globalStore` / `tweak.pageStore` belong to it */
     id?: string;
     name: string;
     /** a library's runnable JS */

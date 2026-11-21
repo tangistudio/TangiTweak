@@ -46,7 +46,7 @@ export function observedLine(scriptName: string, handler: string, url: string, w
 /**
  * Observed vs modified for a script-attributed log line. Engine code passes the
  * kind explicitly; relayed lines without one fall back to: errors, debug
- * lines, "observed (no change)" lines and the script's own console/tt.log
+ * lines, "observed (no change)" lines and the script's own console/tweak.log
  * output → observed; "… never ran for …" warnings → missed; anything else (the
  * engine's INFO action lines) → modified.
  */
@@ -54,7 +54,7 @@ export function outcomeKind(level: string, message: string, explicit?: OutcomeKi
     if (explicit === "observed" || explicit === "modified" || explicit === "missed") return explicit;
     if (level === "warn" && message.includes(MISSED_MARK)) return "missed";
     if (level === "debug" || level === "error" || message.includes(OBSERVED_MARK)) return "observed";
-    if (/^\[[^\]]*\] (tt\.log|console\.\w+):/.test(message)) return "observed";
+    if (/^\[[^\]]*\] (tweak\.log|console\.\w+):/.test(message)) return "observed";
     return "modified";
 }
 

@@ -150,7 +150,7 @@ export interface ScriptRules {
     errors: string[];
 }
 
-/** probe + translate every handler of a script that runs on `rules` (`tabIds`: live tabs holding `tt.tabStore` state) */
+/** probe + translate every handler of a script that runs on `rules` (`tabIds`: live tabs holding `tweak.tabStore` state) */
 export async function probeScriptRules(handlers: ScriptHandlers, tabIds: readonly number[] = []): Promise<ScriptRules> {
     const out: ScriptRules = { rules: [], errors: [] };
     const hasGlobal = !!(handlers as ScriptHandlers & { hasGlobalStore?: boolean }).hasGlobalStore;

@@ -13,16 +13,16 @@ function makeHookScaffold() {
     return { logUp, get domHandler() { return domHandler; }, get domOpts() { return domOpts; }, shim };
 }
 
-describe("tt.onPage options", () => {
+describe("tweak.onPage options", () => {
     it("captures handler + options", () => {
-        const c = compileScript(`tt.onPage({ url: "*", when: "document_idle" }, () => {});\ntt.onPage("*://x.com/*", () => {});`);
+        const c = compileScript(`import { tweak } from "tangitweak"; tweak.onPage({ url: "*", when: "document_idle" }, () => {});\ntweak.onPage("*://x.com/*", () => {});`);
         expect(c.error).toBeNull();
         expect(c.handlers.onDocument.length).toBe(2);
         expect(c.handlers.onDocument[0].route.when).toBe("document_idle");
     });
 
     it("defaults: when = document_end", () => {
-        const c = compileScript(`tt.onPage("*", () => {});`);
+        const c = compileScript(`import { tweak } from "tangitweak"; tweak.onPage("*", () => {});`);
         expect(c.handlers.onDocument[0]?.route.when).toBe("document_end");
     });
 });

@@ -146,24 +146,24 @@ const setEnabled = (id: string, enabled: boolean): Promise<void> =>
 // ---------- the sample scripts ----------
 interface SampleScript { id: string; name: string; code: string }
 const SCRIPTS: Record<string, SampleScript> = {
-    matcherRedirect: { id: "s_matcher", name: "redirect main frame.tangitweak", code: `tt.onRequest({ url: "${ORIGIN}/redirect-target", strategy: "extension" }, (ctx) => ({ redirect: "${ORIGIN}/redirected" }));` },
-    cancel: { id: "s_cancel", name: "cancel blocked.js.tangitweak", code: `tt.onRequest({ url: "${ORIGIN}/blocked.js", strategy: "extension" }, () => ({ block: true }));` },
-    reqHeaders: { id: "s_reqheaders", name: "request header.tangitweak", code: `tt.onRequest({ url: "${ORIGIN}/echo-headers", strategy: "extension" }, () => ({ headers: { set: { "x-resso": "injected" } } }));` },
-    resHeaders: { id: "s_resheaders", name: "response header.tangitweak", code: `tt.onResponseHeaders({ url: "${ORIGIN}/api", strategy: "extension" }, () => ({ headers: { set: { "x-mock-header": "hello" } } }));` },
-    replaceMain: { id: "s_replacemain", name: "replace main frame.tangitweak", code: `tt.replaceResponse({ url: "${ORIGIN}/serve-me", strategy: "debugger" }, () => "<html><body><h1>SERVE-PAGE-WORKS</h1></body></html>");` },
-    replaceFetch: { id: "s_replacefetch", name: "replace fetch body.tangitweak", code: `tt.replaceResponse({ url: "${ORIGIN}/api-replace", strategy: "page" }, () => JSON.stringify({ value: "REPLACED-BY-HOOK" }));` },
-    modifyTierA: { id: "s_modifya", name: "modify response (hook tier).tangitweak", code: `tt.onResponseBody({ url: "${ORIGIN}/api", strategy: "page" }, (ctx, body) => body.replace("original-value", "TIERA-VALUE"));` },
-    modifyCdp: { id: "s_modifycdp", name: "modify response (cdp tier).tangitweak", code: `tt.onResponseBody({ url: "${ORIGIN}/app.js", strategy: "debugger" }, (ctx, body) => body.replace("ORIGINAL-MARKER", "CDP-MARKER"));` },
-    badgeProbe: { id: "s_badge", name: "badge probe.tangitweak", code: `tt.onRequest({ url: "${ORIGIN}/page-fetch*", strategy: "page" }, () => {});` },
-    modifyMain: { id: "s_modifymain", name: "modify main frame html.tangitweak", code: `tt.onResponseBody({ url: "${ORIGIN}/page-title", strategy: "debugger" }, (ctx, body) => (typeof body === "string" ? body : new TextDecoder().decode(body)).replace("SITE-TITLE-PLACEHOLDER", "CDP-HTML-MARKER"));\ntt.onPage("${ORIGIN}/page-title", () => { document.title = "DOM-HOOK-TITLE"; });` },
+    matcherRedirect: { id: "s_matcher", name: "redirect main frame.tangitweak", code: `import { tweak } from "tangitweak"; tweak.onRequest({ url: "${ORIGIN}/redirect-target", strategy: "extension" }, (ctx) => ({ redirect: "${ORIGIN}/redirected" }));` },
+    cancel: { id: "s_cancel", name: "cancel blocked.js.tangitweak", code: `import { tweak } from "tangitweak"; tweak.onRequest({ url: "${ORIGIN}/blocked.js", strategy: "extension" }, () => ({ block: true }));` },
+    reqHeaders: { id: "s_reqheaders", name: "request header.tangitweak", code: `import { tweak } from "tangitweak"; tweak.onRequest({ url: "${ORIGIN}/echo-headers", strategy: "extension" }, () => ({ headers: { set: { "x-resso": "injected" } } }));` },
+    resHeaders: { id: "s_resheaders", name: "response header.tangitweak", code: `import { tweak } from "tangitweak"; tweak.onResponseHeaders({ url: "${ORIGIN}/api", strategy: "extension" }, () => ({ headers: { set: { "x-mock-header": "hello" } } }));` },
+    replaceMain: { id: "s_replacemain", name: "replace main frame.tangitweak", code: `import { tweak } from "tangitweak"; tweak.replaceResponse({ url: "${ORIGIN}/serve-me", strategy: "debugger" }, () => "<html><body><h1>SERVE-PAGE-WORKS</h1></body></html>");` },
+    replaceFetch: { id: "s_replacefetch", name: "replace fetch body.tangitweak", code: `import { tweak } from "tangitweak"; tweak.replaceResponse({ url: "${ORIGIN}/api-replace", strategy: "page" }, () => JSON.stringify({ value: "REPLACED-BY-HOOK" }));` },
+    modifyTierA: { id: "s_modifya", name: "modify response (hook tier).tangitweak", code: `import { tweak } from "tangitweak"; tweak.onResponseBody({ url: "${ORIGIN}/api", strategy: "page" }, (ctx, body) => body.replace("original-value", "TIERA-VALUE"));` },
+    modifyCdp: { id: "s_modifycdp", name: "modify response (cdp tier).tangitweak", code: `import { tweak } from "tangitweak"; tweak.onResponseBody({ url: "${ORIGIN}/app.js", strategy: "debugger" }, (ctx, body) => body.replace("ORIGINAL-MARKER", "CDP-MARKER"));` },
+    badgeProbe: { id: "s_badge", name: "badge probe.tangitweak", code: `import { tweak } from "tangitweak"; tweak.onRequest({ url: "${ORIGIN}/page-fetch*", strategy: "page" }, () => {});` },
+    modifyMain: { id: "s_modifymain", name: "modify main frame html.tangitweak", code: `import { tweak } from "tangitweak"; tweak.onResponseBody({ url: "${ORIGIN}/page-title", strategy: "debugger" }, (ctx, body) => (typeof body === "string" ? body : new TextDecoder().decode(body)).replace("SITE-TITLE-PLACEHOLDER", "CDP-HTML-MARKER"));\ntweak.onPage("${ORIGIN}/page-title", () => { document.title = "DOM-HOOK-TITLE"; });` },
 };
 for (const s of Object.values(SCRIPTS)) await saveScript(s.id, s.code, s.name);
 
 // ---------- 0. imported param definitions + param-gated library ----------
 {
     const send = (msg: any): Promise<any> => mgr.evaluate((m) => new Promise((r) => chrome.runtime.sendMessage(m, (x) => r(x ?? null))), msg);
-    await saveScript("s_plib", `export const envParam = { type: "stringList", default: ["dev"] } as const;\nconst p = tt.params({ on: { type: "boolean", default: false } });\nif (p.on) tt.onRequest({ url: "*://never.invalid/*", strategy: "extension" }, () => {});`, "param-lib");
-    const user = await saveScript("s_puser", `import { envParam } from "./param-lib";\ntt.params({ intercept_environments: envParam });\ntt.onRequest({ url: "*://never.invalid/*", strategy: "extension" }, () => {});`, "param-user.tangitweak");
+    await saveScript("s_plib", `import { tweak } from "tangitweak"; export const envParam = { type: "stringList", default: ["dev"] } as const;\nconst p = tweak.params({ on: { type: "boolean", default: false } });\nif (p.on) tweak.onRequest({ url: "*://never.invalid/*", strategy: "extension" }, () => {});`, "param-lib");
+    const user = await saveScript("s_puser", `import { tweak } from "tangitweak"; import { envParam } from "./param-lib";\ntweak.params({ intercept_environments: envParam });\ntweak.onRequest({ url: "*://never.invalid/*", strategy: "extension" }, () => {});`, "param-user.tangitweak");
     check("imported param def: no bogus compile error, def captured", !user?.error && user?.paramDefs?.intercept_environments?.type === "stringList", JSON.stringify({ error: user?.error?.split("\n")[0], defs: user?.paramDefs }));
     const lib = (await send({ type: "listScripts" })).find((s: any) => s.id === "s_plib");
     check("param-gated library stored as a library with params", lib?.meta?.active === false && lib?.paramDefs?.on?.type === "boolean", JSON.stringify(lib?.meta));
@@ -174,14 +174,14 @@ for (const s of Object.values(SCRIPTS)) await saveScript(s.id, s.code, s.name);
     await send({ type: "deleteScript", id: "s_plib" });
 
     // param `parse`: the script gets the parsed value, defs are stored without the function
-    const pp = await saveScript("s_pparse", 'const c = tt.params({ origin: { type: "string", default: "https://a.com", parse: (s) => new URL(s) } });\ntt.onRequest({ url: `*://${c.origin.host}/never/*`, strategy: "extension" }, () => {});', "param-parse.tangitweak");
+    const pp = await saveScript("s_pparse", 'import { tweak } from "tangitweak"; const c = tweak.params({ origin: { type: "string", default: "https://a.com", parse: (s) => new URL(s) } });\ntweak.onRequest({ url: `*://${c.origin.host}/never/*`, strategy: "extension" }, () => {});', "param-parse.tangitweak");
     check("param parse: parsed value feeds the route, def stored without parse", !pp?.error && pp?.meta?.match?.[0] === "*://a.com/never/*" && pp?.paramDefs?.origin?.type === "string" && !("parse" in pp.paramDefs.origin), JSON.stringify({ error: pp?.error?.split("\n")[0], match: pp?.meta?.match, defs: pp?.paramDefs }));
     await send({ type: "setScriptParam", scriptId: "s_pparse", key: "origin", value: "xyz" });
     const ppBroken = (await send({ type: "listScripts" })).find((s: any) => s.id === "s_pparse");
     check("param parse failure: script error naming the param and value", /param "origin": parse failed for value "xyz"/.test(ppBroken?.error || ""), String(ppBroken?.error).split("\n")[0]);
     const ppProblem = await mgr.waitForFunction(() => [...document.querySelectorAll("#problems-list .pb-item.error")].some((l) => /param "origin": parse failed for value "xyz"/.test(l.textContent || "") && /\[Ln 1\b/.test(l.textContent || "")), null, { timeout: 8000 }).then(() => true, () => false);
     const ppLogged = await mgr.evaluate(() => [...document.querySelectorAll("#log-entries .log-line")].map((l) => (l as HTMLElement).dataset.text || l.textContent || "").filter((t) => /parse failed for value "xyz"/.test(t)));
-    check("param parse failure: a compile error in Problems at the tt.params line, not in the Log", ppProblem && !ppLogged.length, JSON.stringify({ ppProblem, ppLogged }));
+    check("import { tweak } from 'tangitweak'; param parse failure: a compile error in Problems at the tweak.params line, not in the Log", ppProblem && !ppLogged.length, JSON.stringify({ ppProblem, ppLogged }));
     await send({ type: "deleteScript", id: "s_pparse" });
 }
 
@@ -211,7 +211,7 @@ await p2.waitForTimeout(300);
 check("replaceResponse: main frame in place (cdp → debugger tier, URL kept)", (await p2.content()).includes("SERVE-PAGE-WORKS") && p2.url() === `${ORIGIN}/serve-me`, `url=${p2.url()}`);
 await p2.close();
 // "extension" listed first: Chromium's webRequest can only redirect — page loads go to serve.html
-await saveScript("s_replaceserve", `tt.replaceResponse({ url: "${ORIGIN}/serve-wr", strategy: "extension" }, () => "<html><body><h1>SERVE-PAGE-WORKS</h1></body></html>");`, "replace via serve page.tangitweak");
+await saveScript("s_replaceserve", `import { tweak } from "tangitweak"; tweak.replaceResponse({ url: "${ORIGIN}/serve-wr", strategy: "extension" }, () => "<html><body><h1>SERVE-PAGE-WORKS</h1></body></html>");`, "replace via serve page.tangitweak");
 await new Promise((r) => setTimeout(r, 600));
 const p2b = await newPage("/serve-wr");
 check("replaceResponse: webrequest-first main frame via serve page (redirect)", (await p2b.content()).includes("SERVE-PAGE-WORKS") && p2b.url().includes("/serve.html"), `url=${p2b.url()}`);
@@ -243,12 +243,12 @@ check("popup: activeScripts lists the scripts behind the badge", badge.ids.lengt
 {
     const tabId: number | undefined = await mgr.evaluate(() => new Promise((r) => chrome.tabs.query({}, (all) => r(all.find((t) => t.url && t.url.includes("/page-fetch"))?.id))));
     const ids = (): Promise<string[]> => mgr.evaluate((tabId) => new Promise((r) => chrome.runtime.sendMessage({ type: "activeScripts", tabId }, r)), tabId);
-    await saveScript("s_badgepage", `tt.onPage({ url: "${ORIGIN}/page-fetch*", when: "document_start" }, () => { document.documentElement.dataset.badgePage = "1"; });`, "badge page.tangitweak");
+    await saveScript("s_badgepage", `import { tweak } from "tangitweak"; tweak.onPage({ url: "${ORIGIN}/page-fetch*", when: "document_start" }, () => { document.documentElement.dataset.badgePage = "1"; });`, "badge page.tangitweak");
     await p3.waitForFunction(() => document.documentElement.dataset.badgePage === "1", null, { timeout: 8000 }).catch(() => {});
     await new Promise((r) => setTimeout(r, 400));
     const ran = await ids();
     check("badge: onPage code that ran on the open page counts", ran.includes("s_badgepage") && ran.length === 4, JSON.stringify(ran));
-    await saveScript("s_badgebad", `tt.onPage("${ORIGIN}/page-fetch*", () => { throw new Error("badge-boom"); });`, "badge bad.tangitweak");
+    await saveScript("s_badgebad", `import { tweak } from "tangitweak"; tweak.onPage("${ORIGIN}/page-fetch*", () => { throw new Error("badge-boom"); });`, "badge bad.tangitweak");
     let look: any = null;
     for (let i = 0; i < 30; i++) {
         await new Promise((r) => setTimeout(r, 200));
@@ -262,7 +262,7 @@ check("popup: activeScripts lists the scripts behind the badge", badge.ids.lengt
     await send({ type: "clearScriptError", scriptId: "s_badgebad" });
     // hot refresh: a save keeps a nested component's state (its [] effect re-runs: 1 → 2);
     // changing its hooks remounts it (back to 1)
-    const hotCode = (v: string, extraHook: boolean) => `import { useState, useEffect } from "react";
+    const hotCode = (v: string, extraHook: boolean) => `import { tweak } from "tangitweak"; import { useState, useEffect } from "react";
 function Count({ v }: { v: string }) {
     const [n, setN] = useState(0);
     ${extraHook ? "useState(1);" : ""}
@@ -271,7 +271,7 @@ function Count({ v }: { v: string }) {
     return <b>{n}</b>;
 }
 function Panel() { return <div><Count v="${v}" /></div>; }
-tt.onPage("${ORIGIN}/page-fetch*", (ctx) => { ctx.mount(<Panel />); });`;
+tweak.onPage("${ORIGIN}/page-fetch*", (ctx) => { ctx.mount(<Panel />); });`;
     const hotAt = async (want: string): Promise<string | undefined> => {
         await p3.waitForFunction((w: string) => (document.documentElement.dataset.hot || "").endsWith(":" + w), want, { timeout: 8000 }).catch(() => {});
         await new Promise((r) => setTimeout(r, 300));
@@ -292,7 +292,7 @@ tt.onPage("${ORIGIN}/page-fetch*", (ctx) => { ctx.mount(<Panel />); });`;
         el.className = "wtm";
         document.body.appendChild(el);
     });
-    await saveScript("s_every", `tt.onPage("${ORIGIN}/page-fetch*", (ctx) => { ctx.mount(".wtm", (el) => <b>{el.className}</b>, { position: "overlay" }); });`, "every mount.tangitweak");
+    await saveScript("s_every", `import { tweak } from "tangitweak"; tweak.onPage("${ORIGIN}/page-fetch*", (ctx) => { ctx.mount(".wtm", (el) => <b>{el.className}</b>, { position: "overlay" }); });`, "every mount.tangitweak");
     await p3.waitForFunction(() => !!document.querySelector(".wtm > tangitweak-mount"), null, { timeout: 8000 }).catch(() => {});
     await p3.evaluate(() => document.body.appendChild(Object.assign(document.createElement("i"), { className: "wtm" })));
     await p3.waitForFunction(() => document.querySelectorAll(".wtm > tangitweak-mount").length === 2, null, { timeout: 5000 }).catch(() => {});
@@ -307,15 +307,15 @@ tt.onPage("${ORIGIN}/page-fetch*", (ctx) => { ctx.mount(<Panel />); });`;
     await saveScript("s_evcaplib", `export function mark(v: string) { (window as any).__evcap = v; }`, "evcap-lib");
     await saveScript(
         "s_evcap",
-        `import { mark } from "./evcap-lib";
+        `import { tweak } from "tangitweak"; import { mark } from "./evcap-lib";
 const SUFFIX = "-ok";
 const suffixed = (v: string) => v + SUFFIX;
-const site = tt.onSite("${ORIGIN}/page-fetch*", () => ({
+const site = tweak.onSite("${ORIGIN}/page-fetch*", () => ({
     mark: (n: number) => { mark(suffixed("v" + n)); return (window as any).__evcap as string; },
     get: () => (window as any).__evcap as string,
     set: (v: string) => new Promise<void>((r) => setTimeout(() => { (window as any).__evcap = v; r(); }, 10)),
 }));
-tt.onPage("${ORIGIN}/page-fetch*", async () => {
+tweak.onPage("${ORIGIN}/page-fetch*", async () => {
     const r = await site.mark(1);
     await site.set(r + "-ret");
     document.documentElement.dataset.evcap = String(await site.get());
@@ -334,12 +334,12 @@ tt.onPage("${ORIGIN}/page-fetch*", async () => {
     // isolated code at document_start calls an onSite handler's functions (it answers once ready)
     await saveScript(
         "s_pagecall",
-        `const page = tt.onSite({ url: "${ORIGIN}/page-fetch*", when: "document_start" }, async () => {
+        `import { tweak } from "tangitweak"; const page = tweak.onSite({ url: "${ORIGIN}/page-fetch*", when: "document_start" }, async () => {
     (window as any).__pagecallMark = 1;
     await new Promise((r) => setTimeout(r, 50));
     return { read: (k: string) => k + ":" + typeof (window as any).__pagecallMark };
 });
-tt.onPage({ url: "${ORIGIN}/page-fetch*", when: "document_start" }, async () => {
+tweak.onPage({ url: "${ORIGIN}/page-fetch*", when: "document_start" }, async () => {
     document.documentElement.dataset.pagecall = await page.read("main");
 });`,
         "page call.tangitweak"
@@ -372,17 +372,17 @@ const r5 = await p5.evaluate(async () => (await (await fetch("/api-replace")).js
 check("replaceResponse: fetch short-circuit (hook)", r5 === "REPLACED-BY-HOOK", r5);
 await p5.close();
 
-// ---------- 5b. tt.globalStore shared across strategies + tt.fetch bypass ----------
+// ---------- 5b. tweak.globalStore shared across strategies + tweak.fetch bypass ----------
 // the extension handler mocks /byp (redirect) and counts in the store; the
 // page handler fetches /byp twice from the background — with bypass it gets
 // the real body and the mock doesn't run
 await saveScript(
     "s_storefetch",
-    `const st = tt.globalStore("st", { n: 0 }, { persist: false });
-tt.onRequest({ url: "${ORIGIN}/byp", strategy: "extension" }, () => { st.n++; return { redirect: "${ORIGIN}/redirected" }; });
-tt.replaceResponse({ url: "${ORIGIN}/byp-data", strategy: "page" }, async () => {
-    const real = await (await tt.fetch("${ORIGIN}/byp", { bypass: true })).text();
-    const mocked = await (await tt.fetch("${ORIGIN}/byp")).text();
+    `import { tweak } from "tangitweak"; const st = tweak.globalStore("st", { n: 0 }, { persist: false });
+tweak.onRequest({ url: "${ORIGIN}/byp", strategy: "extension" }, () => { st.n++; return { redirect: "${ORIGIN}/redirected" }; });
+tweak.replaceResponse({ url: "${ORIGIN}/byp-data", strategy: "page" }, async () => {
+    const real = await (await tweak.fetch("${ORIGIN}/byp", { bypass: true })).text();
+    const mocked = await (await tweak.fetch("${ORIGIN}/byp")).text();
     return JSON.stringify({ real, mocked: mocked.includes("REDIRECTED-OK"), n: st.n });
 });`,
     "store + fetch.tangitweak"
@@ -396,9 +396,9 @@ await new Promise((r) => setTimeout(r, 600));
     const r = await p.evaluate(async () => (await fetch("/byp-data")).text()).catch((e: any) => String(e));
     let j: any = {};
     try { j = JSON.parse(r); } catch {}
-    check("tt.fetch bypass: the script's own mock skips the request", j.real === "BYP-REAL", r);
-    check("tt.fetch without bypass: the mock applies", j.mocked === true, r);
-    check("tt.globalStore: one store across the extension and page handlers", j.n === 1, r);
+    check("import { tweak } from 'tangitweak'; tweak.fetch bypass: the script's own mock skips the request", j.real === "BYP-REAL", r);
+    check("import { tweak } from 'tangitweak'; tweak.fetch without bypass: the mock applies", j.mocked === true, r);
+    check("tweak.globalStore: one store across the extension and page handlers", j.n === 1, r);
     await p.close();
 }
 await setEnabled("s_storefetch", false);
@@ -407,7 +407,7 @@ await setEnabled("s_storefetch", false);
 // the hook asks the bridge whether the call still runs instead of giving up after 15 s
 await saveScript(
     "s_slow",
-    `tt.replaceResponse({ url: "${ORIGIN}/slow-data", strategy: "page" }, async () => {
+    `import { tweak } from "tangitweak"; tweak.replaceResponse({ url: "${ORIGIN}/slow-data", strategy: "page" }, async () => {
     await new Promise((r) => setTimeout(r, 22000));
     return "SLOW-REPLACED";
 });`,
@@ -551,7 +551,7 @@ await p10.close();
 // debugger tier must fulfill it — and every log line must name the stored script.
 await saveScript(
     "s_respond500",
-    `tt.onRequest({ url: "${ORIGIN}/nav-500", strategy: "debugger" }, () => ({ replaceResponse: { status: 500, body: { error: "e2e-500" }, mime: "application/json" } }));`,
+    `import { tweak } from "tangitweak"; tweak.onRequest({ url: "${ORIGIN}/nav-500", strategy: "debugger" }, () => ({ replaceResponse: { status: 500, body: { error: "e2e-500" }, mime: "application/json" } }));`,
     "e2e respond 500.tangitweak"
 );
 const p10b = await ctx.newPage();
@@ -567,7 +567,7 @@ check("logs: no [Untitled script] anywhere", !logText10b.includes("[Untitled scr
 await p10b.close();
 
 // ---------- 10c. strategy ["debugger"] replaceResponse on a page load: in place, URL kept ----------
-await saveScript("s_cdpreplace", `tt.replaceResponse({ url: "${ORIGIN}/cdp-replace", strategy: "debugger" }, () => "<html><body><h1>CDP-REPLACED</h1></body></html>");`, "cdp replace page.tangitweak");
+await saveScript("s_cdpreplace", `import { tweak } from "tangitweak"; tweak.replaceResponse({ url: "${ORIGIN}/cdp-replace", strategy: "debugger" }, () => "<html><body><h1>CDP-REPLACED</h1></body></html>");`, "cdp replace page.tangitweak");
 await new Promise((r) => setTimeout(r, 600));
 const p10c = await ctx.newPage();
 await p10c.goto(`${ORIGIN}/cdp-replace`, { waitUntil: "domcontentloaded", timeout: 15000 }).catch(() => {}); // warm-up: attaches the debugger
@@ -599,8 +599,8 @@ check("network: script activity from before the tab was opened is listed", early
 const chips10d = await mgr.evaluate(() => [...document.querySelectorAll("#net-filter-host .net-qchip")].map((c) => (c.textContent || "").replace("×", "")));
 check("the Network view shows Touched requests by default", JSON.stringify(chips10d) === '["is:touched"]', JSON.stringify(chips10d));
 await mgr.click("#net-filter-host .net-qchip-x"); // show all requests from here on
-await saveScript("s_missed", `tt.onResponseBody({ url: "${ORIGIN}/html-missed", strategy: "page" }, (ctx, body) => body.replace("MISSED-ORIGINAL", "NEVER"));`, "missed probe.tangitweak");
-await saveScript("s_missed_wr", `tt.onResponseBody({ url: "${ORIGIN}/html-missed-wr", strategy: "extension" }, (ctx, body) => body);`, "webrequest body probe.tangitweak");
+await saveScript("s_missed", `import { tweak } from "tangitweak"; tweak.onResponseBody({ url: "${ORIGIN}/html-missed", strategy: "page" }, (ctx, body) => body.replace("MISSED-ORIGINAL", "NEVER"));`, "missed probe.tangitweak");
+await saveScript("s_missed_wr", `import { tweak } from "tangitweak"; tweak.onResponseBody({ url: "${ORIGIN}/html-missed-wr", strategy: "extension" }, (ctx, body) => body);`, "webrequest body probe.tangitweak");
 await new Promise((r) => setTimeout(r, 600));
 const p10d = await newPage("/html-missed");
 await p10d.waitForTimeout(2500); // the check runs 1.5 s after the load completes
@@ -626,8 +626,8 @@ const pbGone10d = await pbRoute10d();
 check("disabling the script removes its route warning from Problems", !pbGone10d.heads.includes("webrequest body probe.tangitweak.ts") && pbGone10d.warnings < pb10d.warnings, JSON.stringify(pbGone10d));
 
 // ---------- 10e. row markers: every observed-only row carries the dashed marker (incl. consecutive ones) ----------
-await saveScript("s_tapper", `tt.onResponseBody({ url: "${ORIGIN}/tap-api/*", strategy: "page" }, () => undefined);`, "marker tapper.tangitweak");
-await saveScript("s_marker_mod", `tt.onResponseBody({ url: "${ORIGIN}/tap-api/m*", strategy: "page" }, (ctx, body) => String(body).replace("tap-api", "TAP-API"));`, "marker modifier.tangitweak");
+await saveScript("s_tapper", `import { tweak } from "tangitweak"; tweak.onResponseBody({ url: "${ORIGIN}/tap-api/*", strategy: "page" }, () => undefined);`, "marker tapper.tangitweak");
+await saveScript("s_marker_mod", `import { tweak } from "tangitweak"; tweak.onResponseBody({ url: "${ORIGIN}/tap-api/m*", strategy: "page" }, (ctx, body) => String(body).replace("tap-api", "TAP-API"));`, "marker modifier.tangitweak");
 await new Promise((r) => setTimeout(r, 600));
 const p10e = await newPage("/page-taps");
 await p10e.waitForSelector("body[data-done]", { timeout: 10000 }).catch(() => {});
@@ -666,7 +666,7 @@ await setEnabled("s_marker_mod", false);
 // ---------- 10f. webrequest header changes on a page opened from the manager ----------
 await saveScript(
     "s_hdr_wr",
-    `tt.onRequest({ url: "${ORIGIN}/echo-headers", strategy: "extension" }, () => ({ headers: { set: { "x-tt-req": "1" }, remove: ["accept-language"] } }));\ntt.onResponseHeaders({ url: "${ORIGIN}/echo-headers", strategy: "extension" }, () => ({ headers: { set: { "x-tt-res": "1" } } }));`,
+    `import { tweak } from "tangitweak"; tweak.onRequest({ url: "${ORIGIN}/echo-headers", strategy: "extension" }, () => ({ headers: { set: { "x-tt-req": "1" }, remove: ["accept-language"] } }));\ntweak.onResponseHeaders({ url: "${ORIGIN}/echo-headers", strategy: "extension" }, () => ({ headers: { set: { "x-tt-res": "1" } } }));`,
     "header probe.tangitweak"
 );
 await new Promise((r) => setTimeout(r, 600));
@@ -699,7 +699,7 @@ await checkRulesStrategy(ctx, mgr, ORIGIN, check);
 // ---------- 10h. folders and JSON data files ----------
 await checkFoldersAndDataFiles(ctx, mgr, ORIGIN, check);
 
-// ---------- 10i. overlays (tt.onOverlay) and calls between the overlay and the page ----------
+// ---------- 10i. overlays (tweak.onOverlay) and calls between the overlay and the page ----------
 await checkOverlays(ctx, mgr, ORIGIN, check, { isolated: true });
 await checkHotReload(ctx, mgr, ORIGIN, check);
 await checkPageStores(ctx, mgr, ORIGIN, check);
@@ -716,7 +716,7 @@ await checkPackages(ctx, mgr, ORIGIN, check);
 // ---------- 11. logs: script output tunnelled to the Log view, page console not captured ----------
 await saveScript(
     "s_logtunnel",
-    `tt.onPage("${ORIGIN}/html", () => { console.warn("E2E-CONSOLE-MARKER", { a: 1 }); tt.log("E2E-RESLOG-MARKER"); });`,
+    `import { tweak } from "tangitweak"; tweak.onPage("${ORIGIN}/html", () => { console.warn("E2E-CONSOLE-MARKER", { a: 1 }); tweak.log("E2E-RESLOG-MARKER"); });`,
     "log tunnel.tangitweak"
 );
 await new Promise((r) => setTimeout(r, 800));
@@ -732,7 +732,7 @@ await setEnabled("s_logtunnel", false);
 const logLines11: string[] = await mgr.evaluate(() => [...document.querySelectorAll("#log-entries .log-line")].map((l) => (l as HTMLElement).dataset.text || ""));
 const warnLine = logLines11.find((l) => l.includes("E2E-CONSOLE-MARKER")) || "";
 check("logs: script console.warn reaches the Log view, attributed", warnLine.includes("[log tunnel.tangitweak] console.warn: E2E-CONSOLE-MARKER {\"a\":1}"), warnLine.slice(0, 160));
-check("logs: script tt.log reaches the Log view", logLines11.some((l) => l.includes("[log tunnel.tangitweak] tt.log: E2E-RESLOG-MARKER")));
+check("import { tweak } from 'tangitweak'; logs: script tweak.log reaches the Log view", logLines11.some((l) => l.includes("[log tunnel.tangitweak] tweak.log: E2E-RESLOG-MARKER")));
 check("logs: script console output not echoed to the page console", !pageConsole11.some((t) => t.includes("E2E-CONSOLE-MARKER") || t.includes("E2E-RESLOG-MARKER")), pageConsole11.join(" | ").slice(0, 200));
 check("logs: extension adds nothing to the page console", !pageConsole11.some((t) => /\[res:|\[TangiTweak\]/.test(t)), pageConsole11.join(" | ").slice(0, 200));
 const dbgAll: any = await mgr.evaluate(() => new Promise((r) => chrome.runtime.sendMessage({ type: "getDebugLogs" }, (x) => r(x))));

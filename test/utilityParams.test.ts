@@ -26,10 +26,10 @@ const { saveScript, listScripts, setParamValue, loadAllParamValues, onScriptsCha
 const { analyzeScripts } = await import("../src/background/compileHost");
 const { currentSettingsState, applySettingsText } = await import("../src/background/settingsFile");
 
-const GATE = `
-const p = tt.params({ on: { type: "boolean", default: false, description: "intercept" } });
+const GATE = `import { tweak } from "tangitweak"; 
+const p = tweak.params({ on: { type: "boolean", default: false, description: "intercept" } });
 export const helper = () => p.on;
-if (p.on) tt.onRequest({ url: "*://example.com/*", strategy: "helper" }, () => ({ block: true }));
+if (p.on) tweak.onRequest({ url: "*://example.com/*", strategy: "helper" }, () => ({ block: true }));
 `;
 
 const get = async (id: string) => (await listScripts()).find((s) => s.id === id)!;
@@ -86,7 +86,7 @@ describe("library scripts with params", () => {
 
     it("importers keep working when a library flips (its exports stay importable)", async () => {
         await saveScript({ id: "g", name: "gate.tangitweak", code: GATE });
-        const m = await saveScript({ id: "m", name: "main.tangitweak", code: `import { helper } from "./gate.tangitweak";\ntt.onRequest({ url: "*://a.test/*", strategy: "helper" }, () => { helper(); });` });
+        const m = await saveScript({ id: "m", name: "main.tangitweak", code: `import { tweak } from "tangitweak";\nimport { helper } from "./gate.tangitweak";\ntweak.onRequest({ url: "*://a.test/*", strategy: "helper" }, () => { helper(); });` });
         expect(m.error).toBeNull();
         expect(m.meta.active).toBe(true);
         await setParamValue("g", "on", true);

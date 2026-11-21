@@ -21,7 +21,7 @@ export interface Script {
     updatedAt: number;
     error: string | null;
     meta: ResMeta;
-    /** param definitions from tt.params / tt.defineParam (captured at save time) */
+    /** param definitions from tweak.params (captured at save time) */
     paramDefs?: ParamTree;
 }
 
@@ -577,7 +577,7 @@ export async function scriptStorageGet(scriptId: string, key: string): Promise<a
     return (obj[SCRIPT_STORE_PREFIX + scriptId] || {})[key];
 }
 
-/** every key of a script's storage (tt.storage and the `$store:` persistence) */
+/** every key of a script's storage (tweak.storage and the `$store:` persistence) */
 export async function scriptStorageAll(scriptId: string): Promise<Record<string, any>> {
     const obj = await storageGet(SCRIPT_STORE_PREFIX + scriptId);
     return obj[SCRIPT_STORE_PREFIX + scriptId] || {};
@@ -600,7 +600,7 @@ export async function scriptStorageDelete(scriptId: string, key: string): Promis
     await storageSet({ [storeKey]: data });
 }
 
-// ---- per-script parameter values (tt.params / tt.defineParam) ----
+// ---- per-script parameter values (tweak.params) ----
 const PARAMS_KEY = "resParams";
 
 /** Load all stored param values: { scriptId: { key: value } }. */

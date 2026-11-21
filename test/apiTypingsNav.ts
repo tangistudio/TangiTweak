@@ -54,7 +54,7 @@ export async function checkApiTypingsNav(mgr: any, check: Check, label = ""): Pr
     await cdp.send("Emulation.setDeviceMetricsOverride", { width: 1400, height: 800, deviceScaleFactor: 1, mobile: false });
     await mgr.evaluate(() => new Promise((r) => chrome.runtime.sendMessage({
         type: "saveScript", id: "s_api_nav", name: "api nav.tangitweak",
-        code: 'tt.onRequest({ url: "*://api-nav.invalid/*", strategy: "helper" }, (ctx) => {\n    console.log(ctx.url);\n});\n',
+        code: 'import { tweak } from "tangitweak"; tweak.onRequest({ url: "*://api-nav.invalid/*", strategy: "helper" }, (ctx) => {\n    console.log(ctx.url);\n});\n',
     }, r)));
     await mgr.keyboard.press("Escape"); // close a hover left by an earlier check
     // an earlier check may leave the current script dirty: discard it
@@ -131,7 +131,7 @@ export async function checkApiTypingsNav(mgr: any, check: Check, label = ""): Pr
 
     const root = await showHover();
     const linkNames = root.links.map((l: string[]) => l[0]);
-    check("api typings: hover signature on tt.onRequest is highlighted, its API types are links",
+    check("api typings: hover signature on tweak.onRequest is highlighted, its API types are links",
         root.visible && linkNames.includes("RouteOptions") && linkNames.includes("RequestCtx") && root.links.every((l: string[]) => l[1].startsWith("command:tt.hoverShowType?")) &&
             root.colors.length >= 3 && /mono/i.test(root.preFont) && root.sig.includes("\n    route: TangiTweak.RouteOptions,"),
         JSON.stringify({ ...root, text: undefined }).slice(0, 400) + ` uri=${opened.uri}`);
@@ -212,7 +212,7 @@ export async function checkApiTypingsNav(mgr: any, check: Check, label = ""): Pr
     for (const end = Date.now() + 15000; f12.uri !== "file:///tt-api.d.ts" && Date.now() < end; f12 = await waitFor((s) => s.uri === "file:///tt-api.d.ts", 1000)) {
         await mgr.keyboard.press("F12");
     }
-    check("api typings: F12 on tt.onRequest opens its declaration read-only",
+    check("api typings: F12 on tweak.onRequest opens its declaration read-only",
         f12.uri === "file:///tt-api.d.ts" && f12.readOnly === true && f12.note && f12.saveDisabled && f12.selected === "" && f12.line.includes("onRequest(route"),
         JSON.stringify({ ...f12, text: undefined }));
     await mgr.waitForTimeout(300);

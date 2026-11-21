@@ -1,5 +1,5 @@
 /**
- * Param writes from code (tt.params assignment): several at once all land,
+ * Param writes from code (tweak.params assignment): several at once all land,
  * in order, even though each one reads and writes back every value.
  */
 import { describe, it, expect, beforeEach } from "vitest";
@@ -24,7 +24,7 @@ const later = (f: () => void) => setTimeout(f, Math.random() * 5);
 
 const { saveScript, setParamFromCode, loadAllParamValues } = await import("../src/background/engine/scriptStore");
 
-const CODE = `const cfg = tt.params({ on: { type: "boolean", default: true }, hits: { type: "stringList", default: [] } });`;
+const CODE = `import { tweak } from "tangitweak"; const cfg = tweak.params({ on: { type: "boolean", default: true }, hits: { type: "stringList", default: [] } });`;
 
 describe("setParamFromCode", () => {
     beforeEach(() => {

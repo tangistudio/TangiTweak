@@ -20,11 +20,10 @@ type Check = (name: string, ok: boolean, extra?: string) => void;
 
 let version = 1;
 
-const entry = (origin: string) => `import { shout } from "./lib";
+const entry = (origin: string) => `import { tweak } from "tangitweak"; import { shout } from "./lib";
 import cfg from "./cfg.json";
-tt.metadata({ name: "Demo package", version: "1.${version - 1}.0" });
-tt.replaceResponse({ url: "${origin}/pkg-api", strategy: "page" }, () => shout(cfg.word));
-${version > 1 ? `tt.replaceResponse({ url: "${origin}/pkg-other", strategy: "page" }, () => "OTHER");\n` : ""}`;
+tweak.replaceResponse({ url: "${origin}/pkg-api", strategy: "page" }, () => shout(cfg.word));
+${version > 1 ? `tweak.replaceResponse({ url: "${origin}/pkg-other", strategy: "page" }, () => "OTHER");\n` : ""}`;
 
 export function packagesServerRoute(req: http.IncomingMessage, res: http.ServerResponse, origin: string): boolean {
     const url = new URL(req.url || "/", origin);
@@ -36,8 +35,8 @@ export function packagesServerRoute(req: http.IncomingMessage, res: http.ServerR
     if (url.pathname === "/pkg/lib.ts") return send("text/plain", 'export const shout = (s: string) => s.toUpperCase() + "!";\n'), true;
     if (url.pathname === "/pkg/cfg.json") return send("application/json", '{ "word": "pkg-ok" }'), true;
     if (url.pathname === "/kit/metadata.json") return send("application/json", JSON.stringify({ name: "Kit", version: "3.0.0", description: "Two scripts", scripts: ["a.ts", "tools/b.ts"] })), true;
-    if (url.pathname === "/kit/a.ts") return send("text/plain", `import { tag } from "./shared";\ntt.replaceResponse({ url: "${origin}/kit-a", strategy: "page" }, () => tag("A"));\n`), true;
-    if (url.pathname === "/kit/tools/b.ts") return send("text/plain", `import { tag } from "../shared";\ntt.replaceResponse({ url: "${origin}/kit-b", strategy: "page" }, () => tag("B"));\n`), true;
+    if (url.pathname === "/kit/a.ts") return send("text/plain", `import { tweak } from "tangitweak"; import { tag } from "./shared";\ntweak.replaceResponse({ url: "${origin}/kit-a", strategy: "page" }, () => tag("A"));\n`), true;
+    if (url.pathname === "/kit/tools/b.ts") return send("text/plain", `import { tweak } from "tangitweak"; import { tag } from "../shared";\ntweak.replaceResponse({ url: "${origin}/kit-b", strategy: "page" }, () => tag("B"));\n`), true;
     if (url.pathname === "/kit/shared.ts") return send("text/plain", 'export const tag = (s: string) => "KIT-" + s;\n'), true;
     if (url.pathname === "/pkg-page") return send("text/html", "<html><body>PKG</body></html>"), true;
     if (url.pathname === "/pkg-api") return send("text/plain", "REAL"), true;
@@ -69,8 +68,8 @@ export async function checkPackages(ctx: any, mgr: any, origin: string, check: C
     const confirm = await tab.waitForSelector("#install-confirm:not([disabled])", { timeout: 15000 }).then(() => true, () => false);
     const review = await tab.evaluate(() => document.body.innerText);
     check(
-        t("the review shows the name, version, what it can do and its files"),
-        confirm && review.includes("Demo package") && review.includes("1.0.0") && review.includes(`${origin}/pkg-api`) && review.includes("lib.ts") && review.includes("cfg.json"),
+        t("the review shows the name, what it can do and its files"),
+        confirm && review.includes("demo") && review.includes(`${origin}/pkg-api`) && review.includes("lib.ts") && review.includes("cfg.json"),
         review.slice(0, 400)
     );
     if (confirm) await tab.click("#install-confirm");
@@ -115,16 +114,16 @@ export async function checkPackages(ctx: any, mgr: any, origin: string, check: C
     await mgr.click("#script-list .pkg-ind.pending").catch(() => {});
     const applyShown = await mgr.waitForSelector("#install-dialog #update-apply", { timeout: 15000 }).then(() => true, () => false);
     const rvText = await mgr.evaluate(() => (document.querySelector("#install-dialog") as HTMLElement | null)?.innerText || "");
-    check(t("the update review (a dialog in the Editor) shows what the update adds"), applyShown && rvText.includes("Review Update") && rvText.includes("1.1.0") && rvText.includes("/pkg-other"), rvText.slice(0, 400));
+    check(t("the update review (a dialog in the Editor) shows what the update adds"), applyShown && rvText.includes("Review Update") && rvText.includes("/pkg-other"), rvText.slice(0, 400));
     if (applyShown) await mgr.click("#update-apply");
     await mgr.waitForSelector("#install-dialog >> text=Open in the Editor", { timeout: 15000 }).catch(() => {});
     await mgr.keyboard.press("Escape");
     const updated = (await send({ type: "listPackages" }))?.[pkg.id];
     const other = await waitFor(() => page.evaluate(() => fetch("/pkg-other").then((r) => r.text())).catch(() => ""), (v) => v === "OTHER", 10000);
-    check(t("applying the update installs it"), updated?.metadata?.version === "1.1.0" && !updated.pending && other === "OTHER", JSON.stringify({ version: updated?.metadata?.version, other }));
+    check(t("applying the update installs it"), updated?.revision === held?.pending?.revision && !updated.pending && other === "OTHER", JSON.stringify({ revision: updated?.revision, other }));
 
     const back = await send({ type: "packageRollback", id: pkg.id });
-    check(t("rolling back restores the previous version and turns auto-update off"), back?.metadata?.version === "1.0.0" && back.autoUpdate === false, JSON.stringify({ version: back?.metadata?.version, autoUpdate: back?.autoUpdate, error: back?.error }));
+    check(t("rolling back restores the previous version and turns auto-update off"), back?.revision === pkg.revision && back.autoUpdate === false, JSON.stringify({ revision: back?.revision, autoUpdate: back?.autoUpdate, error: back?.error }));
     await page.close();
 
     for (const s of (await send({ type: "listScripts" })) || []) if (s.meta.name.startsWith("demo/")) await send({ type: "deleteScript", id: s.id });
@@ -149,10 +148,10 @@ export async function checkPackages(ctx: any, mgr: any, origin: string, check: C
             },
             [sel, what]
         );
-    const fileLit = await dropOn("#install-drop", { file: ["dropped.tangitweak.ts", 'tt.metadata({ name: "Dropped", version: "0.1.0" });\n'] });
+    const fileLit = await dropOn("#install-drop", { file: ["dropped.tangitweak.ts", 'import { tweak } from "tangitweak"; tweak.onPage("*://dropped.test/*", () => {});\n'] });
     const fileReview = await mgr.waitForSelector("#install-dialog #install-confirm", { timeout: 8000 }).then(() => true, () => false);
     const fileText = await mgr.evaluate(() => (document.querySelector("#install-dialog") as HTMLElement | null)?.innerText || "");
-    check(t("Install Script… opens a dialog; a file dropped on it is reviewed"), picker && fileLit && fileReview && fileText.includes("Dropped") && fileText.includes("0.1.0"), JSON.stringify({ picker, fileLit, fileReview, text: fileText.slice(0, 300) }));
+    check(t("Install Script… opens a dialog; a file dropped on it is reviewed"), picker && fileLit && fileReview && fileText.includes("dropped"), JSON.stringify({ picker, fileLit, fileReview, text: fileText.slice(0, 300) }));
     await mgr.click("#install-dialog .btn-close");
     const closed = await mgr.waitForSelector("#install-dialog", { state: "detached", timeout: 5000 }).then(() => true, () => false);
     check(t("the Install dialog closes"), closed);
