@@ -40,7 +40,7 @@ import { isBundlePackageJson, MANIFEST_FILE } from "../shared/packageMetadata";
 import { storeOwner } from "./engine/stores";
 import { jsonEqual } from "../shared/storeOps";
 import { SETTINGS_FILE, SCHEMA_FILE } from "../shared/settingsJson";
-import { API_DTS_FILE, BUILTIN_TYPINGS_ROOT, ESLINT_CONFIG_FILE, ESLINT_PLUGIN_FILE, GENERATED_NOTE, OLD_TEST_PKG_ROOT, PACKAGE_JSON_FILE, SDK_BUILTIN_TYPINGS, SDK_ROOT, TSCONFIG_FILE, apiDtsText, eslintConfigText, eslintPluginText, packageJsonText, tsconfigText } from "../shared/generatedFiles";
+import { API_DTS_FILE, BUILTIN_TYPINGS_ROOT, ESLINT_CONFIG_FILE, ESLINT_PLUGIN_FILE, GENERATED_NOTE, OLD_TEST_PKG_ROOT, PACKAGE_JSON_FILE, SDK_BUILTIN_TYPINGS, SDK_ROOT, TSCONFIG_FILE, eslintConfigText, eslintPluginText, packageJsonText, tsconfigText } from "../shared/generatedFiles";
 import { broadcastToUi } from "./engine/logs";
 import { dlogLevel } from "../shared/debugLog";
 import { folderPathProblem, isConfigJsonPath, isGitignorePath, isScriptFilePath, scriptFileName, scriptNameFromFile } from "../shared/scriptName";
@@ -1213,10 +1213,10 @@ async function ensureFile(fileName: string, content: string): Promise<void> {
     await writeFile(fileName, content);
 }
 
-/** settings.schema.json isn't written since 0.40.1-alpha: the one TangiTweak wrote goes, a user's own stays */
-async function removeOldSchemaFile(): Promise<void> {
-    const text = await readTextOrNull(SCHEMA_FILE);
-    if (text?.includes(GENERATED_NOTE)) await removeFile(SCHEMA_FILE);
+/** a file TangiTweak no longer writes (settings.schema.json, tt-api.d.ts): the one it wrote goes, a user's own stays */
+async function removeOldGeneratedFile(fileName: string): Promise<void> {
+    const text = await readTextOrNull(fileName);
+    if (text?.includes(GENERATED_NOTE)) await removeFile(fileName);
 }
 
 async function ensurePackageJsonFile(): Promise<void> {
@@ -1280,24 +1280,16 @@ async function ensureSdkFiles(): Promise<void> {
 }
 
 /**
- * Typings + tsconfig + the SDK for VS Code, refreshed on every
+ * tsconfig + the SDK (with the API typings) for VS Code, refreshed on every
  * start — so an extension update (new APIs) reaches an already-synced folder.
  */
 async function ensureSupportFiles(): Promise<void> {
-    try {
-        const dts = await fetch(chrome.runtime.getURL("lib/tt-api.d.ts")).then((r) => {
-            if (!r.ok) throw new Error(`HTTP ${r.status}`);
-            return r.text();
-        });
-        await ensureFile(API_DTS_FILE, apiDtsText(dts));
-    } catch (e: any) {
-        dlogLevel("sync", "warn", `Folder sync: could not refresh ${API_DTS_FILE}: ${e?.message || e}`);
-    }
     await ensureFile(TSCONFIG_FILE, tsconfigText());
     await ensurePackageJsonFile();
     await ensureFile(ESLINT_CONFIG_FILE, eslintConfigText());
     await ensureEslintPlugin();
-    await removeOldSchemaFile();
+    await removeOldGeneratedFile(SCHEMA_FILE);
+    await removeOldGeneratedFile(API_DTS_FILE);
     await ensureSdkFiles();
     await ensurePackageTypingsFiles();
 }

@@ -424,7 +424,7 @@ since the last sync wins, so a backup is made only when both changed.
 A slow drive (network share, cloud folder) that reports an earlier TangiTweak
 write back late isn't mistaken for an outside edit; the newer text is
 written again.
-`tt-api.d.ts`, `tsconfig.json`, `package.json` and `eslint.config.mjs` are written alongside. Edit in VS Code (or any editor) with full
+`tsconfig.json`, `package.json` and `eslint.config.mjs` are written alongside, and the SDK (with the API typings) under `.tangitweak/sdk/tangitweak/`. Edit in VS Code (or any editor) with full
 TypeScript completions; saves hot apply instantly. The typings of
 [package imports](scripting.md#packages-from-unpkg) go to
 `.tangitweak/types/`, which TangiTweak owns: it rewrites and prunes them as
@@ -463,7 +463,7 @@ so a rare selector mistake can show there and not in ESLint.
 
 Those support files are refreshed on every browser start
 and extension update, so new APIs, settings, lint rules and test helpers reach an already-synced folder.
-`tt-api.d.ts`, `tsconfig.json` and `eslint.config.mjs` are owned by TangiTweak (edits there are overwritten); `package.json` keeps your own `scripts`, `dependencies` and `devDependencies` while maintaining `"type": "module"`, the `tangitweak` devDependency and the ESLint devDependencies. `settings.json` is yours: an
+`tsconfig.json` and `eslint.config.mjs` are owned by TangiTweak (edits there are overwritten); `package.json` keeps your own `scripts`, `dependencies` and `devDependencies` while maintaining `"type": "module"`, the `tangitweak` devDependency and the ESLint devDependencies. `settings.json` is yours: an
 update only adds documentation for settings it doesn't mention yet.
 
 Sync is two-way and watches the folder for **creates, renames/moves and
@@ -543,8 +543,8 @@ files and data files at their paths, empty folders as folders, and
 [data folder](#a-tweaks-data-folder) (its `enabled` state, changed params
 and saved stores) goes in only when **Include my settings and saved data**
 is ticked. **Import…** takes such a zip — or a
-zip of a synced scripts folder (its `tt-api.d.ts`, `tsconfig.json`,
-`package.json`, `eslint.config.mjs` and `settings.schema.json` at the root are skipped).
+zip of a synced scripts folder (its `tsconfig.json`,
+`package.json`, `eslint.config.mjs`, and an old `tt-api.d.ts` or `settings.schema.json` at the root are skipped).
 
 Both open the files as a tree, all ticked: tick or untick files, or a whole
 folder (its box shows when only some of its files are ticked). The filter

@@ -1,6 +1,6 @@
 /**
  * Support files folder sync keeps in the scripts folder for VS Code:
- * tt-api.d.ts (typings), tsconfig.json, package.json and eslint.config.mjs,
+ * tsconfig.json, package.json and eslint.config.mjs,
  * plus the package imports' and the built-in modules'
  * (valtio, React) typings under .tangitweak/types/, the SDK (the npm package
  * `tangitweak`, as this build made it) under .tangitweak/sdk/tangitweak/, and
@@ -23,6 +23,7 @@ export const SDK_BUILTIN_TYPINGS = "types/builtin";
 /** where Folder Sync wrote `@tangitweak/test` before 0.40.0-alpha: the folder and its package.json entries go */
 export const OLD_TEST_PKG_ROOT = ".tangitweak/test";
 
+/** the API typings Folder Sync wrote at the root before 0.40.1-alpha (the SDK's index.d.ts has them): the generated one goes, and zip import skips it */
 export const API_DTS_FILE = "tt-api.d.ts";
 export const TSCONFIG_FILE = "tsconfig.json";
 export const PACKAGE_JSON_FILE = "package.json";
@@ -76,7 +77,7 @@ export function packageJsonText(existing?: Record<string, any>): string {
 const baseCompilerOptions = {
     target: "esnext",
     lib: ["esnext", "dom", "dom.iterable"],
-    // tt-api.d.ts declares web APIs (URLPattern…) that newer TS libs may also have
+    // the API typings declare web APIs (URLPattern…) that newer TS libs may also have
     skipLibCheck: true,
     module: "esnext",
     moduleResolution: "bundler",

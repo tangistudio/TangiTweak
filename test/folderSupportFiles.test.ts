@@ -15,7 +15,6 @@ const store: Record<string, any> = {};
     },
     runtime: { lastError: undefined, sendMessage: () => {}, getURL: (p: string) => `chrome-extension://x/${p}` },
 };
-let dts = "declare const tt: { v1: true };\n";
 const sdk: Record<string, string> = {
     "package.json": JSON.stringify({ name: "tangitweak", version: "0.40.0-alpha", type: "module", types: "./index.d.ts" }, null, 2) + "\n",
     "index.d.ts": 'declare module "tangitweak" {}\n',
@@ -23,7 +22,6 @@ const sdk: Record<string, string> = {
     "tsconfig.json": "{}\n",
 };
 (globalThis as any).fetch = async (url: string) => {
-    if (url === "chrome-extension://x/lib/tt-api.d.ts") return { ok: true, status: 200, text: async () => dts };
     if (url === "chrome-extension://x/lib/tangitweak-sdk.json") return { ok: true, status: 200, json: async () => sdk };
     if (url === "chrome-extension://x/lib/builtin-types.json") return { ok: true, status: 200, json: async () => ({ "@types/react/index.d.ts": "export {};\n" }) };
     throw new Error(`unexpected fetch: ${url}`);
@@ -82,12 +80,13 @@ const dir = makeDir();
 vi.mock("../src/shared/folderSync", async (orig) => ({ ...(await orig<any>()), loadSavedHandle: async () => dir, saveHandle: async () => {}, clearSavedHandle: async () => {} }));
 
 describe("folder sync support files", () => {
-    it("writes typings, tsconfig and the SDK on start and preserves user package.json fields", async () => {
+    it("writes tsconfig and the SDK on start and preserves user package.json fields", async () => {
         files.set("feature.ts", { text: "import { tweak } from 'tangitweak'; tweak.onPage('*://example.com/*', () => {});\n", t: clock++ });
         files.set("feature.test.ts", { text: "import { test } from 'tangitweak/test';\n", t: clock++ });
         // what Folder Sync wrote before 0.40.0-alpha
         files.set(".tangitweak/test/index.mjs", { text: "old\n", t: clock++ });
         files.set("settings.schema.json", { text: JSON.stringify({ $comment: GENERATED_NOTE }), t: clock++ });
+        files.set("tt-api.d.ts", { text: `// ${GENERATED_NOTE}\n\ndeclare const tt: any;\n`, t: clock++ });
         files.set(
             "package.json",
             {
@@ -110,9 +109,6 @@ describe("folder sync support files", () => {
         const importedScripts = await listScripts();
         expect(importedScripts.map((s) => s.meta.name)).toEqual(["feature"]);
 
-        const d = files.get("tt-api.d.ts")!;
-        expect(d.text).toContain(GENERATED_NOTE);
-        expect(d.text).toContain("v1: true");
         const ts = files.get("tsconfig.json")!.text;
         expect(ts.startsWith(`// ${GENERATED_NOTE}\n`)).toBe(true);
         const tsParsed = JSON.parse(ts.slice(ts.indexOf("\n") + 1));
@@ -139,8 +135,10 @@ describe("folder sync support files", () => {
         // the Editor's checks as ESLint rules
         expect(files.get("eslint.config.mjs")?.text).toContain(".tangitweak/eslint-plugin.mjs");
         expect(files.get(".tangitweak/eslint-plugin.mjs")?.text).toContain("no-invalid-world-access");
+        // the old generated files go (each tweak's tsconfig.json extends the SDK's, whose index.d.ts has the typings)
         expect(files.has("settings.schema.json")).toBe(false);
-        const kept = ["tt-api.d.ts", "tsconfig.json", "package.json", ".tangitweak/sdk/tangitweak/test.js"];
+        expect(files.has("tt-api.d.ts")).toBe(false);
+        const kept = ["tsconfig.json", "package.json", ".tangitweak/sdk/tangitweak/test.js"];
         const stamps = kept.map((f) => files.get(f)!.t);
 
         // unchanged → nothing rewritten on the next start
@@ -160,11 +158,9 @@ describe("folder sync support files", () => {
                 t: clock++,
             }
         );
-        dts = "declare const tt: { v2: true };\n";
         files.set("tsconfig.json", { text: "{}", t: clock++ });
         sync.halt();
         await sync.startFromStoredHandle({ fresh: true });
-        expect(files.get("tt-api.d.ts")!.text).toContain("v2: true");
         expect(files.get("tsconfig.json")!.text).toBe(ts);
         const mergedPkg = JSON.parse(files.get("package.json")!.text);
         expect(mergedPkg.$comment).toContain(GENERATED_NOTE);
@@ -185,6 +181,14 @@ describe("folder sync support files", () => {
         sync.halt();
         await sync.startFromStoredHandle({ fresh: true });
         expect(files.get("package.json")!.text).toBe("{ broken json");
+        sync.halt();
+    });
+
+    it("keeps a tt-api.d.ts the user wrote", async () => {
+        files.set("tt-api.d.ts", { text: "declare const mine: 1;\n", t: clock++ });
+        const sync = await import("../src/background/folderSync");
+        await sync.startFromStoredHandle({ fresh: true });
+        expect(files.get("tt-api.d.ts")?.text).toBe("declare const mine: 1;\n");
         sync.halt();
     });
 });
