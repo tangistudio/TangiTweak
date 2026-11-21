@@ -250,17 +250,41 @@ describe("explorer tree", () => {
     });
 
     it("shows a tweak's data folder files inside its folder, offering only open, copy path and back to defaults", async () => {
-        const { s, actions, row, list } = await mount();
+        const { s, actions, row, list, key } = await mount();
         const reset = vi.spyOn(actions, "resetTweakData").mockResolvedValue(undefined as any);
         act(() => void (s.explorer.tweakData = [{ path: "mock/.tweak/settings.json", root: "mock/" }, { path: "mock/.tweak/stores/cart.json", root: "mock/" }]));
-        const ids = [...list.querySelectorAll(":scope > li")].map((l) => l.id);
-        expect(ids.slice(ids.indexOf("explorer-dir%3Amock") + 1, ids.indexOf("explorer-dir%3Amock") + 3)).toEqual(["explorer-tdata%3Amock%2F.tweak%2Fsettings.json", "explorer-tdata%3Amock%2F.tweak%2Fstores%2Fcart.json"]);
-        expect(row("tdata:mock/.tweak/stores/cart.json").textContent).toBe(".tweak/stores/cart.json");
+        const after = () => {
+            const ids = [...list.querySelectorAll(":scope > li")].map((l) => l.id);
+            return ids.slice(ids.indexOf("explorer-dir%3Amock") + 1, ids.indexOf("explorer-dir%3Amock") + 4);
+        };
+        // the stores stay behind a closed .tweak/stores row until it's opened
+        expect(after()).toEqual(["explorer-tdata%3Amock%2F.tweak%2Fsettings.json", "explorer-tstores%3Amock%2F", "explorer-dir%3Amock%2Fdeep"]);
+        expect(row("tstores:mock/").textContent).toBe(".tweak/stores");
+        expect(row("tstores:mock/").getAttribute("aria-expanded")).toBe("false");
+        act(() => void fireEvent.click(row("tstores:mock/")));
+        expect(after()).toEqual(["explorer-tdata%3Amock%2F.tweak%2Fsettings.json", "explorer-tstores%3Amock%2F", "explorer-tdata%3Amock%2F.tweak%2Fstores%2Fcart.json"]);
+        expect(row("tdata:mock/.tweak/stores/cart.json").textContent).toBe("cart.json");
+        expect(row("tdata:mock/.tweak/stores/cart.json").style.getPropertyValue("--depth")).toBe(String(Number(row("tstores:mock/").style.getPropertyValue("--depth")) + 1));
+        act(() => void fireEvent.click(row("tstores:mock/")));
+        expect(row("tdata:mock/.tweak/stores/cart.json")).toBeNull();
         act(() => void fireEvent.contextMenu(row("tdata:mock/.tweak/settings.json")));
         const items = [...document.querySelectorAll(".ctx-menu li")];
         expect(items.map((l) => (l.classList.contains("sep") ? "-" : l.textContent))).toEqual(["OpenEnter", "-", "Copy Path", "-", "Delete (Back to Defaults)"]);
         act(() => void fireEvent.click(items[items.length - 1]));
         expect(reset).toHaveBeenCalledWith("mock/.tweak/settings.json");
+        // the keys open and close it, and ← on a store goes back to it
+        act(() => s.moveFocus("tstores:mock/"));
+        key("ArrowRight");
+        expect(s.explorer.openStores.has("mock/")).toBe(true);
+        key("ArrowRight");
+        expect(s.explorer.focusedId).toBe("tdata:mock/.tweak/stores/cart.json");
+        key("ArrowLeft");
+        expect(s.explorer.focusedId).toBe("tstores:mock/");
+        key("ArrowLeft");
+        expect(s.explorer.openStores.has("mock/")).toBe(false);
+        // opening a store from elsewhere (Problems, Go to File) reveals it
+        act(() => s.revealTweakData("mock/.tweak/stores/cart.json"));
+        expect(row("tdata:mock/.tweak/stores/cart.json")).not.toBeNull();
     });
 
     it("renders a bundle's icon on its package folder and entry rows; other scripts get the file icon", async () => {

@@ -102,6 +102,7 @@ describe("package URLs", () => {
         expect(isEsModule(`export default 1`)).toBe(true);
         expect(isEsModule(`const a = 1;\nimport x from "y"`)).toBe(true);
         expect(isEsModule(`module.exports = { importer: 1 }; // import x from "y"`)).toBe(false);
+        expect(isEsModule(`exports.a = 1;\nexports.b = 2;\nimports.c = 3;`)).toBe(false);
         expect(requireSpecs(`a.require("no"); require("x"); require('./y'); myrequire("z")`)).toEqual(["x", "./y"]);
         const refs = declarationRefs(`/// <reference path="./g.d.ts" />\n/// <reference types="node" />\nimport a from "./a";\nexport * from "b/c";\ntype T = import("./t");\nimport e = require("e");\ndeclare module "ambient" {}\ndeclare module "./aug" {}\n// import z from "./commented"`);
         expect(refs).toEqual({ specs: ["./a", "b/c", "./t", "e", "./aug"], paths: ["./g.d.ts"], types: ["node"] });
@@ -132,6 +133,7 @@ describe("downloading a package's module graph", () => {
         expect(esm.default(4)).toBe(8);
         expect(esm.add(1, 2)).toBe(3);
         expect(esm.where).toBe("https://unpkg.com/esm-lib@1.0.0/index.js");
+        expect(esm.Id.first).toBe(7); // a static block sees the static fields above it
         expect(load(urls[1]).shout("hi")).toBe("HI!");
         expect(load(urls[2])).toEqual({ rootIsExports: true, sloppy: true, nodeEnv: "production" });
         delete (globalThis as any).ttUmdSloppyGlobal;

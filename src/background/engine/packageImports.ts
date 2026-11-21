@@ -314,7 +314,7 @@ function toCommonJs(url: string, text: string): string {
     if (/\.css$/i.test(path)) return `__ttStyle(${JSON.stringify(text)}, ${JSON.stringify(url)});`;
     if (!isEsModule(text)) return text;
     const meta = text.replace(/\bimport\.meta\.url\b/g, JSON.stringify(url)).replace(/\bimport\.meta\b/g, `({ url: ${JSON.stringify(url)} })`);
-    return transform(meta, { transforms: ["imports"], filePath: url }).code;
+    return transform(meta, { transforms: ["imports"], filePath: url, disableESTransforms: true }).code;
 }
 
 /** the ranges the importing tweaks give a Node.js built-in a package requires without depending on it */
@@ -596,6 +596,14 @@ export function packageTypings(): StoredTypings {
 
 const dirOf = (p: { name: string; version: string }) => `unpkg.com/${p.name}@${p.version}`;
 
+/** a downloaded range URL (`<name>@%5E1.0.0/sub`) as the pinned version it resolved to */
+function rangeTop(top: string): PackageUrl {
+    const final = parsePackageUrl(finalUrl(state, top) ?? "");
+    if (typeof final === "string") throw new Error(`${top} is not downloaded`);
+    const sub = /^(?:@[^/]+\/)?[^/]+?(?:\/(.*))?$/.exec(top.slice(PACKAGE_ORIGIN.length))?.[1] ?? "";
+    return { name: final.name, version: final.version, sub };
+}
+
 /** typings path → owning package (`unpkg.com/<name>@<version>/…`) */
 function ownerOf(path: string): PackageUrl | undefined {
     const p = parsePackageUrl(`https://${path}`);
@@ -608,7 +616,8 @@ function ownerOf(path: string): PackageUrl | undefined {
  * type dependencies. Files already in `existing` are reused, not fetched.
  */
 async function crawlTypings(top: string, existing: Record<string, string>): Promise<Map<string, string>> {
-    const p = parsePackageUrl(top) as PackageUrl;
+    const pinned = parsePackageUrl(top);
+    const p = typeof pinned === "string" ? rangeTop(top) : pinned;
     const files = new Map<string, string>();
     const missing = new Set<string>();
     const pending = new Set<Promise<void>>();
@@ -739,6 +748,8 @@ async function crawlTypings(top: string, existing: Record<string, string>): Prom
     } else if (!entry) add(`${dir}/${stubPath(p.sub)}`, typingsStub(top));
     else if (!naturalDeclaration(p.sub).some((n) => `${dir}/${n}` === entry)) pointer(`${dir}/${p.sub}`, {}, entry);
     for (const [name, d] of deps) pointer(`node_modules/${name}`, { name, version: d.version }, d.types);
+    // a range URL (a bundle's bare import) points at what its pinned version gives
+    if (typeof pinned === "string") pointer(`unpkg.com/${top.slice(PACKAGE_ORIGIN.length)}`, {}, entry ?? `${dir}/${stubPath(p.sub)}`);
     if (capped) dlogLevel("packages", "warn", `the typings of ${top} were cut off at ${MAX_TYPINGS_FILES} files / 10 MB`);
     return files;
 }

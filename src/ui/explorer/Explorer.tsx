@@ -26,8 +26,14 @@ import {
     toggleSel,
     treeRow,
     isTweakDataId,
-    tweakDataIn,
+    isTweakStorePath,
+    isTweakStoresId,
+    tweakDataId,
+    setStoresOpen,
+    tweakDataGroups,
     tweakDataPathOf,
+    tweakStoresId,
+    tweakStoresRootOf,
     visibleRows,
     type MenuItem,
     type NewKind,
@@ -48,6 +54,11 @@ import { MANIFEST_FILE } from "../../shared/packageMetadata";
 /** the path the explorer's Copy Path copies (a script's is its file's) */
 const rowFilePath = (row: TreeRow): string => (row.kind === "script" ? scriptFileName(row.path) : row.path);
 
+/** a store row's `.tweak/stores` row (undefined: not a store) */
+const tweakStoresIdOf = (id: string): string | undefined => {
+    const d = explorer.tweakData.find((x) => tweakDataId(x.path) === id);
+    return d && isTweakStorePath(d.root, d.path) ? tweakStoresId(d.root) : undefined;
+};
 const plural = (n: number, word: string): string => `${n} ${word}${n === 1 ? "" : "s"}`;
 
 /** a new data file's path: `.json` unless it names an `.svg` or image extension */
@@ -193,6 +204,13 @@ function onKeyDown(e: KeyboardEvent<HTMLUListElement>): void {
     } else if (e.key.toLowerCase() === "a" && mod && !e.shiftKey && !e.altKey) {
         setSel(selectableIds());
         moveFocus(cur);
+    } else if (isTweakStoresId(cur) && plain && ["ArrowRight", "ArrowLeft", "Enter", " "].includes(e.key)) {
+        const root = tweakStoresRootOf(cur);
+        const isOpen = explorer.openStores.has(root);
+        if (e.key === "ArrowRight" && isOpen) moveFocus(ids[i + 1]);
+        else setStoresOpen(root, e.key === "ArrowRight" ? true : e.key === "ArrowLeft" ? false : !isOpen);
+    } else if (e.key === "ArrowLeft" && plain && isTweakDataId(cur) && tweakStoresIdOf(cur)) {
+        moveFocus(tweakStoresIdOf(cur)!);
     } else if ((e.key === "ArrowRight" || e.key === "ArrowLeft") && deep) {
         const expand = e.key === "ArrowRight";
         const dirs = cur && explorer.sel.size > 1 && explorer.sel.has(cur) ? actionRows(cur).filter((r) => r.kind === "folder").map((r) => r.path) : [];
@@ -259,6 +277,13 @@ function onContextMenu(e: MouseEvent<HTMLUListElement>): void {
             null,
             { label: `Delete ${rows.length} Items`, key: "Delete", run: () => actions.deleteRows(rows) },
         ]);
+        return;
+    }
+    if (id && isTweakStoresId(id)) {
+        moveFocus(id);
+        const root = tweakStoresRootOf(id);
+        const isOpen = explorer.openStores.has(root);
+        showContextMenu(e.clientX, e.clientY, [{ label: isOpen ? "Collapse" : "Expand", run: () => setStoresOpen(root, !isOpen) }, null, { label: "Copy Path", run: () => copy(`${root}.tweak/stores`, `copied ${root}.tweak/stores`) }]);
         return;
     }
     if (id && isTweakDataId(id)) {
@@ -495,18 +520,18 @@ export function ExplorerTree() {
         },
     });
 
-    /** a tweak's data folder files, right inside its folder (`root`: "atlas/") */
-    const tweakDataRows = (root: string, depth: number): ReactNode[] =>
-        tweakDataIn(root).map(({ id, path }) => {
+    /** a tweak's data folder: its settings.json, then a `.tweak/stores` row that lists its stores once opened (`root`: "atlas/") */
+    const tweakDataRows = (root: string, depth: number): ReactNode[] => {
+        const { files, stores } = tweakDataGroups(root);
+        const row = ({ id, path }: { id: string; path: string }, store: boolean, d: number, label: string) => {
             const bad = snap.jsonErrorIds.has(id);
-            const store = path.slice(root.length).split("/").length > 2;
             return li(
                 id,
                 " tweak-data" + (bad ? " has-error" : ""),
-                depth,
+                d,
                 <>
                     <FileIcon kind={store ? "stores" : "settings"} />
-                    <span className={bad ? "script-name error" : "script-name"}>{path.slice(root.length)}</span>
+                    <span className={bad ? "script-name error" : "script-name"}>{label}</span>
                 </>,
                 {
                     title: [
@@ -517,7 +542,28 @@ export function ExplorerTree() {
                     ...click(id, () => open(id)),
                 }
             );
-        });
+        };
+        const out = files.map((f) => row(f, false, depth, f.path.slice(root.length)));
+        if (!stores.length) return out;
+        const groupId = tweakStoresId(root);
+        const isOpen = snap.openStores.has(root);
+        const bad = stores.some((s) => snap.jsonErrorIds.has(s.id));
+        out.push(
+            li(
+                groupId,
+                " tweak-data tweak-stores" + (bad ? " has-error" : ""),
+                depth,
+                <>
+                    <FileIcon kind="stores" />
+                    <span className={bad ? "script-name error" : "script-name"}>.tweak/stores</span>
+                </>,
+                { title: `${root}.tweak/stores — the saved data of ${plural(stores.length, "store")}`, "aria-expanded": isOpen, ...click(groupId, () => setStoresOpen(root, !isOpen)) },
+                isOpen
+            )
+        );
+        if (isOpen) out.push(...stores.map((s) => row(s, true, depth + 1, baseName(s.path))));
+        return out;
+    };
     const items: ReactNode[] = [
         li(
             SETTINGS_ID,

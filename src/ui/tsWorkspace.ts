@@ -8,10 +8,11 @@
 
 import { builtinSpec, jsxElementAt } from "../shared/builtinSpecs";
 import { TWEAK_MODULE } from "../shared/tweakApi";
-import { PACKAGE_MODULES_KEY, PACKAGE_TYPINGS_KEY, TYPINGS_ROOT, type PackageStatus, type StoredTypings } from "../shared/packageImports";
+import { declarationCandidates, normalizePath, PACKAGE_MODULES_KEY, PACKAGE_ORIGIN, PACKAGE_TYPINGS_KEY, relativePath, TYPINGS_ROOT, type PackageStatus, type StoredTypings } from "../shared/packageImports";
 import { coveredMissingModule, dependantsOf, importSpecs, isImageDataPath, isMarkdownPath, isSvgPath, packageImportMarks, packageUrls } from "../shared/scriptImports";
-import { isTsxName } from "../shared/scriptName";
+import { isGitignorePath, isTsxName } from "../shared/scriptName";
 import { scriptLint } from "../shared/scriptLint";
+import { bareImport, dataReader } from "../shared/tweakBundle";
 import { baseName } from "./explorerTree";
 import { jsonDeclPath, jsonModuleDts } from "./jsonTypes";
 import { BUILTIN_ROOT } from "./monacoSetup";
@@ -170,7 +171,10 @@ export function createTsWorkspace(host: TsWorkspaceHost): TsWorkspace {
         builtin: new Map<string, ExtraLibSlot>(),
         packages: new Map<string, ExtraLibSlot>(),
         data: new Map<string, ExtraLibSlot>(),
+        bare: new Map<string, ExtraLibSlot>(),
     };
+    let typingFiles: Record<string, string> = {};
+    let lastData: TsDataInput[] = [];
     const prevDataDts = new Map<string, string>();
     const dirty = new Set<TsModelLike>();
     const editTimers = new Map<TsModelLike, ReturnType<typeof setTimeout>>();
@@ -216,6 +220,7 @@ export function createTsWorkspace(host: TsWorkspaceHost): TsWorkspace {
 
     function applyPackageTypings(files: Record<string, string>, recheckExisting: boolean): void {
         if (disposed) return;
+        typingFiles = files;
         const want = new Map(Object.entries(files).map(([p, text]) => [`file:///${TYPINGS_ROOT}/${p}`, text]));
         const changed = putLibs(libs.packages, want);
         if (changed.length && recheckExisting && entries.size) {
@@ -482,14 +487,15 @@ export function createTsWorkspace(host: TsWorkspaceHost): TsWorkspace {
     }
 
     function applyDataFilesInternal(
-        dataFiles: TsDataInput[],
+        input: TsDataInput[],
         live: { id: string; name: string; code: string }[],
         toCheck: Set<TsModelLike>
     ): string[] {
+        lastData = input;
         const want = new Map<string, string>();
         const nextDts = new Map<string, string>();
-        for (const f of dataFiles) {
-            if (isSvgPath(f.path) || isMarkdownPath(f.path) || isImageDataPath(f.path)) continue;
+        for (const f of input) {
+            if (isSvgPath(f.path) || isMarkdownPath(f.path) || isImageDataPath(f.path) || isGitignorePath(f.path)) continue;
             const decl = jsonDeclPath(f.path);
             const content = jsonModuleDts(f.text);
             nextDts.set(f.path, content);
@@ -512,6 +518,17 @@ export function createTsWorkspace(host: TsWorkspaceHost): TsWorkspace {
             }
         }
         return changedUris;
+    }
+
+    /** the bare-import stubs of the live scripts, at their models' folder URIs */
+    function applyBareStubs(): string[] {
+        const want = new Map<string, string>();
+        for (const [path, text] of bareImportStubs(liveScripts(), lastData, typingFiles)) {
+            const i = path.indexOf("/node_modules/");
+            want.set(`file:///${path}`, text);
+            want.set(host.fileUri("/" + path.slice(0, i)) + path.slice(i), text);
+        }
+        return putLibs(libs.bare, want);
     }
 
     function pickNextDirty(): TsModelLike | undefined {
@@ -555,6 +572,7 @@ export function createTsWorkspace(host: TsWorkspaceHost): TsWorkspace {
 
                 if (disposed) return;
                 if (epoch !== myEpoch) continue;
+                if (applyBareStubs().length) continue;
 
                 if (extraLibsDirty) {
                     extraLibsDirty = false;
@@ -748,12 +766,43 @@ export function createTsWorkspace(host: TsWorkspaceHost): TsWorkspace {
             modelToId.clear();
             dirty.clear();
             storeSub.dispose();
-            for (const group of [libs.builtin, libs.packages, libs.data]) {
+            for (const group of Object.values(libs)) {
                 for (const s of group.values()) s.lib.dispose();
                 group.clear();
             }
         },
     };
+}
+
+/** where a package URL's declarations start in the typings mirror: its pointer, else the file TypeScript finds by itself */
+function typesEntry(files: Record<string, string>, url: string): string | undefined {
+    const dir = `unpkg.com/${url.slice(PACKAGE_ORIGIN.length)}`;
+    let types: unknown;
+    try {
+        types = JSON.parse(files[`${dir}/package.json`] ?? "null")?.types;
+    } catch {}
+    const entry = typeof types === "string" ? normalizePath(`${dir}/${types}`) : undefined;
+    return entry && entry in files ? entry : declarationCandidates(dir).find((c) => c in files);
+}
+
+/**
+ * `<bundle>/node_modules/<spec>/package.json` stubs (path → text) pointing
+ * each bare import of a bundle file at its dependency's downloaded typings,
+ * so `import { zip } from "fflate"` type-checks like its package URL does.
+ */
+export function bareImportStubs(scripts: Iterable<{ name: string; code: string }>, data: TsDataInput[], typings: Record<string, string>): Map<string, string> {
+    const read = dataReader(data);
+    const out = new Map<string, string>();
+    for (const s of scripts) {
+        for (const spec of importSpecs(s.code)) {
+            const r = bareImport(s.name, spec, read);
+            const entry = r && "url" in r ? typesEntry(typings, r.url) : undefined;
+            if (!entry) continue;
+            const folder = `${r!.pkgPath.slice(0, r!.pkgPath.lastIndexOf("/") + 1)}node_modules/${spec}`;
+            out.set(`${folder}/package.json`, JSON.stringify({ types: relativePath(folder, `${TYPINGS_ROOT}/${entry}`) }));
+        }
+    }
+    return out;
 }
 
 /** Production adapter wiring `createTsWorkspace` to Monaco, `chrome.storage.local` and background IPC. */

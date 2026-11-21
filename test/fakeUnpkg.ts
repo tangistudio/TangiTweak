@@ -70,7 +70,7 @@ export const REGISTRY: Registry = {
     "esm-lib": {
         "1.0.0": {
             "package.json": pj({ name: "esm-lib", version: "1.0.0", main: "index.js", types: "index.d.ts" }),
-            "index.js": `import { add } from "./math.js";\nexport default function twice(x) { return add(x, x); }\nexport { add };\nexport const where = import.meta.url;\n`,
+            "index.js": `import { add } from "./math.js";\nexport default function twice(x) { return add(x, x); }\nexport { add };\nexport const where = import.meta.url;\nexport class Id { static seed = () => 7; static { this.first = this.seed(); } }\n`,
             "math.js": `export const add = (a, b) => a + b;\n`,
             "index.d.ts": `import { add } from "./math";\nexport default function twice(x: number): number;\nexport { add };\nexport declare const where: string;\n`,
             "math.d.ts": `export declare const add: (a: number, b: number) => number;\n`,

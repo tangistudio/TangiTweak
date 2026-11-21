@@ -8,6 +8,7 @@ import ts from "typescript";
 import { editorCompilerOptions } from "../src/ui/monacoSetup";
 import { BUILTIN_TYPINGS_ROOT, tsconfigText } from "../src/shared/generatedFiles";
 import { TYPINGS_ROOT, type StoredTypings } from "../src/shared/packageImports";
+import { bareImportStubs } from "../src/ui/tsWorkspace";
 import { fakeUnpkg, REGISTRY } from "./fakeUnpkg";
 
 const store: Record<string, any> = {};
@@ -44,10 +45,11 @@ const EXPECTED = [
 ];
 
 let typings: StoredTypings;
+let p: typeof import("../src/background/engine/packageImports");
 
 beforeAll(async () => {
     (globalThis as any).fetch = fakeUnpkg(REGISTRY).fetch;
-    const p = await import("../src/background/engine/packageImports");
+    p = await import("../src/background/engine/packageImports");
     await p.ensurePackages([SCRIPT]);
     await p.packageTypingsIdle();
     typings = p.packageTypings();
@@ -57,39 +59,69 @@ beforeAll(async () => {
 const errorsOf = (diags: readonly ts.Diagnostic[]) =>
     diags.map((d) => ({ line: d.file!.getLineAndCharacterOfPosition(d.start!).line + 1, code: d.code, text: ts.flattenDiagnosticMessageText(d.messageText, "\n") }));
 
+/** a language service like Monaco's TS worker over `files` (URI → text) */
+function editorService(files: Map<string, string>) {
+    const libDir = dirname(ts.getDefaultLibFilePath({}));
+    // lib.*.d.ts come from Monaco's bundled lib map; here from the typescript package
+    const read = (path: string) => files.get(path) ?? (path.startsWith(libDir) ? ts.sys.readFile(path) : undefined);
+    const host: ts.LanguageServiceHost = {
+        getCompilationSettings: () => editorCompilerOptions(ts) as ts.CompilerOptions,
+        getScriptFileNames: () => [...files.keys()],
+        getScriptVersion: () => "1",
+        getScriptSnapshot: (f) => {
+            const t = read(f);
+            return t === undefined ? undefined : ts.ScriptSnapshot.fromString(t);
+        },
+        // like Monaco without allowJs: every file (package.json too) parses as TS
+        getScriptKind: () => ts.ScriptKind.TS,
+        getCurrentDirectory: () => "",
+        getDefaultLibFileName: (o) => ts.getDefaultLibFilePath(o),
+        readFile: read,
+        fileExists: (f) => read(f) !== undefined,
+    };
+    const ls = ts.createLanguageService(host);
+    const errors = (main: string) => errorsOf([...ls.getSyntacticDiagnostics(main), ...ls.getSemanticDiagnostics(main)]);
+    const resolve = (spec: string, main: string) =>
+        ts.resolveModuleName(spec, main, host.getCompilationSettings(), { fileExists: host.fileExists, readFile: read, getCurrentDirectory: () => "" }).resolvedModule?.resolvedFileName;
+    return { errors, resolve };
+}
+
+const typingsFiles = (files: Record<string, string>) => new Map(Object.entries(files).map(([p, text]) => [`file:///${TYPINGS_ROOT}/${p}`, text]));
+
 describe("package import typings", () => {
     it("resolve in the editor (Monaco's TS worker host)", () => {
-        const files = new Map<string, string>(Object.entries(typings.files).map(([p, text]) => [`file:///${TYPINGS_ROOT}/${p}`, text]));
+        const files = typingsFiles(typings.files);
         const main = "file:///main.ts";
         files.set(main, SCRIPT);
-        const libDir = dirname(ts.getDefaultLibFilePath({}));
-        // lib.*.d.ts come from Monaco's bundled lib map; here from the typescript package
-        const read = (path: string) => files.get(path) ?? (path.startsWith(libDir) ? ts.sys.readFile(path) : undefined);
-        const host: ts.LanguageServiceHost = {
-            getCompilationSettings: () => editorCompilerOptions(ts) as ts.CompilerOptions,
-            getScriptFileNames: () => [...files.keys()],
-            getScriptVersion: () => "1",
-            getScriptSnapshot: (f) => {
-                const t = read(f);
-                return t === undefined ? undefined : ts.ScriptSnapshot.fromString(t);
-            },
-            // like Monaco without allowJs: every file (package.json too) parses as TS
-            getScriptKind: () => ts.ScriptKind.TS,
-            getCurrentDirectory: () => "",
-            getDefaultLibFileName: (o) => ts.getDefaultLibFilePath(o),
-            readFile: read,
-            fileExists: (f) => read(f) !== undefined,
-        };
-        const ls = ts.createLanguageService(host);
-        const errors = errorsOf([...ls.getSyntacticDiagnostics(main), ...ls.getSemanticDiagnostics(main)]);
+        const service = editorService(files);
+        const errors = service.errors(main);
         expect(errors.map(({ line, code }) => ({ line, code }))).toEqual(EXPECTED);
         expect(errors[0].text).toMatch(/'number' is not assignable to type 'string'/);
-        const resolve = (spec: string) =>
-            ts.resolveModuleName(spec, main, host.getCompilationSettings(), { fileExists: host.fileExists, readFile: read, getCurrentDirectory: () => "" }).resolvedModule?.resolvedFileName;
+        const resolve = (spec: string) => service.resolve(spec, main);
         const at = (p: string) => `file:///${TYPINGS_ROOT}/unpkg.com/${p}`;
         expect(resolve("https://unpkg.com/cjs-lib@2.0.0")).toBe(at("@types/cjs-lib@2.0.1/index.d.ts"));
         expect(resolve("https://unpkg.com/esm-lib@1.0.0/math.js")).toBe(at("esm-lib@1.0.0/math.d.ts"));
         expect(resolve("https://unpkg.com/umd-lib@1.0.0")).toMatch(/^file:\/\/\/.*umd-lib@1\.0\.0\/.*\.d\.ts$/);
+    });
+
+    it("a bundle's bare imports resolve in the editor through its package.json dependencies", async () => {
+        const data = [{ path: "t/package.json", text: JSON.stringify({ name: "t", tangitweak: {}, dependencies: { "esm-lib": "^1.0.0", "exp-lib": "1.0.0", "cjs-lib": "^2.0.0" } }) }];
+        const code = `import twice, { add } from "esm-lib";
+import { add as add2 } from "esm-lib/math.js";
+import { sub } from "exp-lib/sub";
+import { shout } from "cjs-lib";
+const a: number = twice(add(1, add2(2, sub)));
+const b: string = shout("x");
+const c: number = shout("x");
+`;
+        const script = { name: "t/index", code };
+        await p.ensurePackages([script], { data });
+        await p.packageTypingsIdle();
+        const stored = p.packageTypings().files;
+        const files = typingsFiles(stored);
+        for (const [path, text] of bareImportStubs([script], data, stored)) files.set(`file:///${path}`, text);
+        files.set("file:///t/index.ts", code);
+        expect(editorService(files).errors("file:///t/index.ts").map(({ line, code }) => ({ line, code }))).toEqual([{ line: 7, code: 2322 }]);
     });
 
     it("the built-in valtio and React typings resolve in the editor (what build.mjs ships in builtin-types.json)", () => {

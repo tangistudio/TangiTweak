@@ -12,8 +12,13 @@ const TWEAK_DATA = "tdata:";
 export const tweakDataId = (path: string): string => TWEAK_DATA + path;
 export const isTweakDataId = (id: string | null | undefined): boolean => !!id?.startsWith(TWEAK_DATA);
 export const tweakDataPathOf = (id: string): string => id.slice(TWEAK_DATA.length);
+/** a tweak's `.tweak/stores` row (`root`: "atlas/"): closed until opened, then its stores show under it */
+const TWEAK_STORES = "tstores:";
+export const tweakStoresId = (root: string): string => TWEAK_STORES + root;
+export const isTweakStoresId = (id: string | null | undefined): boolean => !!id?.startsWith(TWEAK_STORES);
+export const tweakStoresRootOf = (id: string): string => id.slice(TWEAK_STORES.length);
 /** rows that aren't tree items (no selecting, moving, renaming): settings.json and the tweaks' data folder files */
-export const isVirtualRootId = (id: string | null | undefined): boolean => id === SETTINGS_ID || isTweakDataId(id);
+export const isVirtualRootId = (id: string | null | undefined): boolean => id === SETTINGS_ID || isTweakDataId(id) || isTweakStoresId(id);
 
 export type ExplorerScript = Script & Partial<ScriptHealthInput> & { routeWarnings?: string[] };
 export type NewKind = "script" | "data" | "folder" | "tweak";
@@ -62,6 +67,8 @@ export const explorer = proxy({
     jsonErrorIds: ref(new Set<string>()) as ReadonlySet<string>,
     /** collapsed folder paths (persisted, like VS Code's) */
     collapsed: ref(new Set(loadCollapsed())) as ReadonlySet<string>,
+    /** tweak folders ("atlas/") whose `.tweak/stores` row is open */
+    openStores: ref(new Set<string>()) as ReadonlySet<string>,
     /** the section's header chevron */
     sectionOpen: true,
     editing: null as Editing | null,
@@ -109,12 +116,39 @@ export const treeRow = (id: string | null): TreeRow | undefined => (id ? treeRow
 export const tweakDataIn = (root: string): { id: string; path: string }[] =>
     explorer.tweakData.filter((d) => d.root === root).map((d) => ({ id: tweakDataId(d.path), path: d.path }));
 
+/** a data folder file under `.tweak/stores/` (not the tweak's settings.json) */
+export const isTweakStorePath = (root: string, path: string): boolean => path.slice(root.length).split("/").length > 2;
+
+/** `root`'s data folder: its files, then its stores (shown under the `.tweak/stores` row) */
+export function tweakDataGroups(root: string): { files: { id: string; path: string }[]; stores: { id: string; path: string }[] } {
+    const all = tweakDataIn(root);
+    return { files: all.filter((d) => !isTweakStorePath(root, d.path)), stores: all.filter((d) => isTweakStorePath(root, d.path)) };
+}
+
+/** the shown data folder rows of `root`: its files, the `.tweak/stores` row, and its stores when open */
+const tweakDataRowIds = (root: string): string[] => {
+    const { files, stores } = tweakDataGroups(root);
+    return [...files.map((d) => d.id), ...(stores.length ? [tweakStoresId(root), ...(explorer.openStores.has(root) ? stores.map((d) => d.id) : [])] : [])];
+};
+
 /** the rows' ids, settings.json first, each expanded tweak folder's data files right after it */
-export const explorerIds = (): string[] => [
-    SETTINGS_ID,
-    ...tweakDataIn("").map((d) => d.id),
-    ...visibleRows().flatMap((r) => [r.id, ...(r.kind === "folder" && r.expanded ? tweakDataIn(r.path + "/").map((d) => d.id) : [])]),
-];
+export const explorerIds = (): string[] => [SETTINGS_ID, ...tweakDataRowIds(""), ...visibleRows().flatMap((r) => [r.id, ...(r.kind === "folder" && r.expanded ? tweakDataRowIds(r.path + "/") : [])])];
+
+export function setStoresOpen(root: string, open: boolean): void {
+    if (open === explorer.openStores.has(root)) return;
+    const next = new Set(explorer.openStores);
+    if (open) next.add(root);
+    else next.delete(root);
+    explorer.openStores = ref(next);
+}
+
+/** show a data folder file: open its folders and, for a store, its `.tweak/stores` row */
+export function revealTweakData(path: string): void {
+    const d = explorer.tweakData.find((x) => x.path === path);
+    if (!d) return;
+    if (d.root) revealInExplorer(d.root);
+    if (isTweakStorePath(d.root, path)) setStoresOpen(d.root, true);
+}
 
 /** the ids a multi-selection can hold (settings.json and data folder files aren't selectable items) */
 export const selectableIds = (): string[] => visibleRows().map((r) => r.id);

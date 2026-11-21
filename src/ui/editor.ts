@@ -23,7 +23,7 @@ import { dialogs, openHelp, openSettings, pickItems, resolveConflict } from "./s
 import { folderStateText, setHelperStatus, settings } from "./state/settings";
 import { watchTheme, type Theme } from "./theme";
 import * as fsBridge from "./fsBridge";
-import { cleanScriptName, isTsxName, scriptNameProblem, scriptFileName, scriptFileKey, scriptPathKey, scriptNameFromFile, uniqueScriptName, dataFilePathProblem, folderPathProblem } from "../shared/scriptName";
+import { cleanScriptName, isTsxName, scriptNameProblem, scriptFileName, scriptFileKey, scriptPathKey, scriptNameFromFile, uniqueScriptName, dataFilePathProblem, folderPathProblem, isGitignorePath } from "../shared/scriptName";
 import { jsxElementAt } from "../shared/builtinSpecs";
 import { vscodeTargetPath, editorLaunchUrl, launchAppName, type LaunchMode } from "./bundle";
 import { computeDirty } from "./dirtyState";
@@ -44,7 +44,7 @@ import { layout, panelTabOf, type PanelTab } from "./state/layout";
 import { appendLog, clearLog, logState } from "./state/log";
 import { badges, badgesChanged, panel, setNetStore, setProblems } from "./state/panel";
 import { actions } from "./shell/actions";
-import { clearSel, everyFolder, explorer, explorerIds, isTweakDataId, isVirtualRootId, moveFocus, pruneCollapsed, revealInExplorer, setCollapsed, setSel, SETTINGS_ID, startCreate as startCreateRow, syncExplorer, treeRow, treeRows, tweakDataId, tweakDataIn, tweakDataPathOf, visibleRows, type NewKind } from "./state/explorer";
+import { clearSel, everyFolder, explorer, explorerIds, isTweakDataId, isVirtualRootId, moveFocus, pruneCollapsed, revealInExplorer, revealTweakData, setCollapsed, setSel, SETTINGS_ID, startCreate as startCreateRow, syncExplorer, treeRow, treeRows, tweakDataId, tweakDataIn, tweakDataPathOf, visibleRows, type NewKind } from "./state/explorer";
 import { watchPackages } from "./state/packages";
 import { createCodeEditor } from "./shell/codeEditor";
 import { toolbar, type SaveState } from "./state/toolbar";
@@ -541,7 +541,9 @@ async function createItem(kind: NewKind, path: string): Promise<void> {
             ? '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">\n</svg>\n'
             : isMarkdownPath(path)
               ? `# ${baseName(path).replace(/\.md$/i, "")}\n`
-              : "{}\n";
+              : isGitignorePath(path)
+                ? "node_modules/\n"
+                : "{}\n";
         const r = await send({ type: "saveDataFile", path, text: initial });
         if (r?.error || !r?.id) {
             status(`can't create "${path}": ${r?.error ?? "unknown error"}`, "error");
@@ -795,8 +797,8 @@ const dataUri = (path: string): any => (window as any).monaco.Uri.file("/" + pat
 const isDataId = (id: string | null): boolean => !!id && dataFiles.some((d) => d.id === id);
 
 /** syncModels for data files: renamed ones move, clean ones follow external changes, deleted ones go */
-/** a data file's Monaco language: .svg is XML, .md is Markdown, raster images are plaintext */
-const dataLanguage = (path: string): string => (isSvgPath(path) ? "xml" : isMarkdownPath(path) ? "markdown" : isImageDataPath(path) ? "plaintext" : "json");
+/** a data file's Monaco language: .svg is XML, .md is Markdown, raster images and .gitignore are plaintext */
+const dataLanguage = (path: string): string => (isSvgPath(path) ? "xml" : isMarkdownPath(path) ? "markdown" : isImageDataPath(path) || isGitignorePath(path) ? "plaintext" : "json");
 
 function syncDataModels(): void {
     if (!editor) return;
@@ -2284,7 +2286,10 @@ function select(id: string): Promise<void> {
         }
     }
     if (id === SETTINGS_ID) return selectSettings();
-    if (isTweakDataId(id)) return selectTweakData(id);
+    if (isTweakDataId(id)) {
+        revealTweakData(tweakDataPathOf(id));
+        return selectTweakData(id);
+    }
     const row = treeRow(id);
     if (row) revealInExplorer(row.path);
     selectReal(id);

@@ -608,7 +608,8 @@ atlas/
   Deleting it deletes the store, so pages go back to its `initial` value.
   `tweak.storage` has no file.
 
-The Explorer lists these files right inside the tweak's folder. You can open,
+The Explorer lists these files right inside the tweak's folder, with the
+stores under one `.tweak/stores` row that stays closed until you open it. You can open,
 edit and save them, copy their path, or delete them (**Delete (Back to
 Defaults)**); they aren't scripts, modules or data files, so they can't be
 renamed or moved. With a synced folder connected they sync two-way like

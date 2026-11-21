@@ -208,7 +208,7 @@ export function dependencyRange(pkg: any, dep: string): string | undefined {
 
 /** does the (CommonJS or ES module) code use ES module syntax? */
 export function isEsModule(code: string): boolean {
-    return /(?:^|[;})\]]|\*\/)[ \t]*(?:import[ \t]*(?:[\w$*{]|["'])|export[ \t]*(?:[\w$*{]))/m.test(code);
+    return /(?:^|[;})\]]|\*\/)[ \t]*(?:import(?![\w$])[ \t]*(?:[\w$*{]|["'])|export(?![\w$])[ \t]*[\w$*{])/m.test(code);
 }
 
 /** the string specifiers CommonJS code `require`s */

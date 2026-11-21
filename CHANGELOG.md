@@ -16,6 +16,16 @@ its section below.
 - **Script lint** in the Editor's Problems: stores or handles used in `onSite` code, `tweak.siteStore` in network handlers, logging, timers or store writes in `strategy: "rules"` handlers, and bad CSS selectors and shortcut keys, found before the tweak runs.
 - **Folder Sync writes `eslint.config.mjs`** and `.tangitweak/eslint-plugin.mjs`, and lists ESLint and typescript-eslint in the root `package.json`, so `npx eslint .` or VS Code's ESLint extension shows the Editor's checks in a synced folder ([docs](docs/editor.md#synced-folder)).
 
+### Changed
+
+- **The Explorer folds a tweak's stores** under one `.tweak/stores` row, closed until you open it (click, Enter or →); opening a store from elsewhere opens the row.
+
+### Fixed
+
+- **Packages with class static blocks** (e.g. `bson`) no longer fail to load with `this.resetState is not a function`: CommonJS files assigning `exports.x` aren't mistaken for ES modules, and modern class syntax in packages is kept as is.
+- **Bare imports type-check in the Editor**: `import { zip } from "fflate"` in a tweak with `fflate` in its `package.json` `dependencies` gets the package's types instead of `Cannot find module 'fflate'`. Range dependencies like `^0.8.2` now get typings too.
+- **The Editor no longer checks a tweak's `.gitignore` as JSON** (`Expected a JSON object, array or literal`).
+
 ## [0.40.1-alpha] - 2026-11-21
 
 ### Added
