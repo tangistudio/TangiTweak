@@ -17,7 +17,7 @@ import { inertRemote, NO_SITE_STORE, REMOTE_FROM_BACKGROUND, SITE_NO_HANDLES, SI
 import { scriptEnv } from "./scriptEnv";
 import { dataFileValue, importLine, importPath, importResolver, isDataSpec } from "./scriptImports";
 import { builtinMessage, finalUrl, isNodeBuiltin, isUrlSpec, makePackageLoader, PackageImportError, type PackageModules } from "./packageImports";
-import { bareImport, bundleOf, dataReader, type Bundle } from "./tweakBundle";
+import { bareImport, bundleOf, dataReader, dependenciesOf, type Bundle } from "./tweakBundle";
 import { builtinModule } from "./builtins";
 import { builtinSpec } from "./builtinSpecs";
 import { proxy } from "valtio/vanilla";
@@ -468,7 +468,7 @@ export function makeModuleResolver(
             if ("error" in bare) throw new PackageImportError(bare.error);
             addDep(bare.url);
             if (!finalUrl(opts?.packages, bare.url) && !opts?.packages?.failed?.[bare.url]) throw new PackageImportError(`cannot import "${spec}": not downloaded yet — save the tweak to download it`);
-            return loadPackage(bare.url);
+            return loadPackage(bare.url, dependenciesOf(importer, read));
         }
         const found = lookup(importer, spec);
         if (!found) {

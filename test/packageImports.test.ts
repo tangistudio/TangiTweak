@@ -4,7 +4,7 @@
 // loader through the compilers and the page hook, and the typings crawl.
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import "../src/shared/transpile";
-import { compileWithLibs, makeModuleResolver } from "../src/shared/compile";
+import { compileManyWithLibs, compileWithLibs, makeModuleResolver } from "../src/shared/compile";
 import { makeLibRequire, importResolver } from "../src/shared/scriptImports";
 import { errorPosition } from "../src/ui/problems";
 import {
@@ -214,9 +214,41 @@ describe("downloading a package's module graph", () => {
         expect(load(bare).err).toMatch(/^"events" is a Node\.js built-in — not available in tweaks — add "events": "latest" to the tweak's package\.json "dependencies"/);
         for (const k of Object.keys(store)) delete store[k];
         p = await bg();
-        await p.ensurePackages([entry], { data: tweak({ "needs-events": "^1.0.0", events: "npm:tiny-events@^1.0.0" }) });
+        const deps = { "needs-events": "^1.0.0", events: "npm:tiny-events@^1.0.0" };
+        await p.ensurePackages([entry], { data: tweak(deps) });
         load = makePackageLoader(p.packagesSnapshot());
-        expect(load("https://unpkg.com/needs-events@1.0.0/index.js")).toEqual({ events: "tiny-events", nodeEvents: "tiny-events" });
+        expect(load("https://unpkg.com/needs-events@1.0.0/index.js", deps)).toEqual({ events: "tiny-events", nodeEvents: "tiny-events" });
+    });
+
+    it("the built-in fallback is per tweak: two tweaks sharing a package each get their own `events`", async () => {
+        const tweak = (name: string, events: string) => ({ path: `${name}/package.json`, text: JSON.stringify({ name, tangitweak: {}, dependencies: { "needs-events": "^1.0.0", events } }) });
+        const data = [tweak("a", "npm:tiny-events@^1.0.0"), tweak("b", "npm:tiny-events@^2.0.0")];
+        const entries = ["a", "b"].map((t) => ({ name: `${t}/index`, code: `import n from "needs-events";` }));
+        let p = await bg();
+        // one tweak at a time, like two saves: the second still gets its own
+        await p.ensurePackages([entries[0]], { data });
+        await p.ensurePackages(entries, { data });
+        const mod = "https://unpkg.com/needs-events@1.0.0/index.js";
+        const check = (pkgs: ReturnType<typeof p.packagesSnapshot>) => {
+            const load = makePackageLoader(pkgs);
+            expect(load(mod, JSON.parse(data[0].text).dependencies)).toEqual({ events: "tiny-events", nodeEvents: "tiny-events" });
+            expect(load(mod, JSON.parse(data[1].text).dependencies)).toEqual({ events: "tiny-events 2", nodeEvents: "tiny-events 2" });
+            expect(load(mod).err).toMatch(/"events" is a Node\.js built-in/);
+        };
+        check(p.packagesSnapshot());
+        // one compile of both tweaks (one loader): each gets its own
+        const seen: string[] = ((globalThis as any).ttSeenEvents = []);
+        const scripts = ["a", "b"].map((t) => ({ id: t, name: `${t}/index`, code: `import n from "needs-events"; (globalThis as any).ttSeenEvents.push("${t}:" + n.events);` }));
+        compileManyWithLibs(["a", "b"], scripts, {}, data, p.packagesSnapshot());
+        expect(seen).toEqual(["a:tiny-events", "b:tiny-events 2"]);
+        delete (globalThis as any).ttSeenEvents;
+        // stored: a fresh background has both
+        p = await bg();
+        await p.loadPackages();
+        check(p.packagesSnapshot());
+        unpkg.calls.length = 0;
+        expect(await p.ensurePackages(entries, { data })).toBe(false); // nothing left to resolve
+        expect(unpkg.calls.filter((u) => u.includes("events"))).toEqual([]);
     });
 
     it("cycles get partial exports; JSON modules export their data", async () => {

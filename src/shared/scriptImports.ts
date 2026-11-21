@@ -12,7 +12,7 @@ import { builtinSpec, jsxImportSource, usesJsx } from "./builtinSpecs";
 import { scriptFrame } from "./scriptError";
 import { isUrlSpec, makePackageLoader, PACKAGE_ORIGIN, parsePackageUrl, type PackageModule, type PackageModules, type PackageStatus } from "./packageImports";
 import type { PackageFn } from "./siteCode";
-import { bareImport, dataReader } from "./tweakBundle";
+import { bareImport, dataReader, dependenciesOf } from "./tweakBundle";
 
 const IMPORT_RE = /(?:\bfrom\s*|\bimport\s*\(?\s*|\brequire\s*\(\s*)["']([^"'\n]+)["']/g;
 
@@ -427,10 +427,11 @@ export function makeLibRequire<L extends ShippedLib>(libs: L[], run: (lib: L, re
             const bare = r ? undefined : bareImport(importer, spec, read);
             if (bare && "error" in bare) throw new Error(bare.error);
             if (bare || isUrlSpec(spec)) {
+                const deps = bare ? dependenciesOf(importer, read) : undefined;
                 if (bare) spec = bare.url;
-                if (!opts.onSite) return loadPackage(spec);
+                if (!opts.onSite) return loadPackage(spec, deps);
                 try {
-                    return loadPackage(spec);
+                    return loadPackage(spec, deps);
                 } catch (e: any) {
                     const why = String(e?.message ?? e).replace(/^cannot import "[^"]*": /, "");
                     return unusable(spec, `it doesn't load there (${why}) — a package that needs React works in onPage or onOverlay code`);

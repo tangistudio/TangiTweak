@@ -149,6 +149,10 @@ export const REGISTRY: Registry = {
             "package.json": pj({ name: "tiny-events", version: "1.0.0" }),
             "index.js": `exports.name = "tiny-events";\n`,
         },
+        "2.0.0": {
+            "package.json": pj({ name: "tiny-events", version: "2.0.0" }),
+            "index.js": `exports.name = "tiny-events 2";\n`,
+        },
     },
     "alias-user": {
         "1.0.0": {
