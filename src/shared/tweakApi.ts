@@ -41,7 +41,7 @@ export function tweakRequire(host: TweakHost | undefined, file: string, require:
     };
 }
 
-const STORE_ID = /^[a-z0-9_-][a-z0-9._-]*$/;
+export const STORE_ID = /^[a-z0-9_-][a-z0-9._-]*$/;
 
 /** `tweak.globalStore`'s id: it becomes a file name */
 export function checkStoreId(id: unknown): asserts id is string {

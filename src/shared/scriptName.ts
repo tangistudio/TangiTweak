@@ -65,7 +65,7 @@ export function scriptNameProblem(name: string): string {
  */
 export function isConfigJsonPath(path: string): boolean {
     const base = path.slice(path.lastIndexOf("/") + 1);
-    return /^(package-lock\.json|jsconfig\.json)$/i.test(base) || /^(package\.json|tsconfig.*\.json|settings\.json|settings\.schema\.json|stores\.json)$/i.test(path);
+    return /^(package-lock\.json|jsconfig\.json)$/i.test(base) || /^(package\.json|tsconfig.*\.json|settings\.json|settings\.schema\.json)$/i.test(path);
 }
 
 /** a tweak bundle's .gitignore: the one dot-file kept as a data file */

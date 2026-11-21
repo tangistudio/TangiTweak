@@ -98,6 +98,9 @@ describe("crawl", () => {
         "repo/plain/package.json": JSON.stringify({ name: "plain" }),
         "repo/plain/index.ts": "",
         "repo/lone/a.ts": "",
+        "repo/dot/package.json": pkg("dot"),
+        "repo/dot/index.ts": `import s from "./.tweak/stores/cart.json";`,
+        "repo/dot/.tweak/stores/cart.json": `{"n":1}`,
     };
     const read = async (p: string) => fs[p] ?? null;
     it("reads the package.json, its entry and what it imports by relative path; bare imports must be dependencies", async () => {
@@ -117,6 +120,11 @@ describe("crawl", () => {
     it("the entry is main, else index.ts, else index.tsx", async () => {
         expect((await crawl("repo/main/package.json", read)).entries).toEqual(["src/app.tsx"]);
         expect((await crawl("repo/tsx/package.json", read)).entries).toEqual(["index.tsx"]);
+    });
+    it("never reads a dot folder (a tweak's data folder), even when imported", async () => {
+        const c = await crawl("repo/dot/package.json", read);
+        expect(Object.keys(c.files).sort()).toEqual(["index.ts", "package.json"]);
+        expect(c.missing).toEqual([{ from: "index.ts", spec: "./.tweak/stores/cart.json" }]);
     });
     it("a bundle's files must be in its folder", async () => {
         await expect(crawl("repo/out/package.json", read)).rejects.toThrow(/outside/);

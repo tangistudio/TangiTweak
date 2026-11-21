@@ -1222,7 +1222,7 @@ declare namespace TangiTweak {
          *
          * - **Lifetime:** One copy across all tabs and pages. Survives reloads,
          *   navigations, closing tabs, script saves, and — by default (`persist: true`
-         *   or `persist: ["field"]`) — browser restarts (saved in `stores.json`).
+         *   or `persist: ["field"]`) — browser restarts (saved in the tweak's `.tweak/stores/<id>.json`).
          *   With `{ persist: false }`, resets when the browser quits.
          * - **Handlers:** All network handlers (`rules`, `page`, `debugger`,
          *   `extension`, `helper` — sync and after `await`), `tweak.onPage`,
@@ -1249,7 +1249,7 @@ declare namespace TangiTweak {
          * - **Lifetime:** One copy per browser tab (`tabId`; subframes share their
          *   top tab's copy). **Survives page reloads, cross-page navigations, and
          *   script saves** in that tab; dropped when the tab closes or the browser
-         *   quits (never persisted to `stores.json`).
+         *   quits (never persisted to a store file).
          * - **Handlers:** All network handlers (`rules` included — builds per-tab
          *   `tabIds` / `excludedTabIds` session rules on change; on `page`,
          *   `debugger`, `extension`, and `helper`, **read/write synchronously before
@@ -1273,7 +1273,7 @@ declare namespace TangiTweak {
          * - **Lifetime:** One copy per top-frame document (subframes share their top
          *   page's copy). Survives SPA route changes and script saves; **resets to
          *   `initial` on reload or cross-document navigation**, and drops when the
-         *   page unloads or the tab closes (never persisted to `stores.json`).
+         *   page unloads or the tab closes (never persisted to a store file).
          * - **Handlers:** Network handlers on `page`, `debugger`, `extension`, and
          *   `helper` (**synchronously before the first `await`**; pageless requests
          *   get a throwaway copy of `initial`), `tweak.onPage`, and `tweak.onOverlay`.

@@ -22,7 +22,7 @@ const files: F = new Map();
 const backups: F = new Map();
 let clock = 1;
 function fakeDir(m: F, name: string): any {
-    return pathDir(m, { tick: () => clock++, special: (p) => (p === ".tangitweak-backup" ? fakeDir(backups, p) : undefined) }, "", name);
+    return pathDir(m, { tick: () => clock++, dots: true, special: (p) => (p === ".tangitweak-backup" ? fakeDir(backups, p) : undefined) }, "", name);
 }
 const dir = fakeDir(files, "d");
 vi.mock("../src/shared/folderSync", async (orig) => ({ ...(await orig<any>()), loadSavedHandle: async () => dir, saveHandle: async () => {}, clearSavedHandle: async () => {} }));
@@ -133,7 +133,7 @@ describe("folder sync: the background is the only writer", () => {
         await sync.stop();
     });
 
-    it("renaming in the store renames the script's settings.json entry", async () => {
+    it("moving a tweak's entry to another bundle moves its data folder file", async () => {
         const sync = await started();
         const { saveScript } = await ss();
         const code = `import { tweak } from "tangitweak"; tweak.params({ n: { type: "number", default: 1 } });`;
@@ -141,12 +141,12 @@ describe("folder sync: the background is the only writer", () => {
         await seedBundle("new");
         await saveScript({ id: "p", code, name: "old/index" });
         await sync.flush();
-        put("settings.json", JSON.stringify({ scripts: { "old/index.ts": { n: 9 } } }, null, 2) + "\n");
+        put("old/.tweak/settings.json", JSON.stringify({ enabled: true, params: { n: 9 } }));
         await sync.flush();
-        expect(JSON.parse(files.get("settings.json")!.text)).toEqual({ scripts: { "old/index.ts": { n: 9 } } });
         await saveScript({ id: "p", code, name: "new/index" });
         await sync.flush();
-        expect(JSON.parse(files.get("settings.json")!.text)).toEqual({ scripts: { "new/index.ts": { n: 9 } } });
+        expect(JSON.parse(files.get("new/.tweak/settings.json")!.text)).toEqual({ enabled: true, params: { n: 9 } });
+        expect(files.has("old/.tweak/settings.json")).toBe(false);
         await sync.stop();
     });
 });

@@ -1,8 +1,8 @@
 /**
  * Utility scripts (no handlers at top level) with params: their params are
- * editable (popup / settings.json), and a param value may make them
+ * editable (popup / the data folder's settings.json), and a param value may make them
  * register handlers — changing it must turn the utility into a script
- * (stored meta, settings.json `enabled`, reload) and back.
+ * (stored meta, reload) and back.
  */
 import { describe, it, expect, beforeEach } from "vitest";
 import "../src/shared/transpile";
@@ -24,7 +24,7 @@ const store: Record<string, any> = {};
 
 const { saveScript, listScripts, setParamValue, loadAllParamValues, onScriptsChanged } = await import("../src/background/engine/scriptStore");
 const { analyzeScripts } = await import("../src/background/compileHost");
-const { currentSettingsState, applySettingsText } = await import("../src/background/settingsFile");
+const { tweakDataFiles, applyTweakDataFile } = await import("../src/background/tweakDataFiles");
 const { seedBundle } = await import("./bundleHelper");
 
 const GATE = `import { tweak } from "tangitweak"; 
@@ -75,15 +75,13 @@ describe("tweaks whose params gate their handlers", () => {
         expect((await analyzeScripts(scripts, { g: { on: true } })).get("g")!.meta.active).toBe(true);
     });
 
-    it("settings.json applies the library's params and gains `enabled` once it's a script", async () => {
+    it("its data folder settings.json applies the params that turn it into a script", async () => {
         await saveScript({ id: "g", name: "gate/index", code: GATE });
-        let st = await currentSettingsState();
-        expect(st.scripts.find((x) => x.name === "gate/index.ts")).toMatchObject({ declared: false, defs: { on: { type: "boolean" } } });
-        expect((await applySettingsText(JSON.stringify({ scripts: { "gate/index.ts": { on: true } } }))).error).toBeUndefined();
+        expect((await get("g")).meta.active).toBe(false);
+        expect((await applyTweakDataFile("gate/.tweak/settings.json", JSON.stringify({ params: { on: true } }))).error).toBeUndefined();
         expect((await loadAllParamValues()).g).toEqual({ on: true });
         expect((await get("g")).meta.active).toBe(true);
-        st = await currentSettingsState();
-        expect(st.scripts.find((x) => x.name === "gate/index.ts")?.declared).toBe(true);
+        expect(JSON.parse((await tweakDataFiles())[0].text)).toEqual({ enabled: true, params: { on: true } });
     });
 
     it("a module's params and registrations belong to the entry that imports it", async () => {

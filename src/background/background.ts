@@ -16,7 +16,7 @@ import * as folderSync from "./folderSync";
 import { addNetworkCountsPort, addNetworkPort } from "./network";
 import { collectDiagnostics } from "./diagnostics";
 import { getSettingsText, applySettingsText, applySettingsDoc } from "./settingsFile";
-import { getStoresText, applyStoresText } from "./storesFile";
+import { applyTweakDataFile, getDataFolder, setDataFolder, tweakDataFiles } from "./tweakDataFiles";
 import { badgeSetText, badgeSetColor, actionSetTitle, tabsQueryAll, tabsGet } from "../shared/chromeApi";
 import { createBadgeCounter, badgeLook } from "./badgeCounter";
 import { actionIconView, createBusyIndicator } from "./busyIcon";
@@ -92,19 +92,26 @@ chrome.runtime.onMessage.addListener((msg: any, _s, sendResponse) => {
         applySettingsDoc(msg.doc).then(sendResponse);
         return true;
     }
-    if (msg && msg.type === "getStoresJson") {
-        getStoresText().then((text) => sendResponse({ text }));
+    if (msg && msg.type === "getTweakDataFiles") {
+        tweakDataFiles().then((files) => sendResponse({ files }));
         return true;
     }
-    if (msg && msg.type === "applyStoresJson") {
-        applyStoresText(msg.text).then(async (r) => {
-            if (!r.error) await folderSync.exportStoresFrom(msg.text);
+    if (msg && msg.type === "applyTweakDataFile") {
+        applyTweakDataFile(msg.path, typeof msg.text === "string" ? msg.text : null).then(async (r) => {
+            if (!r.error) await folderSync.exportTweakData();
             sendResponse(r);
         });
         return true;
     }
-    if (msg && msg.type === "ensureStoresOnDisk") {
-        folderSync.ensureStoresFile().then(() => sendResponse({}));
+    if (msg && msg.type === "getDataFolder") {
+        getDataFolder().then((name) => sendResponse({ name }));
+        return true;
+    }
+    if (msg && msg.type === "setDataFolder") {
+        setDataFolder(msg.name).then(async (r) => {
+            if (!r.error) await folderSync.exportSettingsFrom();
+            sendResponse(r);
+        });
         return true;
     }
     if (msg && msg.type === "folderSyncAdopt") {

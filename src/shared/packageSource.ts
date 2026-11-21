@@ -179,7 +179,7 @@ export interface Net {
 }
 
 /** the files a package can use */
-export const isPackageFile = (path: string): boolean => /\.(tsx?|json|svg|md|png|jpe?g|gif|webp|ico|avif)$/i.test(path) && !/(^|\/)(node_modules|\.git|__tests__)\//.test(path) && !isTestOrToolingTsPath(path);
+export const isPackageFile = (path: string): boolean => /\.(tsx?|json|svg|md|png|jpe?g|gif|webp|ico|avif)$/i.test(path) && !/(^|\/)(node_modules|__tests__|\.[^/]*)\//.test(path) && !isTestOrToolingTsPath(path);
 
 /** read a browser `File` as package content (raster images become `data:image/...;base64,...`) */
 export async function readPackageBrowserFile(path: string, file: File): Promise<string> {
@@ -508,8 +508,9 @@ export function candidates(path: string): string[] {
 export async function crawl(start: string, read: (path: string) => Promise<string | null>, onProgress?: (p: DownloadProgress) => void): Promise<CrawledPackage> {
     const files: Record<string, string> = {};
     const cache = new Map<string, Promise<string | null>>();
+    // never a dot folder's file (a tweak's data folder, .git…): it's not code or data the tweak ships
     const get = (p: string) => {
-        if (!cache.has(p)) cache.set(p, read(p).catch(() => null));
+        if (!cache.has(p)) cache.set(p, /(^|\/)\.[^/]*\//.test(p) ? Promise.resolve(null) : read(p).catch(() => null));
         return cache.get(p)!;
     };
     const missing: CrawledPackage["missing"] = [];

@@ -11,8 +11,8 @@ import { compileScript, compileWithLibs } from "../src/shared/compile";
 import { makePageShim } from "../src/shared/pageShim";
 import { parseParamValue, serializableParamDef } from "../src/shared/scriptDef";
 import { formatScriptError } from "../src/shared/scriptError";
-import { renderSettings, parseSettings, planSettings } from "../src/shared/settingsJson";
-import { buildSettingsSchema } from "../src/shared/settingsSchema";
+import { planTweakSettings, renderTweakSettings } from "../src/shared/tweakData";
+import { tweakSettingsSchema } from "../src/shared/settingsSchema";
 
 const CODE = `import { tweak } from "tangitweak"; 
 const cfg = tweak.params({
@@ -96,14 +96,13 @@ describe("param parse (runtime)", () => {
 describe("param parse (settings keep raw values)", () => {
     it("settings.json export/import and the schema see raw values only", () => {
         const { c } = logged(CODE, { origin: "https://b.org" });
-        const state = { name: "s.ts", declared: true, enabled: true, defs: c.paramDefs!, values: { origin: "https://b.org", hosts: ["p"] } };
-        const G = { logLevel: "info", logCap: 500 } as const;
-        const json = renderSettings(G, [state]);
-        expect(JSON.parse(json)).toEqual({ scripts: { "s.ts": { origin: "https://b.org", hosts: ["p"] } } });
+        const state = { enabled: true, defs: c.paramDefs!, values: { origin: "https://b.org", hosts: ["p"] } };
+        const json = renderTweakSettings(state.enabled, state.defs, state.values);
+        expect(JSON.parse(json)).toEqual({ enabled: true, params: { origin: "https://b.org", hosts: ["p"] } });
         expect(json).not.toMatch(/parse|=>/);
-        const plan = planSettings(parseSettings(json.replace("https://b.org", "https://c.net")), G, [state]);
-        expect(plan.scripts).toEqual([{ name: "s.ts", params: { origin: "https://c.net" } }]);
-        const schema = JSON.stringify(buildSettingsSchema([state]));
+        const plan = planTweakSettings(json.replace("https://b.org", "https://c.net"), state);
+        expect(plan).toEqual({ params: { origin: "https://c.net" } });
+        const schema = JSON.stringify(tweakSettingsSchema(state.defs));
         expect(schema).not.toContain("parse");
     });
 });
@@ -237,15 +236,14 @@ tweak.onRequest({ url: "*://a.com/*", strategy: "helper" }, () => {});`;
         expect(c.error).toMatch(/shortcut parameter "k": "Hyper\+K" has an unknown modifier "Hyper"/);
     });
 
-    it("settings.json: rendered when customized, typed as a string in the schema, bad keys skipped on plan", () => {
+    it("settings.json: rendered when customized, typed as a string in the schema, a bad key refuses the file", () => {
         const defs = { toggle: { type: "shortcut", default: "Alt+Shift+H", description: "Hide the box" } } as const;
-        const text = renderSettings({ logLevel: "warn", logCap: 500 }, [{ name: "s.ts", enabled: true, declared: true, defs, values: { toggle: "Mod+K" } }]);
-        expect(JSON.parse(text)).toEqual({ logLevel: "warn", scripts: { "s.ts": { toggle: "Mod+K" } } });
-        const schema: any = buildSettingsSchema([{ name: "s.ts", enabled: true, declared: true, defs, values: {} }]);
-        expect(schema.properties.scripts.properties["s.ts"].properties.toggle).toMatchObject({ type: "string", default: "Alt+Shift+H" });
-        const bad = JSON.stringify({ scripts: { "s.ts": { toggle: "Hyper+K" } } });
-        expect(planSettings(parseSettings(bad), { logLevel: "info", logCap: 500 }, [{ name: "s.ts", enabled: true, declared: true, defs, values: {} }]).scripts).toEqual([]);
-        const cleared = JSON.stringify({ scripts: { "s.ts": { toggle: "" } } });
-        expect(planSettings(parseSettings(cleared), { logLevel: "info", logCap: 500 }, [{ name: "s.ts", enabled: true, declared: true, defs, values: {} }]).scripts).toEqual([{ name: "s.ts", params: { toggle: "" } }]);
+        const text = renderTweakSettings(true, defs, { toggle: "Mod+K" });
+        expect(JSON.parse(text)).toEqual({ enabled: true, params: { toggle: "Mod+K" } });
+        const schema: any = tweakSettingsSchema(defs);
+        expect(schema.properties.params.properties.toggle).toMatchObject({ type: "string", default: "Alt+Shift+H" });
+        const cur = { enabled: true, defs, values: {} };
+        expect(() => planTweakSettings(JSON.stringify({ params: { toggle: "Hyper+K" } }), cur)).toThrow(/toggle/);
+        expect(planTweakSettings(JSON.stringify({ params: { toggle: "" } }), cur)).toEqual({ params: { toggle: "" } });
     });
 });

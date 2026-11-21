@@ -1,18 +1,19 @@
 /**
- * JSON schema for settings.json — used by Monaco's built-in JSON worker in
+ * JSON schemas for settings.json — used by Monaco's built-in JSON worker in
  * the Editor and written into the synced folder as settings.schema.json for
- * external editors.
+ * external editors — and for a tweak's own data folder settings.json.
  */
-import { LOG_LEVELS, DEFAULT_LOG_CAP, DEFAULT_LOG_LEVEL, TEXT_TYPES_DESC, DEFAULT_BODY_CAP, BODY_CAP_MIN, BODY_CAP_MAX, type ScriptSettingsState } from "./settingsJson";
+import { LOG_LEVELS, DEFAULT_LOG_CAP, DEFAULT_LOG_LEVEL, TEXT_TYPES_DESC, DEFAULT_BODY_CAP, BODY_CAP_MIN, BODY_CAP_MAX } from "./settingsJson";
+import { DATA_FOLDER_DESC, DEFAULT_DATA_FOLDER } from "./tweakData";
 import { DEFAULT_TEXT_TYPES } from "./bodyKind";
-import { isParamDef, paramDefault, type ParamNode } from "./scriptDef";
+import { isParamDef, paramDefault, type ParamNode, type ParamTree } from "./scriptDef";
 import { GENERATED_NOTE } from "./generatedFiles";
 
 export const SETTINGS_SCHEMA = {
     $schema: "http://json-schema.org/draft-07/schema#",
     $comment: GENERATED_NOTE,
     title: "TangiTweak settings",
-    description: "Extension settings and per-script enabled state & param overrides (settings.json). Omitted keys use their defaults.",
+    description: "Extension settings (settings.json). Omitted keys use their defaults. A tweak's enable switch and params are in its data folder's settings.json.",
     type: "object",
     additionalProperties: false,
     properties: {
@@ -47,17 +48,11 @@ export const SETTINGS_SCHEMA = {
             default: DEFAULT_BODY_CAP,
             description: "Network view: kB of each request/response body kept; longer bodies are cut",
         },
-        scripts: {
-            type: "object",
-            description: "Per-script overrides keyed by script file name (`enabled` + declared `tweak.params`)",
-            additionalProperties: {
-                type: "object",
-                description: "Overrides for one script (`enabled` and params from its tweak.params)",
-                properties: {
-                    enabled: { type: "boolean", default: true, description: "Run this script" },
-                },
-                additionalProperties: true,
-            },
+        dataFolder: {
+            type: "string",
+            pattern: "^[A-Za-z0-9._-]+$",
+            default: DEFAULT_DATA_FOLDER,
+            description: `${DATA_FOLDER_DESC}. Changing it renames the folder in every tweak`,
         },
     },
 };
@@ -86,23 +81,23 @@ function paramSchema(d: ParamNode): Record<string, any> {
     }
 }
 
-/**
- * The schema for the current scripts: each script file name is a known key
- * under `scripts`, with its declared params typed (enum choices, bounds,
- * defaults, descriptions) — so Monaco and VS Code complete and validate them.
- */
-export function buildSettingsSchema(scripts: ScriptSettingsState[]): typeof SETTINGS_SCHEMA {
-    const props: Record<string, any> = {};
-    for (const s of scripts) {
-        const p: Record<string, any> = {};
-        if (s.declared) p.enabled = SETTINGS_SCHEMA.properties.scripts.additionalProperties.properties.enabled;
-        for (const [k, d] of Object.entries(s.defs)) if (k !== "enabled") p[k] = paramSchema(d);
-        if (!Object.keys(p).length) continue;
-        props[s.name] = { type: "object", description: `Settings and params for "${s.name}"`, properties: p, additionalProperties: false };
-    }
-    const scriptsProp = { ...SETTINGS_SCHEMA.properties.scripts, properties: props };
-    return { ...SETTINGS_SCHEMA, properties: { ...SETTINGS_SCHEMA.properties, scripts: scriptsProp } } as any;
+/** the schema of a tweak's data folder settings.json: its enable switch and its declared params, typed */
+export function tweakSettingsSchema(defs: ParamTree = {}): Record<string, any> {
+    const params: Record<string, any> = {};
+    for (const [k, d] of Object.entries(defs)) if (k !== "enabled") params[k] = paramSchema(d);
+    return {
+        $schema: "http://json-schema.org/draft-07/schema#",
+        title: "A tweak's settings",
+        description: "This tweak's enable switch and the params that differ from their defaults. Omitted params use their defaults.",
+        type: "object",
+        additionalProperties: false,
+        properties: {
+            $schema: { type: "string" },
+            enabled: { type: "boolean", default: true, description: "Run this tweak" },
+            params: { type: "object", description: "Values of the params from tweak.params", properties: params, additionalProperties: !Object.keys(defs).length },
+        },
+    };
 }
 
 /** pretty-printed, trailing newline — the exact bytes written to the synced folder */
-export const settingsSchemaJson = (scripts: ScriptSettingsState[] = []): string => JSON.stringify(buildSettingsSchema(scripts), null, 2) + "\n";
+export const settingsSchemaJson = (): string => JSON.stringify(SETTINGS_SCHEMA, null, 2) + "\n";

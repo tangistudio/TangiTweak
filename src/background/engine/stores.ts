@@ -12,7 +12,6 @@ import { Endpoint, endpointPair, type Json, type StorePersist, type WireRequest,
 import { ReplicaHub } from "../../shared/storeReplica";
 import { packBytes, unpackBytes } from "../../shared/bytesPack";
 import { isTabScope, jsonBytes, tabScopeId } from "../../shared/storeOps";
-import { scriptFileName, scriptPathKey } from "../../shared/scriptName";
 import { StoreOwner } from "./storeOwner";
 import { log } from "./logs";
 import { scriptStorageAll, scriptStorageSet, scriptStorageDelete, getScript, listScripts, onScriptsChanged } from "./scriptStore";
@@ -102,26 +101,6 @@ export async function listAllStores(providedScripts?: readonly { id: string; met
         }
     }
     return rows;
-}
-
-export async function exportPersistedStores(): Promise<Record<string, Record<string, Json>>> {
-    const scripts = await listScripts();
-    return storeOwner.exportPersisted(scripts.map((s) => ({ id: s.id, name: scriptFileName(s.meta.name) })));
-}
-
-export async function importPersistedStores(exported: Record<string, Record<string, Json>>): Promise<number> {
-    const scripts = await listScripts();
-    const byKey = new Map(scripts.map((s) => [scriptPathKey(s.meta.name), s.id]));
-    let count = 0;
-    for (const [scriptName, stores] of Object.entries(exported || {})) {
-        const scriptId = byKey.get(scriptPathKey(scriptName));
-        if (!scriptId || !stores || typeof stores !== "object") continue;
-        for (const [storeName, data] of Object.entries(stores)) {
-            await storeOwner.replace(scriptId, storeName, data);
-            count++;
-        }
-    }
-    return count;
 }
 
 /** a script's name for log lines (its id if it's gone) */

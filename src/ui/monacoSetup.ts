@@ -28,29 +28,18 @@ import { JSON_FALLBACK_DTS } from "./jsonTypes";
 import { packagePaths, TYPINGS_ROOT } from "../shared/packageImports";
 import { builtinPaths } from "../shared/builtinSpecs";
 import { MANIFEST_FILE, MANIFEST_SCHEMA } from "../shared/packageMetadata";
-import { SETTINGS_FILE, type ScriptSettingsState } from "../shared/settingsJson";
-import { buildSettingsSchema } from "../shared/settingsSchema";
+import { SETTINGS_FILE } from "../shared/settingsJson";
+import { SETTINGS_SCHEMA, tweakSettingsSchema } from "../shared/settingsSchema";
+import type { ParamTree } from "../shared/scriptDef";
 
-const STORES_SCHEMA = {
-    type: "object",
-    description: "Persisted tweak.globalStore data for your scripts, keyed by script name → store name → JSON object.",
-    additionalProperties: {
-        type: "object",
-        description: "Persisted globalStore entries belonging to this script.",
-        additionalProperties: {
-            type: "object",
-            description: "Persisted store state (a plain JSON object).",
-        },
-    },
-};
-
-export function updateJsonSchemas(scripts: ScriptSettingsState[] = []): void {
+/** JSON validation: package.json files, the root settings.json and each tweak's data folder settings.json (`uri`: its model's) */
+export function updateJsonSchemas(tweakSettings: { uri: string; defs?: ParamTree }[] = []): void {
     monacoApi?.languages.json?.jsonDefaults?.setDiagnosticsOptions({
         validate: true,
         schemas: [
             { uri: "tangitweak://schema/package.json", fileMatch: ["**/" + MANIFEST_FILE], schema: MANIFEST_SCHEMA },
-            { uri: "tangitweak://schema/stores.json", fileMatch: ["stores.json", "**/stores.json"], schema: STORES_SCHEMA },
-            { uri: "tangitweak://schema/settings.json", fileMatch: [SETTINGS_FILE, "**/" + SETTINGS_FILE], schema: buildSettingsSchema(scripts) },
+            { uri: "tangitweak://schema/settings.json", fileMatch: ["file:///" + SETTINGS_FILE], schema: SETTINGS_SCHEMA },
+            ...tweakSettings.map((t, i) => ({ uri: `tangitweak://schema/tweak-settings-${i}.json`, fileMatch: [t.uri], schema: tweakSettingsSchema(t.defs) })),
         ],
     });
 }

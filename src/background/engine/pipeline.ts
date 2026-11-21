@@ -28,7 +28,7 @@ import { isThenable, rulesProblems, siteProblems, toRunnableJs } from "../../sha
 import "../../shared/transpile";
 import { log, noteRan, getScriptErrors, getScriptTypeErrors, getScriptRuleErrors, getScriptRouteWarnings, setScriptRouteWarnings, bodyObservedSince, bodySkipSince, noteBodySkip } from "./logs";
 import { bypassed } from "./bypass";
-import { prepareStores, storeOwner, exportPersistedStores, importPersistedStores } from "./stores";
+import { prepareStores, storeOwner } from "./stores";
 import { ensureBuiltins, needsReact } from "../../shared/builtins";
 import { missedLine } from "../../shared/netTypes";
 import { binaryOptedOut, frameHasHook as pingHook, isLoopbackUrl, missedReason, missedWhat, routeProblem, MISSED_SKIP_TYPES } from "../../shared/missedTap";
@@ -882,8 +882,6 @@ export function createPipeline(
             packageRollback: () => rollbackPackage(msg.id),
             packageSetAutoUpdate: () => setAutoUpdate(msg.id, !!msg.on),
             packageForget: () => forgetPackage(msg.id),
-            exportStores: () => exportPersistedStores(),
-            importStores: () => importPersistedStores(msg.stores),
         };
         if (msg && Object.prototype.hasOwnProperty.call(pkgOp, msg.type)) {
             pkgOp[msg.type]()

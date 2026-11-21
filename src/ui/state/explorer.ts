@@ -5,10 +5,15 @@ import type { Script } from "../../background/engine/scriptStore";
 import type { DataFile } from "../../background/engine/dataFiles";
 import { explorerTree, folderRowId, idRange, targetFolder, topLevelRows, type TreeRow } from "../explorerTree";
 
-/** settings.json and stores.json virtual rows (always first in the Explorer) */
+/** the settings.json virtual row (always first in the Explorer) */
 export const SETTINGS_ID = "__settings__";
-export const STORES_ID = "__stores__";
-export const isVirtualRootId = (id: string | null | undefined): boolean => id === SETTINGS_ID || id === STORES_ID;
+/** a tweak's data folder file (`atlas/.tweak/settings.json`): a virtual row, rendered from storage */
+const TWEAK_DATA = "tdata:";
+export const tweakDataId = (path: string): string => TWEAK_DATA + path;
+export const isTweakDataId = (id: string | null | undefined): boolean => !!id?.startsWith(TWEAK_DATA);
+export const tweakDataPathOf = (id: string): string => id.slice(TWEAK_DATA.length);
+/** rows that aren't tree items (no selecting, moving, renaming): settings.json and the tweaks' data folder files */
+export const isVirtualRootId = (id: string | null | undefined): boolean => id === SETTINGS_ID || isTweakDataId(id);
 
 export type ExplorerScript = Script & Partial<ScriptHealthInput> & { routeWarnings?: string[] };
 export type NewKind = "script" | "data" | "folder" | "tweak";
@@ -37,6 +42,8 @@ export const explorer = proxy({
     scripts: ref([]) as readonly ExplorerScript[],
     dataFiles: ref([]) as readonly DataFile[],
     folders: ref([]) as readonly string[],
+    /** the tweaks' data folder files; `root`: the tweak's folder ("atlas/") */
+    tweakData: ref([]) as readonly { path: string; root: string }[],
     /** the open file */
     selectedId: null as string | null,
     /** tt-api.d.ts is shown over the open file (no row is the open file) */
@@ -98,10 +105,18 @@ export const visibleRows = (): TreeRow[] => treeRows();
 /** a row by id, shown or inside a collapsed folder */
 export const treeRow = (id: string | null): TreeRow | undefined => (id ? treeRows(true).find((r) => r.id === id) : undefined);
 
-/** the rows' ids, settings.json and stores.json first */
-export const explorerIds = (): string[] => [SETTINGS_ID, STORES_ID, ...visibleRows().map((r) => r.id)];
+/** the data folder files shown right inside the tweak folder `root` ("atlas/"; "" the root) */
+export const tweakDataIn = (root: string): { id: string; path: string }[] =>
+    explorer.tweakData.filter((d) => d.root === root).map((d) => ({ id: tweakDataId(d.path), path: d.path }));
 
-/** the ids a multi-selection can hold (settings.json and stores.json aren't selectable items) */
+/** the rows' ids, settings.json first, each expanded tweak folder's data files right after it */
+export const explorerIds = (): string[] => [
+    SETTINGS_ID,
+    ...tweakDataIn("").map((d) => d.id),
+    ...visibleRows().flatMap((r) => [r.id, ...(r.kind === "folder" && r.expanded ? tweakDataIn(r.path + "/").map((d) => d.id) : [])]),
+];
+
+/** the ids a multi-selection can hold (settings.json and data folder files aren't selectable items) */
 export const selectableIds = (): string[] => visibleRows().map((r) => r.id);
 
 /** the row the cursor is on */

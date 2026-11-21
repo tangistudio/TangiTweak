@@ -14,7 +14,7 @@ import { highestVersion, isManifestPath, MANIFEST_FILE, minTangiTweakProblem, pa
 import { bundleOf, dataReader, entryName } from "../shared/tweakBundle";
 import { localPackage } from "../shared/localPackage";
 import { writeZip } from "../shared/zip";
-import { buildExportZip, emptyFolders, EXPORT_ZIP_NAME, filesGoneFrom, importedSettingsDoc, parseExportedStores, readExportZip, settingsForScripts, STORES_FILE, storesForScripts, type ExportContents } from "../shared/exportZip";
+import { buildExportZip, emptyFolders, EXPORT_ZIP_NAME, filesGoneFrom, readExportZip, type ExportContents } from "../shared/exportZip";
 import { PACKAGE_ORIGIN } from "../shared/packageImports";
 import { isInFolder, movedPath } from "../shared/folders";
 import { baseName, folderPathOfRowId, folderRowId, isFolderRowId, movedCollapsed, type TreeRow } from "./explorerTree";
@@ -28,6 +28,7 @@ import { jsxElementAt } from "../shared/builtinSpecs";
 import { vscodeTargetPath, editorLaunchUrl, launchAppName, type LaunchMode } from "./bundle";
 import { computeDirty } from "./dirtyState";
 import { parseSettings, SETTINGS_FILE, isBodyCap, BODY_CAP_KEY, DEFAULT_BODY_CAP } from "../shared/settingsJson";
+import { DATA_FOLDER_KEY, dataFolderName, DEFAULT_DATA_FOLDER, TWEAK_SETTINGS_FILE } from "../shared/tweakData";
 import { createNetStore, type NetStore } from "./network/netStore";
 import { installTooltips } from "./tooltip";
 import type { ScriptHealthInput } from "../shared/scriptHealth";
@@ -43,7 +44,7 @@ import { layout, panelTabOf, type PanelTab } from "./state/layout";
 import { appendLog, clearLog, logState } from "./state/log";
 import { badges, badgesChanged, panel, setNetStore, setProblems } from "./state/panel";
 import { actions } from "./shell/actions";
-import { clearSel, everyFolder, explorer, explorerIds, isVirtualRootId, moveFocus, pruneCollapsed, revealInExplorer, setCollapsed, setSel, SETTINGS_ID, STORES_ID, startCreate as startCreateRow, syncExplorer, treeRow, treeRows, visibleRows, type NewKind } from "./state/explorer";
+import { clearSel, everyFolder, explorer, explorerIds, isTweakDataId, isVirtualRootId, moveFocus, pruneCollapsed, revealInExplorer, setCollapsed, setSel, SETTINGS_ID, startCreate as startCreateRow, syncExplorer, treeRow, treeRows, tweakDataId, tweakDataIn, tweakDataPathOf, visibleRows, type NewKind } from "./state/explorer";
 import { watchPackages } from "./state/packages";
 import { createCodeEditor } from "./shell/codeEditor";
 import { toolbar, type SaveState } from "./state/toolbar";
@@ -125,7 +126,8 @@ function status(text: string, cls = "", onClick?: () => void): void {
 
 // ---- script list ----
 let settingsModel: any = null;
-let storesModel: any = null;
+let tweakData: { path: string; text: string; root: string; scriptId: string }[] = [];
+const tweakDataModels = new Map<string, any>();
 
 async function loadSettingsModel(force = false): Promise<void> {
     if (!editor) return;
@@ -142,21 +144,100 @@ async function loadSettingsModel(force = false): Promise<void> {
     }
 }
 
-async function loadStoresModel(force = false): Promise<void> {
+/**
+ * The tweaks' data folder files (virtual: background/tweakDataFiles renders
+ * them from storage). Reloaded when scripts, params or stores change; an
+ * open file with unsaved edits keeps them.
+ */
+async function loadTweakData(force = false): Promise<void> {
     if (!editor) return;
     const monaco = (window as any).monaco;
-    const { text } = await send({ type: "getStoresJson" });
-    if (!storesModel) {
-        storesModel = monaco.editor.createModel(text, "json", monaco.Uri.parse("file:///" + STORES_FILE));
-        setBaseline(storesModel, text);
-    } else if (storesModel.getValue() !== text && (force || !(selectedId === STORES_ID && dirty))) {
+    const { files } = (await send({ type: "getTweakDataFiles" })) ?? {};
+    tweakData = files ?? [];
+    explorer.tweakData = ref(tweakData.map(({ path, root }) => ({ path, root })));
+    for (const f of tweakData) {
+        const id = tweakDataId(f.path);
+        const m = tweakDataModels.get(id);
+        if (!m || m.isDisposed() || m.getValue() === f.text || (!force && selectedId === id && dirty)) continue;
         applyingExternal = true;
-        storesModel.setValue(text);
+        m.setValue(f.text);
         applyingExternal = false;
-        setBaseline(storesModel, text);
+        setBaseline(m, f.text);
     }
+    for (const [id, m] of tweakDataModels) {
+        if (tweakData.some((f) => tweakDataId(f.path) === id) || (selectedId === id && dirty)) continue;
+        if (selectedId === id) {
+            selectedId = null;
+            renderEditorEmpty();
+        }
+        m.dispose();
+        tweakDataModels.delete(id);
+    }
+    updateJsonSchemas(
+        tweakData.flatMap((f) => (f.path.endsWith("/" + TWEAK_SETTINGS_FILE) && f.path.split("/").length === f.root.split("/").length + 1 ? [{ uri: monaco.Uri.parse("file:///" + f.path).toString(), defs: scripts.find((s) => s.id === f.scriptId)?.paramDefs }] : []))
+    );
+    renderList();
 }
 
+async function selectTweakData(id: string): Promise<void> {
+    const back = typingsShown && selectedId === id;
+    leaveTypings();
+    selectedId = id;
+    explorer.focusedId = null;
+    showWelcome(false);
+    if (!back) await loadTweakData(true);
+    const f = tweakData.find((x) => tweakDataId(x.path) === id);
+    let m = tweakDataModels.get(id);
+    if (!m && f) {
+        const monaco = (window as any).monaco;
+        m = monaco.editor.createModel(f.text, "json", monaco.Uri.parse("file:///" + f.path));
+        setBaseline(m, f.text);
+        tweakDataModels.set(id, m);
+    }
+    renderList();
+    if (!m) return;
+    if (editor.getModel() !== m) {
+        captureViewState();
+        editor.setModel(m);
+        restoreViewState(m);
+    }
+    if (back) updateDirty();
+    else {
+        setDirty(false);
+        status("");
+    }
+    updateOpenVscode();
+}
+
+async function saveTweakData(id: string): Promise<void> {
+    const path = tweakDataPathOf(id);
+    setSaveState("saving");
+    const res = await send({ type: "applyTweakDataFile", path, text: editor.getValue() });
+    if (res?.error) {
+        setSaveState("unsaved");
+        status(`${path}: ${res.error}`, "error");
+        return;
+    }
+    await loadTweakData(true);
+    setDirty(false);
+    status("");
+    await refresh();
+}
+
+/** delete a data folder file: its setting or store goes back to the defaults */
+async function currentDataFolder(): Promise<string> {
+    return ((await send({ type: "getDataFolder" }).catch(() => null)) as { name?: string } | null)?.name || DEFAULT_DATA_FOLDER;
+}
+
+async function resetTweakData(path: string): Promise<void> {
+    if (!confirm(`Delete ${path}? ${path.endsWith("/" + TWEAK_SETTINGS_FILE) ? "The tweak goes back to on, with its params' defaults." : "The store starts over from its defaults."}`)) return;
+    const res = await send({ type: "applyTweakDataFile", path, text: null });
+    if (res?.error) return status(`${path}: ${res.error}`, "error");
+    if (selectedId === tweakDataId(path)) setDirty(false);
+    await loadTweakData(true);
+    await refresh();
+    status(`deleted ${path}`);
+}
 
 async function selectSettings(): Promise<void> {
     // back from the typings: settings.json's unsaved edits are still in its model
@@ -194,41 +275,6 @@ async function saveSettings(): Promise<void> {
     await refresh();
 }
 
-async function selectStores(): Promise<void> {
-    const back = typingsShown && selectedId === STORES_ID;
-    leaveTypings();
-    selectedId = STORES_ID;
-    explorer.focusedId = null;
-    showWelcome(false);
-    renderList();
-    await loadStoresModel(!back);
-    if (editor.getModel() !== storesModel) {
-        captureViewState();
-        editor.setModel(storesModel);
-        restoreViewState(storesModel);
-    }
-    if (back) updateDirty();
-    else {
-        setDirty(false);
-        status("");
-    }
-    updateOpenVscode();
-}
-
-async function saveStores(): Promise<void> {
-    setSaveState("saving");
-    const res = await send({ type: "applyStoresJson", text: editor.getValue() });
-    if (res && res.error) {
-        setSaveState("unsaved");
-        status(`${STORES_FILE}: ${res.error}`, "error");
-        return;
-    }
-    await loadStoresModel(true);
-    setDirty(false);
-    status("");
-    await refresh();
-}
-
 async function refresh(): Promise<void> {
     const prev = scripts;
     const prevData = dataFiles;
@@ -253,7 +299,7 @@ async function refresh(): Promise<void> {
     renderList();
     pruneCollapsed();
     syncWorkspace();
-    updateJsonSchemas(scripts.map((s: any) => ({ name: scriptFileName(s.meta.name), declared: s.meta.active !== false, enabled: s.enabled, defs: s.paramDefs ?? {}, values: {} })));
+    void loadTweakData();
     scheduleDiagnostics();
     if (selectedId && !isVirtualRootId(selectedId) && !known(selectedId)) {
         selectedId = null;
@@ -337,7 +383,17 @@ function focusExplorer(): void {
 }
 
 /** why `path` can't be the new path of a `kind` item (other than `selfId`), or "" */
+/** `path` is in (or is) a tweak's data folder: why that's not allowed, else "" */
+function dataFolderPathProblem(path: string): string {
+    const b = bundleOf(path, dataReader(dataFiles));
+    const df = settings.dataFolder;
+    const rel = b ? path.slice(b.root.length) : "";
+    return b && (rel.toLowerCase() === df.toLowerCase() || rel.toLowerCase().startsWith(df.toLowerCase() + "/")) ? `${b.root}${df} is the tweak's data folder, not for code or data files` : "";
+}
+
 function itemPathProblem(kind: NewKind, path: string, selfId?: string): string {
+    const inData = dataFolderPathProblem(path);
+    if (inData) return inData;
     if (kind === "tweak") {
         const problem = folderPathProblem(path);
         if (problem) return problem;
@@ -465,7 +521,7 @@ async function createItem(kind: NewKind, path: string): Promise<void> {
     revealInExplorer(path);
     if (kind === "tweak") {
         // the data files first: the entry compiles as the tweak its package.json makes it
-        const files = newTweakFiles(path);
+        const files = newTweakFiles(path, await currentDataFolder());
         let ok = true;
         for (const d of files.data) ok = (await saveQuietly({ type: "saveDataFile", path: d.path, text: d.text }, d.path)) && ok;
         const id = uuid();
@@ -1002,15 +1058,15 @@ function openNavEntry(e: NavEntry): boolean | "skip" {
         restore();
         return true;
     }
-    if (!isVirtualRootId(e.target) && !scripts.some((s) => s.id === e.target) && !isDataId(e.target)) return "skip";
+    if (!(e.target === SETTINGS_ID || tweakData.some((f) => tweakDataId(f.path) === e.target)) && !scripts.some((s) => s.id === e.target) && !isDataId(e.target)) return "skip";
     if (e.target !== selectedId && dirty && selectedId && !confirm("Discard unsaved changes?")) return false;
     if (e.target === SETTINGS_ID) {
         if (typingsShown || selectedId !== SETTINGS_ID) void selectSettings().then(restore);
         else restore();
         return true;
     }
-    if (e.target === STORES_ID) {
-        if (typingsShown || selectedId !== STORES_ID) void selectStores().then(restore);
+    if (isTweakDataId(e.target)) {
+        if (typingsShown || selectedId !== e.target) void selectTweakData(e.target).then(restore);
         else restore();
         return true;
     }
@@ -1041,7 +1097,7 @@ function saveCurrent(): Promise<void> {
 async function saveCurrentNow(): Promise<void> {
     if (typingsShown) return; // read-only
     if (selectedId === SETTINGS_ID) return saveSettings();
-    if (selectedId === STORES_ID) return saveStores();
+    if (isTweakDataId(selectedId)) return saveTweakData(selectedId!);
     if (!selectedId || !editor) return;
     if (isDataId(selectedId)) return saveDataFileNow(selectedId);
     const code = editor.getValue();
@@ -1282,18 +1338,20 @@ function updateProblems(): void {
     const settings = monaco && settingsModel && !settingsModel.isDisposed() ? modelProblems(settingsModel) : undefined;
     const data = monaco
         ? [
-              ...(storesModel && !storesModel.isDisposed() ? [{ id: STORES_ID, label: STORES_FILE, markers: modelProblems(storesModel) }] : []),
+              ...tweakData.flatMap((f) => {
+                  const m = tweakDataModels.get(tweakDataId(f.path));
+                  return m && !m.isDisposed() ? [{ id: tweakDataId(f.path), label: f.path, markers: modelProblems(m) }] : [];
+              }),
               ...dataFiles.flatMap((d) => {
                   const m = dataModels.get(d.id);
                   return m && !m.isDisposed() ? [{ id: d.id, label: d.path, markers: modelProblems(m) }] : [];
               }),
           ]
         : [];
-    // explorer order (settings.json, then stores.json, then tree rows)
+    // explorer order (settings.json, then tree rows, a tweak's data files right after its folder)
     const order = new Map<string, number>([
-        [SETTINGS_ID, -2],
-        [STORES_ID, -1],
-        ...treeRows(true).map((r, i) => [r.id, i] as [string, number]),
+        [SETTINGS_ID, -1],
+        ...treeRows(true).flatMap((r) => [r.id, ...(r.kind === "folder" ? tweakDataIn(r.path + "/").map((d) => d.id) : [])]).map((id, i) => [id, i] as [string, number]),
     ]);
     problemGroups = collectProblems(
         scripts.map((s) => ({
@@ -1490,7 +1548,8 @@ function setupSettings(): void {
     });
     settings.folder.supported = fsBridge.isSupported();
     const bodyCap = (v: unknown): number => (isBodyCap(v) ? v : DEFAULT_BODY_CAP);
-    chrome.storage.local.get(["resLogLevel", "resMonacoVerbose", "resLogBadge", "resLogCap", BODY_CAP_KEY, "resVscodePath", "resVscodeLaunch", "resEditorUrl"], (d) => {
+    chrome.storage.local.get(["resLogLevel", "resMonacoVerbose", "resLogBadge", "resLogCap", BODY_CAP_KEY, DATA_FOLDER_KEY, "resVscodePath", "resVscodeLaunch", "resEditorUrl"], (d) => {
+        settings.dataFolder = dataFolderName(d?.[DATA_FOLDER_KEY]);
         if (d?.resLogLevel) logState.level = d.resLogLevel;
         setMonacoVerbose(!!d?.resMonacoVerbose);
         panel.statusBar = d?.resLogBadge !== false;
@@ -1503,12 +1562,11 @@ function setupSettings(): void {
     });
     chrome.storage.onChanged.addListener((c) => {
         if (c[BODY_CAP_KEY]) settings.bodyCap = bodyCap(c[BODY_CAP_KEY].newValue);
+        if (c[DATA_FOLDER_KEY]) settings.dataFolder = dataFolderName(c[DATA_FOLDER_KEY].newValue);
         if (c.resLogLevel?.newValue) logState.level = c.resLogLevel.newValue;
         if (c.resLogCap?.newValue) logState.cap = c.resLogCap.newValue;
         const storeChanged = Object.keys(c).some((k) => k.startsWith("resStore."));
-        if (storeChanged || c.resScripts) {
-            if (selectedId === STORES_ID || storesModel) void loadStoresModel();
-        }
+        if (storeChanged || c.resParams || c[DATA_FOLDER_KEY]) void loadTweakData();
         if (c.resScripts || c.resParams || c.resLogLevel || c.resLogCap || c[BODY_CAP_KEY] || c.resDataFiles || c.resFolders) {
             void (async () => {
                 if (selectedId === SETTINGS_ID || settingsModel) await loadSettingsModel();
@@ -1531,7 +1589,7 @@ function freeFolderName(base: string): string {
 /** add a sample as a new (enabled) tweak — its folder, package.json and index.ts — and open it; returns its entry's id */
 async function addSample(sample: SampleScript): Promise<string> {
     const folder = freeFolderName(sample.name);
-    const files = newTweakFiles(folder);
+    const files = newTweakFiles(folder, await currentDataFolder());
     for (const d of files.data) await send({ type: "saveDataFile", path: d.path, text: d.text });
     const id = newId();
     const name = files.entry.name + (jsxElementAt(sample.code) >= 0 ? ".tsx" : "");
@@ -1733,13 +1791,11 @@ function openInEditor(): void {
         return;
     }
     if (!selectedId || typingsShown) return;
-    if (selectedId === STORES_ID) void send({ type: "ensureStoresOnDisk" });
-    // the ⚙ settings.json and stores.json entries are virtual (not in `scripts`) — their
-    // targets are <folder>/settings.json and <folder>/stores.json, written by folderSync
+    // settings.json and the data folder files are virtual (not in `scripts`) — folderSync writes them
     const data = dataFiles.find((d) => d.id === selectedId);
     const file =
-        selectedId === STORES_ID
-            ? `${folder.replace(/\/+$/, "")}/${STORES_FILE}`
+        isTweakDataId(selectedId)
+            ? `${folder.replace(/\/+$/, "")}/${tweakDataPathOf(selectedId)}`
             : data
               ? `${folder.replace(/\/+$/, "")}/${data.path}`
               : vscodeTargetPath(folder, selectedId, scripts.find((s) => s.id === selectedId)?.meta.name, SETTINGS_ID, SETTINGS_FILE);
@@ -1776,33 +1832,24 @@ async function exportBundle(): Promise<void> {
     const { text } = selectedId === SETTINGS_ID && dirty && settingsModel ? { text: settingsModel.getValue() } : await send({ type: "getSettingsJson" });
     const dataFiles: { path: string; text: string }[] = (await send({ type: "listDataFiles" })) || [];
     const folders: string[] = (await send({ type: "listFolders" })) || [];
-    const allStores: Record<string, Record<string, any>> = (await send({ type: "exportStores" }).catch(() => ({}))) || {};
-    const hasStores = Object.keys(allStores).length > 0;
+    const { files: tweakFiles = [] }: { files?: typeof tweakData } = (await send({ type: "getTweakDataFiles" }).catch(() => ({}))) || {};
     const list = [
         ...scripts.map((s) => ({ name: s.meta.name, code: s.code, data: false })),
         ...dataFiles.map((d) => ({ name: d.path, code: d.text, data: true })),
     ];
     const empty = emptyFolders(folders, [...scripts.map((s) => scriptFileName(s.meta.name)), ...dataFiles.map((d) => d.path)]);
     const settingsAt = list.length;
-    const storesAt = hasStores ? settingsAt + 1 : -1;
-    const foldersAt = settingsAt + 1 + (hasStores ? 1 : 0);
+    const withDataAt = tweakFiles.length ? settingsAt + 1 : -1;
+    const foldersAt = settingsAt + 1 + (tweakFiles.length ? 1 : 0);
     const chosen = await pickItems({
         title: "Export",
-        intro: "Pick what goes into the zip. It's laid out like the scripts folder: scripts and data files by path, settings.json with globals and params, and optionally persisted globalStore data.",
+        intro: "Pick what goes into the zip. It's laid out like the scripts folder: scripts and data files by path, and settings.json with TangiTweak's own settings. Each tweak's settings and saved data (its data folder) stay out unless you include them.",
         items: [
             ...scripts.map((s) => ({ path: scriptFileName(s.meta.name), kind: "script" as const, badge: s.meta.active !== false && !s.enabled ? "disabled" : undefined })),
             ...dataFiles.map((d) => ({ path: d.path, kind: "data" as const })),
-            { path: SETTINGS_FILE, kind: "settings" as const, detail: "globals + the picked scripts' enabled state and params" },
-            ...(hasStores
-                ? [
-                      {
-                          path: STORES_FILE,
-                          kind: "settings" as const,
-                          badge: "opt-in",
-                          detail: "persisted globalStore data for the picked scripts",
-                          checked: false,
-                      },
-                  ]
+            { path: SETTINGS_FILE, kind: "settings" as const, detail: "TangiTweak's own settings" },
+            ...(tweakFiles.length
+                ? [{ path: "Include my settings and saved data", kind: "section" as const, detail: "the picked tweaks' data folders: their enable switch, the params you changed and their saved stores", checked: false }]
                 : []),
             ...empty.map((f) => ({ path: f, kind: "folder" as const, detail: "empty folder" })),
         ],
@@ -1810,18 +1857,19 @@ async function exportBundle(): Promise<void> {
         warn: importsWarning(list),
     });
     if (!chosen) return;
+    const pickedIds = new Set(chosen.filter((i) => i < scripts.length).map((i) => scripts[i].id));
     const picked = chosen.filter((i) => i < scripts.length).map((i) => list[i]);
     const pickedData = chosen.filter((i) => i >= scripts.length && i < settingsAt).map((i) => ({ path: list[i].name, text: list[i].code }));
     const withSettings = chosen.includes(settingsAt);
-    const withStores = storesAt >= 0 && chosen.includes(storesAt);
     const pickedFolders = chosen.filter((i) => i >= foldersAt).map((i) => empty[i - foldersAt]);
-    const storesJson = withStores ? storesForScripts(allStores, picked.map((s) => s.name)) : null;
+    // a tweak's data goes along with its entry
+    const tweakDataOut = withDataAt >= 0 && chosen.includes(withDataAt) ? tweakFiles.filter((f) => pickedIds.has(f.scriptId)).map(({ path, text }) => ({ path, text })) : [];
     const zip = buildExportZip({
-        settings: withSettings ? settingsForScripts(text, picked.map((s) => s.name)) : null,
-        stores: storesJson,
+        settings: withSettings ? text : null,
         scripts: picked,
         dataFiles: pickedData,
         folders: pickedFolders,
+        tweakData: tweakDataOut,
     });
     download(picked.length === 1 && chosen.length === 1 ? `${baseName(picked[0].name)}.zip` : EXPORT_ZIP_NAME, zip as BlobPart, "application/zip");
     const parts = [
@@ -1829,7 +1877,7 @@ async function exportBundle(): Promise<void> {
         ...(pickedData.length ? [plural(pickedData.length, "data file")] : []),
         ...(pickedFolders.length ? [plural(pickedFolders.length, "folder")] : []),
         ...(withSettings ? ["settings"] : []),
-        ...(storesJson ? ["stores"] : []),
+        ...(tweakDataOut.length ? ["saved data"] : []),
     ];
     status(`exported ${parts.join(" + ")} ✓`);
 }
@@ -1861,15 +1909,16 @@ function importBundle(): void {
 async function importZip(file: File): Promise<void> {
     let zip: ExportContents;
     try {
-        zip = await readExportZip(await file.arrayBuffer());
+        zip = await readExportZip(await file.arrayBuffer(), await currentDataFolder());
     } catch (e) {
         status(`${file.name}: not a zip (${(e as Error).message})`, "error");
         return;
     }
-    if (!zip.scripts.length && !zip.dataFiles.length && !zip.folders.length && zip.settings === null && !zip.stores) {
-        status(`${file.name}: no scripts, data files, ${SETTINGS_FILE} or ${STORES_FILE} in it`, "error");
+    if (!zip.scripts.length && !zip.dataFiles.length && !zip.folders.length && zip.settings === null) {
+        status(`${file.name}: no scripts, data files or ${SETTINGS_FILE} in it`, "error");
         return;
     }
+    const df = await currentDataFolder();
     const existingData: { id: string; path: string }[] = (await send({ type: "listDataFiles" })) || [];
     const dataFileIn = (path: string) => existingData.find((d) => d.path.toLowerCase() === path.toLowerCase());
     const existingFolders: string[] = zip.folders.length ? (await send({ type: "listFolders" })) || [] : [];
@@ -1881,15 +1930,8 @@ async function importZip(file: File): Promise<void> {
             settingsError = (e as Error).message;
         }
     }
-    let parsedStores: Record<string, Record<string, Record<string, any>>> | null = null;
-    let storesError = "";
-    if (zip.stores) {
-        try {
-            parsedStores = parseExportedStores(zip.stores);
-        } catch (e) {
-            storesError = (e as Error).message;
-        }
-    }
+    // the zip's data folder files, at their paths here
+    const tweakIn = zip.tweakData.map((d) => ({ path: `${d.root}${df}/${d.file}`, text: d.text }));
     const dataMinVers = zip.dataFiles.map((d) => {
         if (!isManifestPath(d.path)) return undefined;
         try {
@@ -1900,8 +1942,8 @@ async function importZip(file: File): Promise<void> {
     });
     const named = [...zip.scripts.map((s) => ({ name: s.name, code: s.code, data: false })), ...zip.dataFiles.map((d) => ({ name: d.path, code: d.text, data: true }))];
     const settingsAt = zip.settings === null ? -1 : named.length;
-    const storesAt = !zip.stores ? -1 : named.length + (zip.settings === null ? 0 : 1);
-    const foldersAt = named.length + (zip.settings === null ? 0 : 1) + (zip.stores ? 1 : 0);
+    const tweakAt = named.length + (zip.settings === null ? 0 : 1);
+    const foldersAt = tweakAt + tweakIn.length;
     // a package's new version: its files that version doesn't have go (unless unchecked)
     const existingFiles = [...scripts.map((s) => ({ path: scriptFileName(s.meta.name), id: s.id, kind: "script" as const })), ...existingData.map((d) => ({ path: d.path, id: d.id, kind: "data" as const }))];
     const gonePaths = new Set(filesGoneFrom(zip, existingFiles.map((f) => f.path)));
@@ -1911,7 +1953,7 @@ async function importZip(file: File): Promise<void> {
     const missingWarn = importsWarning(named);
     const chosen = await pickItems({
         title: `Import ${file.name}`,
-        intro: `Pick what to import. A script (data file) replaces the existing script (data file) at the same path; ${SETTINGS_FILE} applies the globals and the picked scripts' enabled state and params.${gone.length ? " Files marked deleted are in the package here but not in this version: checked, they're deleted." : ""}${ignored}`,
+        intro: `Pick what to import. A script (data file) replaces the existing script (data file) at the same path; ${SETTINGS_FILE} applies TangiTweak's own settings, and a tweak's ${df} files its enable switch, params and saved stores.${gone.length ? " Files marked deleted are in the package here but not in this version: checked, they're deleted." : ""}${ignored}`,
         items: [
             ...zip.scripts.map((s) => ({ path: s.file, kind: "script" as const, badge: existsBadge(s.name) })),
             ...zip.dataFiles.map((d, idx) => {
@@ -1926,13 +1968,7 @@ async function importZip(file: File): Promise<void> {
             ...(zip.settings === null
                 ? []
                 : [settingsError ? { path: SETTINGS_FILE, kind: "settings" as const, badge: "JSON error", detail: settingsError, checked: false } : { path: SETTINGS_FILE, kind: "settings" as const }]),
-            ...(!zip.stores
-                ? []
-                : [
-                      storesError
-                          ? { path: STORES_FILE, kind: "settings" as const, badge: "JSON error", detail: storesError, checked: false }
-                          : { path: STORES_FILE, kind: "settings" as const, detail: `persisted globalStore data (${plural(Object.keys(parsedStores || {}).length, "script")})` },
-                  ]),
+            ...tweakIn.map((d) => ({ path: d.path, kind: "settings" as const, badge: "saved data" })),
             ...zip.folders.map((f) => ({ path: f, kind: "folder" as const, badge: existingFolders.some((e) => e.toLowerCase() === f.toLowerCase()) ? "exists" : "new" })),
             ...gone.map((f) => ({ path: f.path, kind: f.kind, badge: "deleted", detail: "not in this version", removed: true })),
         ],
@@ -1953,7 +1989,7 @@ async function importZip(file: File): Promise<void> {
     const pickedFolders = chosen.filter((i) => i >= foldersAt && i < goneAt).map((i) => zip.folders[i - foldersAt]);
     const pickedGone = chosen.filter((i) => i >= goneAt).map((i) => gone[i - goneAt]);
     const withSettings = settingsAt >= 0 && chosen.includes(settingsAt);
-    const withStores = storesAt >= 0 && chosen.includes(storesAt) && !!parsedStores;
+    const pickedTweakData = chosen.filter((i) => i >= tweakAt && i < foldersAt).map((i) => tweakIn[i - tweakAt]);
     // folders and data files first: the scripts compile against them
     const failed: string[] = [];
     for (const f of pickedFolders) {
@@ -1972,12 +2008,12 @@ async function importZip(file: File): Promise<void> {
     }
     await refresh();
     const parts = [plural(pickedScripts.length, "script"), ...(pickedData.length ? [plural(pickedData.length, "data file")] : []), ...(pickedFolders.length ? [plural(pickedFolders.length, "folder")] : []), ...(pickedGone.length ? [`${plural(pickedGone.length, "file")} deleted`] : [])];
-    // settings apply through the real path (globals + the scripts'
-    // enabled state and params); storage.onChanged refreshes the settings UI
+    // settings apply through the real path; storage.onChanged refreshes the settings UI
     if (withSettings) {
         let res: any;
         try {
-            res = await send({ type: "applySettingsDoc", doc: importedSettingsDoc(zip.settings!, pickedScripts.map((s) => s.name), zip.scripts.length > 0) });
+            // the data folder keeps its name here
+            res = await send({ type: "applySettingsDoc", doc: { globals: { ...parseSettings(zip.settings!).globals, dataFolder: df } } });
         } catch (e) {
             res = { error: (e as Error).message };
         }
@@ -1987,15 +2023,12 @@ async function importZip(file: File): Promise<void> {
         }
         parts.push("settings");
     }
-    if (withStores && parsedStores) {
-        const wanted = zip.scripts.length > 0 ? new Set(pickedScripts.map((s) => scriptPathKey(s.name))) : null;
-        const storesToApply = wanted
-            ? Object.fromEntries(Object.entries(parsedStores).filter(([k]) => wanted.has(scriptPathKey(k))))
-            : parsedStores;
-        const res: any = await send({ type: "importStores", stores: storesToApply });
-        if (res && res.error) failed.push(`stores: ${res.error}`);
-        else parts.push("stores");
+    // after the scripts: the data applies to their tweaks
+    for (const d of pickedTweakData) {
+        const r = await send({ type: "applyTweakDataFile", path: d.path, text: d.text });
+        if (r?.error) failed.push(`${d.path}: ${r.error}`);
     }
+    if (pickedTweakData.length) parts.push("saved data");
     if (failed.length) {
         status(`imported ${parts.join(" + ")}; ${failed.join("; ")}`, "error");
         return;
@@ -2035,9 +2068,10 @@ async function main(): Promise<void> {
             const script = scripts.find((s) => s.id === id);
             if (script) void setScriptEnabled(script, enabled);
         },
+        resetTweakData: (path: string) => void resetTweakData(path),
         quickOpenItems: () => [
             { id: SETTINGS_ID, name: SETTINGS_FILE },
-            { id: STORES_ID, name: STORES_FILE },
+            ...tweakData.map((f) => ({ id: tweakDataId(f.path), name: f.path })),
             ...scripts.map((s) => ({ id: s.id, name: scriptFileName(s.meta.name) })),
             ...dataFiles.map((d) => ({ id: d.id, name: d.path })),
         ],
@@ -2071,6 +2105,10 @@ async function main(): Promise<void> {
         setMonacoVerbose: (on: boolean) => {
             chrome.storage.local.set({ resMonacoVerbose: on });
             setMonacoVerbose(on, "warn");
+        },
+        setDataFolder: async (name: string) => {
+            const r = await send({ type: "setDataFolder", name }).catch((e) => ({ error: (e as Error).message }));
+            return (r?.error as string) || "";
         },
     } satisfies typeof actions);
     await loadMonaco();
@@ -2246,7 +2284,7 @@ function select(id: string): Promise<void> {
         }
     }
     if (id === SETTINGS_ID) return selectSettings();
-    if (id === STORES_ID) return selectStores();
+    if (isTweakDataId(id)) return selectTweakData(id);
     const row = treeRow(id);
     if (row) revealInExplorer(row.path);
     selectReal(id);

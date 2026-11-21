@@ -65,6 +65,32 @@ describe("installed packages", () => {
         expect((await ss.listScripts()).find((s) => s.meta.name === "dark/lib")!.code).not.toContain("n * 2");
     });
 
+    it("never takes a package's data folder, and an update keeps the tweak's own settings and saved stores", async () => {
+        const { storeOwner } = await import("../src/background/engine/stores");
+        const { tweakDataFiles } = await import("../src/background/tweakDataFiles");
+        const authors = { ".tweak/settings.json": '{"enabled":false}', ".tweak/stores/cart.json": '{"n":99}', ".vscode/x.json": "{}" };
+        const v1 = await fetched({ ...files(entry("*://a.com/*")), ...authors });
+        expect((await pk.analyzePackage(v1)).error).toBeNull();
+        const pkg = await pk.installPackage(v1, { enabled: true, autoUpdate: true });
+        expect((await ss.listDataFiles()).map((d) => d.path).sort()).toEqual(["dark/cfg.json", "dark/package.json"]);
+        const id = (await ss.listScripts()).find((s) => s.meta.name === "dark/index")!.id;
+        expect((await ss.getScript(id))!.enabled).toBe(true);
+        expect(storeOwner.get(id, "cart")).toBeUndefined();
+
+        await ss.setEnabled(id, false);
+        await storeOwner.replace(id, "cart", { n: 2 });
+        const v2 = await fetched({ ...files(entry("*://a.com/*"), "export const tint = (n: number) => n * 2;\n", { version: "1.1.0" }), ".tweak/settings.json": '{"enabled":true}', ".tweak/stores/cart.json": '{"n":0}' });
+        const after = await pk.offerPackage(pkg.id, v2, false);
+        expect(after!.metadata.version).toBe("1.1.0");
+        expect(entryIds(after!)).toEqual(entryIds(pkg));
+        expect((await ss.getScript(id))!.enabled).toBe(false);
+        expect(storeOwner.get(id, "cart")?.data).toEqual({ n: 2 });
+        expect((await tweakDataFiles()).map((f) => [f.path, JSON.parse(f.text)])).toEqual([
+            ["dark/.tweak/settings.json", { enabled: false }],
+            ["dark/.tweak/stores/cart.json", { n: 2 }],
+        ]);
+    });
+
     it("holds an update that can do more, and one over local edits", async () => {
         const pkg = await pk.installPackage(await fetched(files(entry("*://a.com/*"))), { enabled: true, autoUpdate: true });
         const wider = await fetched(files(entry("<all_urls>")));

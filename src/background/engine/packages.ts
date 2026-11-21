@@ -28,6 +28,7 @@ import { SCRIPT_FILE_RE, crawl, fetchPackage, filesHash, hashText, isRemote, par
 import { allFolders, isInFolder } from "../../shared/folders";
 import { scriptFileKey, scriptFileName } from "../../shared/scriptName";
 import { log } from "./logs";
+import { getDataFolder } from "../tweakDataFiles";
 import {
     createFolder,
     deleteDataFile,
@@ -148,8 +149,18 @@ function layout(version: Pick<PackageVersion, "entries" | "files">, folder: stri
     return items;
 }
 
+/**
+ * a package's files without its data folder (ours, or any dot folder like
+ * the author's `.tweak`): installing never takes or overwrites saved data
+ */
+async function codeFiles(files: Record<string, string>): Promise<Record<string, string>> {
+    const df = await getDataFolder();
+    return Object.fromEntries(Object.entries(files).filter(([rel]) => !/(^|\/)\.[^/]*\//.test(rel) && !rel.startsWith(df + "/")));
+}
+
 /** compile the entries as they would install, against the package's own files and the stored ones */
-async function analyze(version: Pick<FetchedPackage, "entries" | "files">, pkg?: InstalledPackage): Promise<Analysis> {
+async function analyze(fetched: Pick<FetchedPackage, "entries" | "files">, pkg?: InstalledPackage): Promise<Analysis> {
+    const version = { entries: fetched.entries, files: await codeFiles(fetched.files) };
     const { entries, files } = version;
     if (!entries.length) throw new Error("the package has no script to run");
     for (const e of entries) {
@@ -452,7 +463,10 @@ async function writeFiles(version: Pick<PackageVersion, "entries" | "files">, it
     const scriptByKey = new Map(curScripts.map((s) => [scriptFileKey(s.meta.name), s.id]));
     const dataByPath = new Map(curData.map((d) => [d.path.toLowerCase(), d.id]));
     const out: Record<string, InstalledFile> = {};
-    const rels = Object.keys(files).sort((a, b) => rank(a) - rank(b));
+    // `items` leaves out the data folder (see codeFiles)
+    const rels = Object.keys(files)
+        .filter((rel) => items[rel])
+        .sort((a, b) => rank(a) - rank(b));
     function rank(rel: string) {
         return entries.includes(rel) ? 2 : items[rel].kind === "data" ? 0 : 1;
     }
@@ -641,9 +655,10 @@ async function offer(pkg: InstalledPackage, fetched: FetchedPackage, manual: boo
 }
 
 async function sameFiles(pkg: InstalledPackage, fetched: Pick<FetchedPackage, "entries" | "files">): Promise<boolean> {
-    const rels = Object.keys(fetched.files);
+    const files = await codeFiles(fetched.files);
+    const rels = Object.keys(files);
     if (rels.length !== Object.keys(pkg.files).length || fetched.entries.join("\0") !== pkg.entries.join("\0")) return false;
-    for (const rel of rels) if (pkg.files[rel]?.hash !== (await hashText(fetched.files[rel]))) return false;
+    for (const rel of rels) if (pkg.files[rel]?.hash !== (await hashText(files[rel]))) return false;
     return true;
 }
 

@@ -3,8 +3,6 @@
  * (sparse overrides only; `{}` when everything uses defaults), so the Editor,
  * popup and synced folder always converge without patching shadow text.
  */
-import { listScripts, loadAllParamValues, setParamValue, setEnabled } from "./engine/scriptStore";
-import { scriptFileName, scriptPathKey } from "../shared/scriptName";
 import {
     renderSettings,
     parseSettings,
@@ -16,11 +14,12 @@ import {
     isTextTypes,
     isBodyCap,
     type GlobalSettings,
-    type ScriptSettingsState,
     type SettingsDoc,
     type SettingsPlan,
 } from "../shared/settingsJson";
 import { DEFAULT_TEXT_TYPES } from "../shared/bodyKind";
+import { DATA_FOLDER_KEY, dataFolderName, dataFolderProblem } from "../shared/tweakData";
+import { setDataFolder } from "./tweakDataFiles";
 
 function storageGet(keys: string[]): Promise<Record<string, any>> {
     return new Promise((r) => chrome.storage.local.get(keys, (d) => r(d || {})));
@@ -37,20 +36,12 @@ function storageRemove(key: string): Promise<void> {
     });
 }
 
-export async function currentSettingsState(): Promise<{ globals: GlobalSettings; scripts: ScriptSettingsState[] }> {
-    const g = await storageGet(["resLogLevel", "resLogCap", TEXT_TYPES_KEY, BODY_CAP_KEY]);
-    const stored = await loadAllParamValues();
-    const scripts = (await listScripts()).map((s) => ({
-        name: scriptFileName(s.meta.name),
-        declared: s.meta.active !== false,
-        enabled: s.enabled,
-        defs: s.paramDefs ?? {},
-        values: stored[s.id] ?? {},
-    }));
-    const globals: GlobalSettings = { logLevel: g.resLogLevel ?? DEFAULT_LOG_LEVEL, logCap: g.resLogCap ?? DEFAULT_LOG_CAP };
+export async function currentSettings(): Promise<GlobalSettings> {
+    const g = await storageGet(["resLogLevel", "resLogCap", TEXT_TYPES_KEY, BODY_CAP_KEY, DATA_FOLDER_KEY]);
+    const globals: GlobalSettings = { logLevel: g.resLogLevel ?? DEFAULT_LOG_LEVEL, logCap: g.resLogCap ?? DEFAULT_LOG_CAP, dataFolder: dataFolderName(g[DATA_FOLDER_KEY]) };
     if (isTextTypes(g[TEXT_TYPES_KEY])) globals.textTypes = g[TEXT_TYPES_KEY];
     if (isBodyCap(g[BODY_CAP_KEY])) globals.bodyCap = g[BODY_CAP_KEY];
-    return { globals, scripts };
+    return globals;
 }
 
 /** chrome.storage key of textTypes (absent: DEFAULT_TEXT_TYPES) */
@@ -66,30 +57,23 @@ export function settingsTextParses(text: string): boolean {
 }
 
 export async function getSettingsText(): Promise<string> {
-    const { globals, scripts } = await currentSettingsState();
-    return renderSettings(globals, scripts);
+    return renderSettings(await currentSettings());
 }
 
-async function applyPlan(plan: SettingsPlan): Promise<void> {
-    const ids = new Map((await listScripts()).map((s) => [scriptPathKey(s.meta.name), s.id]));
-    for (const p of plan.scripts) {
-        const id = ids.get(scriptPathKey(p.name));
-        if (!id) continue;
-        for (const [k, v] of Object.entries(p.params)) await setParamValue(id, k, v);
-        if (p.enabled !== undefined) await setEnabled(id, p.enabled);
-    }
+async function applyPlan(plan: SettingsPlan): Promise<{ error?: string }> {
     const patch: Record<string, any> = {};
-    if (plan.globals.logLevel) patch.resLogLevel = plan.globals.logLevel;
-    if (plan.globals.logCap) patch.resLogCap = plan.globals.logCap;
+    if (plan.logLevel) patch.resLogLevel = plan.logLevel;
+    if (plan.logCap) patch.resLogCap = plan.logCap;
     if (Object.keys(patch).length) await storageSet(patch);
-    if (plan.globals.textTypes) {
-        if (JSON.stringify(plan.globals.textTypes) === JSON.stringify(DEFAULT_TEXT_TYPES)) await storageRemove(TEXT_TYPES_KEY);
-        else await storageSet({ [TEXT_TYPES_KEY]: plan.globals.textTypes });
+    if (plan.textTypes) {
+        if (JSON.stringify(plan.textTypes) === JSON.stringify(DEFAULT_TEXT_TYPES)) await storageRemove(TEXT_TYPES_KEY);
+        else await storageSet({ [TEXT_TYPES_KEY]: plan.textTypes });
     }
-    if (plan.globals.bodyCap) {
-        if (plan.globals.bodyCap === DEFAULT_BODY_CAP) await storageRemove(BODY_CAP_KEY);
-        else await storageSet({ [BODY_CAP_KEY]: plan.globals.bodyCap });
+    if (plan.bodyCap) {
+        if (plan.bodyCap === DEFAULT_BODY_CAP) await storageRemove(BODY_CAP_KEY);
+        else await storageSet({ [BODY_CAP_KEY]: plan.bodyCap });
     }
+    return plan.dataFolder ? setDataFolder(plan.dataFolder) : {};
 }
 
 /** Apply settings.json text to storage (a full-file edit: omitted entries reset to defaults). */
@@ -100,14 +84,13 @@ export async function applySettingsText(text: string): Promise<{ error?: string 
     } catch (e: any) {
         return { error: String(e?.message || e).split("\n")[0] };
     }
-    const { globals, scripts } = await currentSettingsState();
-    await applyPlan(planSettings(doc, globals, scripts));
-    return {};
+    return applySettingsDoc(doc);
 }
 
 /** Apply a structured settings document (Import… of a zip's settings.json). */
 export async function applySettingsDoc(doc: SettingsDoc): Promise<{ error?: string }> {
-    const { globals, scripts } = await currentSettingsState();
-    await applyPlan(planSettings(doc, globals, scripts));
-    return {};
+    const df = doc.globals.dataFolder;
+    const problem = df === undefined ? null : dataFolderProblem(df);
+    if (problem) return { error: `"dataFolder": ${problem}` };
+    return applyPlan(planSettings(doc, await currentSettings()));
 }

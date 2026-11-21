@@ -22,10 +22,12 @@ import {
     setSel,
     setSubtreeExpanded,
     SETTINGS_ID,
-    STORES_ID,
     startRename,
     toggleSel,
     treeRow,
+    isTweakDataId,
+    tweakDataIn,
+    tweakDataPathOf,
     visibleRows,
     type MenuItem,
     type NewKind,
@@ -259,8 +261,20 @@ function onContextMenu(e: MouseEvent<HTMLUListElement>): void {
         ]);
         return;
     }
+    if (id && isTweakDataId(id)) {
+        moveFocus(id);
+        const path = tweakDataPathOf(id);
+        showContextMenu(e.clientX, e.clientY, [
+            { label: "Open", key: "Enter", run: () => open(id) },
+            null,
+            { label: "Copy Path", run: () => copy(path, `copied ${path}`) },
+            null,
+            { label: "Delete (Back to Defaults)", run: () => actions.resetTweakData(path) },
+        ]);
+        return;
+    }
     if (!id || isVirtualRootId(id)) {
-        // settings.json, stores.json and the empty space below the tree: the root
+        // settings.json and the empty space below the tree: the root
         if (id) moveFocus(id);
         const hasDirs = !id && everyFolder().length > 0;
         showContextMenu(e.clientX, e.clientY, [
@@ -394,6 +408,7 @@ export function ExplorerTree() {
         pkgByRow.set("folder" in at ? folderRowId(at.folder) : at.id, p);
     }
     const localPkgs = localPackageFolders(snap.dataFiles);
+    void snap.tweakData; // tweakDataIn reads the store: re-render when the data folder files change
     const { scriptIcons, folderIcons } = resolveWorkspaceIcons(snap.scripts, snap.dataFiles, pkgSnap.byId as Record<string, InstalledPackage>);
     const pkgBadge = (id: string) => {
         const p = pkgByRow.get(id);
@@ -424,7 +439,7 @@ export function ExplorerTree() {
     const cursor = snap.focusedId ?? selectedId;
     // while tt-api.d.ts is shown no row is the open file (● still marks unsaved edits)
     const shown = snap.typingsShown ? null : selectedId;
-    const shownIds = new Set([SETTINGS_ID, STORES_ID, ...rows.map((r) => r.id)]);
+    const shownIds = new Set(explorerIds());
 
     useLayoutEffect(() => {
         if (!snap.cursorMoves) return;
@@ -480,7 +495,29 @@ export function ExplorerTree() {
         },
     });
 
-    const storesBad = snap.jsonErrorIds.has(STORES_ID);
+    /** a tweak's data folder files, right inside its folder (`root`: "atlas/") */
+    const tweakDataRows = (root: string, depth: number): ReactNode[] =>
+        tweakDataIn(root).map(({ id, path }) => {
+            const bad = snap.jsonErrorIds.has(id);
+            const store = path.slice(root.length).split("/").length > 2;
+            return li(
+                id,
+                " tweak-data" + (bad ? " has-error" : ""),
+                depth,
+                <>
+                    <FileIcon kind={store ? "stores" : "settings"} />
+                    <span className={bad ? "script-name error" : "script-name"}>{path.slice(root.length)}</span>
+                </>,
+                {
+                    title: [
+                        path,
+                        store ? "Saved data of a tweak.globalStore — edit and save to update open pages" : "This tweak's enable switch and the params you changed from their defaults",
+                        "Your data, not the tweak's code: left out of exports and builds. Delete it to go back to the defaults",
+                    ].join("\n"),
+                    ...click(id, () => open(id)),
+                }
+            );
+        });
     const items: ReactNode[] = [
         li(
             SETTINGS_ID,
@@ -490,18 +527,9 @@ export function ExplorerTree() {
                 <FileIcon kind="settings" />
                 <span className="script-name">settings.json</span>
             </>,
-            { title: "Settings file — global settings and per-script params & enabled state", ...click(SETTINGS_ID, () => actions.select(SETTINGS_ID)) }
+            { title: "Settings file — TangiTweak's own settings (each tweak's are in its data folder)", ...click(SETTINGS_ID, () => actions.select(SETTINGS_ID)) }
         ),
-        li(
-            STORES_ID,
-            storesBad ? " has-error" : "",
-            0,
-            <>
-                <FileIcon kind="stores" />
-                <span className={storesBad ? "script-name error" : "script-name"}>stores.json</span>
-            </>,
-            { title: "Persisted stores — tweak.globalStore data for your scripts (synced with stores.json; edit and save to update open pages live)", ...click(STORES_ID, () => actions.select(STORES_ID)) }
-        ),
+        ...tweakDataRows("", 0),
     ];
     for (const r of rows) {
         if (r.kind === "folder") {
@@ -523,6 +551,7 @@ export function ExplorerTree() {
                     r.expanded
                 )
             );
+            if (r.expanded) items.push(...tweakDataRows(r.path + "/", r.depth + 1));
         } else if (r.kind === "data") {
             const bad = snap.jsonErrorIds.has(r.id);
             const svg = isSvgPath(r.path);
@@ -607,7 +636,7 @@ export function ExplorerTree() {
         }
     }
     if (editing?.mode === "create") {
-        const at = items.findIndex((it) => (it as { key: string }).key === (editing.folder ? folderRowId(editing.folder) : STORES_ID));
+        const at = items.findIndex((it) => (it as { key: string }).key === (editing.folder ? folderRowId(editing.folder) : SETTINGS_ID));
         items.splice(at + 1, 0, <CreateRow key="creating" kind={editing.kind} folder={editing.folder} list={list} />);
     }
 

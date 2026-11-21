@@ -23,11 +23,12 @@ export type FakeFiles = Map<string, { text: string; t: number }>;
 /**
  * A fake directory handle over one map keyed by full path ("kit/index.ts"),
  * so folder sync tests can sync bundles in subfolders. Dot folders throw
- * NotFoundError unless `special` hands one out (a backup folder).
+ * NotFoundError unless `special` hands one out (a backup folder) or `dots`
+ * lets them be (tweak data folders).
  */
-export function pathDir(files: FakeFiles, o: { tick: () => number; ops?: string[]; special?: (name: string) => any }, prefix = "", name = "d", dirs = new Set<string>()): any {
+export function pathDir(files: FakeFiles, o: { tick: () => number; ops?: string[]; special?: (name: string) => any; dots?: boolean }, prefix = "", name = "d", dirs = new Set<string>()): any {
     const notFound = () => Object.assign(new Error("nf"), { name: "NotFoundError" });
-    const fileObj = (f: { text: string; t: number }) => ({ lastModified: f.t, size: f.text.length, text: async () => f.text });
+    const fileObj = (f: { text: string; t: number }) => ({ lastModified: f.t, size: f.text.length, text: async () => f.text, arrayBuffer: async () => new TextEncoder().encode(f.text).buffer });
     const under = (p: string) => (p.startsWith(prefix) ? p.slice(prefix.length) : undefined);
     return {
         kind: "directory",
@@ -52,9 +53,9 @@ export function pathDir(files: FakeFiles, o: { tick: () => number; ops?: string[
             return {
                 getFile: async () => fileObj(files.get(p)!),
                 createWritable: async () => ({
-                    write: async (t: string) => {
+                    write: async (t: string | ArrayBuffer) => {
                         o.ops?.push(`write ${p}`);
-                        files.set(p, { text: t, t: o.tick() });
+                        files.set(p, { text: typeof t === "string" ? t : new TextDecoder().decode(t), t: o.tick() });
                     },
                     close: async () => {},
                 }),
@@ -64,7 +65,7 @@ export function pathDir(files: FakeFiles, o: { tick: () => number; ops?: string[
             const p = prefix + n;
             const sp = o.special?.(p);
             if (sp) return sp;
-            if (n.startsWith(".")) throw notFound();
+            if (n.startsWith(".") && !o.dots) throw notFound();
             const exists = dirs.has(p) || [...files.keys()].some((k) => k.startsWith(p + "/"));
             if (!exists) {
                 if (!opts?.create) throw notFound();
@@ -72,10 +73,11 @@ export function pathDir(files: FakeFiles, o: { tick: () => number; ops?: string[
             }
             return pathDir(files, o, p + "/", n, dirs);
         },
-        async removeEntry(n: string) {
+        async removeEntry(n: string, opts?: { recursive?: boolean }) {
             const p = prefix + n;
             if (files.delete(p)) o.ops?.push(`delete ${p}`);
             else if (dirs.delete(p)) o.ops?.push(`delete ${p}`);
+            if (opts?.recursive) for (const k of [...files.keys(), ...dirs]) if (k.startsWith(p + "/") && (files.delete(k) || dirs.delete(k))) o.ops?.push(`delete ${k}`);
         },
     };
 }

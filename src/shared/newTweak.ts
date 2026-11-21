@@ -4,6 +4,7 @@
  */
 import { currentTangiTweakVersion, isBundlePackageJson, MANIFEST_FILE } from "./packageMetadata";
 import { folderOf } from "./scriptImports";
+import { DEFAULT_DATA_FOLDER } from "./tweakData";
 
 export const NEW_TWEAK_ENTRY = `import { tweak } from "tangitweak";
 
@@ -28,8 +29,8 @@ export function packageNameOf(folder: string): string {
     return slug || "tweak";
 }
 
-/** the files of a new tweak in `folder`: data files (package.json, tsconfig.json, .gitignore) and its entry script */
-export function newTweakFiles(folder: string, version = currentTangiTweakVersion()): { data: { path: string; text: string }[]; entry: { name: string; code: string } } {
+/** the files of a new tweak in `folder`: data files (package.json, tsconfig.json, .gitignore — it ignores the data folder `df`) and its entry script */
+export function newTweakFiles(folder: string, df = DEFAULT_DATA_FOLDER, version = currentTangiTweakVersion()): { data: { path: string; text: string }[]; entry: { name: string; code: string } } {
     const display = folder.slice(folder.lastIndexOf("/") + 1);
     const pkg = {
         name: packageNameOf(folder),
@@ -42,7 +43,7 @@ export function newTweakFiles(folder: string, version = currentTangiTweakVersion
         data: [
             { path: `${folder}/${MANIFEST_FILE}`, text: JSON.stringify(pkg, null, 4) + "\n" },
             { path: `${folder}/tsconfig.json`, text: JSON.stringify({ extends: "tangitweak/tsconfig.json" }, null, 4) + "\n" },
-            { path: `${folder}/.gitignore`, text: "node_modules/\n.tweak/\n" },
+            { path: `${folder}/.gitignore`, text: `node_modules/\n${df}/\n` },
         ],
         entry: { name: `${folder}/index`, code: NEW_TWEAK_ENTRY },
     };

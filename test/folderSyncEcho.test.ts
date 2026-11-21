@@ -33,7 +33,7 @@ const files: F = new Map();
 /** every write/delete the extension makes in the folder */
 const ops: string[] = [];
 let clock = 1;
-const dir = pathDir(files, { tick: () => clock++, ops, special: (p) => (p === ".tangitweak-backup" ? pathDir(new Map(), { tick: () => clock++, ops }, p + "/", p) : undefined) });
+const dir = pathDir(files, { tick: () => clock++, ops, dots: true, special: (p) => (p === ".tangitweak-backup" ? pathDir(new Map(), { tick: () => clock++, ops }, p + "/", p) : undefined) });
 vi.mock("../src/shared/folderSync", async (orig) => ({ ...(await orig<any>()), loadSavedHandle: async () => dir, saveHandle: async () => {}, clearSavedHandle: async () => {} }));
 
 /** the activities the Editor's sync button showed */
@@ -86,7 +86,6 @@ beforeEach(async () => {
 
 const names = async () => (await (await ss()).listScripts()).map((s) => s.meta.name).sort();
 const scriptOps = () => ops.filter((o) => o.endsWith(".ts"));
-const DERIVED_SCHEMA = ["write settings.schema.json"];
 
 describe("folder sync: received changes are not echoed back", () => {
     it("an external delete is only received", async () => {
@@ -105,8 +104,8 @@ describe("folder sync: received changes are not echoed back", () => {
         await settled(sync);
         expect(await names()).toEqual(["p/index"]);
         expect(shown).toEqual(["receiving"]);
-        expect(ops).toEqual(DERIVED_SCHEMA);
-        expect(scriptOps()).toEqual([]);
+        expect(ops).toEqual([]); // its data folder stays, forgotten
+        expect(files.has("w/.tweak/settings.json")).toBe(true);
         await sync.stop();
     });
 
@@ -126,9 +125,9 @@ describe("folder sync: received changes are not echoed back", () => {
         const sync = await setup();
         put("p/index.ts", `import { tweak } from "tangitweak"; tweak.params({ m: { type: "number", default: 2 } });`);
         await settled(sync);
-        expect(JSON.parse(files.get("settings.schema.json")!.text).properties.scripts.properties["p/index.ts"].properties.m).toMatchObject({ type: "number", default: 2 });
+        expect(JSON.parse(files.get("p/.tweak/settings.json")!.text)).toEqual({ enabled: true }); // defaults aren't written
         expect(shown).toEqual(["receiving"]);
-        expect(ops).toEqual(DERIVED_SCHEMA);
+        expect(ops).toEqual([]);
         await sync.stop();
     });
 
@@ -143,9 +142,9 @@ describe("folder sync: received changes are not echoed back", () => {
         await sync.stop();
     });
 
-    it("an external settings.json edit is only received", async () => {
+    it("an external edit of a tweak's .tweak/settings.json is only received", async () => {
         const sync = await setup();
-        put("settings.json", JSON.stringify({ scripts: { "w/index.ts": { n: 7 } } }, null, 2) + "\n");
+        put("w/.tweak/settings.json", JSON.stringify({ enabled: true, params: { n: 7 } }, null, 2) + "\n");
         await settled(sync);
         const { listScripts, getParamValues } = await ss();
         expect(await getParamValues((await listScripts()).find((s) => s.meta.name === "w/index")!.id)).toMatchObject({ n: 7 });
@@ -173,7 +172,7 @@ describe("folder sync: received changes are not echoed back", () => {
         await settled(sync);
         expect(await names()).toEqual(["p/index"]);
         expect(shown).toEqual(["sending"]);
-        expect(ops).toEqual(["delete w/index.ts", ...DERIVED_SCHEMA]);
+        expect(ops).toEqual(["delete w/.tweak/settings.json", "delete w/.tweak", "delete w/index.ts"]);
         await sync.stop();
     });
 });

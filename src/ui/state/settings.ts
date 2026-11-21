@@ -3,6 +3,7 @@ import { aboutRows, checkLatestRelease, describeLatest, RELEASES_URL, type Helpe
 import type { LaunchMode } from "../bundle";
 import type { ThemePref } from "../theme";
 import { DEFAULT_BODY_CAP } from "../../shared/settingsJson";
+import { DEFAULT_DATA_FOLDER } from "../../shared/tweakData";
 import { helperInstallCommand, helperInstallShell } from "../../shared/helperInstall";
 
 /** What the local helper reports (`processStatus`). */
@@ -28,6 +29,8 @@ export const settings = proxy({
     monacoVerbose: false,
     /** Network body capture, kB */
     bodyCap: DEFAULT_BODY_CAP,
+    /** each tweak's data folder name */
+    dataFolder: DEFAULT_DATA_FOLDER,
     /** absolute path of the synced folder, for the ↗ button */
     vscodePath: "",
     launchMode: "vscode" as LaunchMode,

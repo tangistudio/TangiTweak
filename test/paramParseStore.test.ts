@@ -23,7 +23,7 @@ const store: Record<string, any> = {};
 };
 
 const { saveScript, listScripts, setParamValue, loadAllParamValues } = await import("../src/background/engine/scriptStore");
-const { currentSettingsState, getSettingsText, applySettingsText } = await import("../src/background/settingsFile");
+const { tweakDataFiles, applyTweakDataFile } = await import("../src/background/tweakDataFiles");
 const { addUiPort, getScriptErrors } = await import("../src/background/engine/logs");
 const { seedBundle } = await import("./bundleHelper");
 
@@ -50,12 +50,12 @@ describe("param parse — store and settings", () => {
         expect(s.paramDefs).toEqual({ origin: { type: "string", default: "https://a.com" } });
         expect(JSON.stringify(store.resScripts.p.paramDefs)).not.toContain("parse");
 
-        expect((await applySettingsText(JSON.stringify({ scripts: { "parsed/index": { origin: "https://b.org" } } }))).error).toBeUndefined();
+        expect((await applyTweakDataFile("parsed/.tweak/settings.json", JSON.stringify({ params: { origin: "https://b.org" } }))).error).toBeUndefined();
         expect((await loadAllParamValues()).p).toEqual({ origin: "https://b.org" });
         expect((await get("p")).meta.match).toEqual(["*://b.org/*"]);
-        const st = await currentSettingsState();
-        expect(st.scripts.find((x) => x.name === "parsed/index.ts")?.defs.origin).toEqual({ type: "string", default: "https://a.com" });
-        expect(JSON.parse(await getSettingsText())).toEqual({ scripts: { "parsed/index.ts": { origin: "https://b.org" } } });
+        const [file] = await tweakDataFiles();
+        expect(file.path).toBe("parsed/.tweak/settings.json");
+        expect(JSON.parse(file.text)).toEqual({ enabled: true, params: { origin: "https://b.org" } });
     });
 
     it("a value the parser rejects: a compile error naming the param, not logged", async () => {

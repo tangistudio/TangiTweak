@@ -50,8 +50,10 @@ export const actions = {
     /** shows the explorer, then the inline name input */
     startCreate(_kind: NewKind, _folder?: string): void {},
     setScriptEnabled(_id: string, _enabled: boolean): void {},
+    /** delete a tweak's data folder file (asks): its setting or store goes back to the defaults */
+    resetTweakData(_path: string): void {},
     // ---- dialogs ----
-    /** ⌘P's list: settings.json, the scripts, the data files */
+    /** ⌘P's list: settings.json, the scripts, the data files, the tweaks' data folder files */
     quickOpenItems(): QuickOpenItem[] {
         return [];
     },
@@ -76,6 +78,10 @@ export const actions = {
     setLaunchMode(_mode: LaunchMode): void {},
     setEditorUrl(_url: string): void {},
     setMonacoVerbose(_on: boolean): void {},
+    /** rename every tweak's data folder; resolves with why it can't, else "" */
+    setDataFolder(_name: string): Promise<string> {
+        return Promise.resolve("");
+    },
     /** pick what to export, then download the zip */
     exportBundle(): void {},
     /** pick a zip / script file, then what of it to import */
