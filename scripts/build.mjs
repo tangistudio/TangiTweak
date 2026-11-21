@@ -275,12 +275,15 @@ async function copyStatic(dist, mv3) {
 const SDK_DIR = path.join(root, "dist-sdk");
 /** the SDK's runtime dependencies */
 const SDK_DEPENDENCIES = ["re2js", "happy-dom", "@testing-library/dom"];
-/** shared with the tweak's own tests and code: the test file's copies */
+/**
+ * Shared with the tweak's own tests and code: the test file's copies. All
+ * optional, so a tweak that only type-checks (its package.json lists
+ * `tangitweak`) doesn't install them; `tangitweak/test` needs all but
+ * @testing-library/react, which only `renderTweak` needs.
+ */
 const SDK_PEERS = ["react", "react-dom", "valtio", "vitest", "@testing-library/react"];
-/** only `renderTweak` needs it */
-const SDK_OPTIONAL_PEERS = ["@testing-library/react"];
-/** peers whose range isn't package.json's: the fixtures only need `test.extend` and `onTestFinished` */
-const SDK_PEER_RANGES = { vitest: ">=2.1.4" };
+/** peers whose range isn't package.json's: the fixtures need `test.extend` and `onTestFinished` (2.1.4); tested with Vitest 3 and 4 */
+const SDK_PEER_RANGES = { vitest: "^2.1.4 || ^3.0.0 || ^4.0.0" };
 const SDK_EXPORTS = {
     ".": { types: "./index.d.ts", default: "./index.js" },
     "./test": { types: "./test.d.ts", default: "./test.js" },
@@ -411,7 +414,7 @@ async function buildSdk() {
         engines: { node: ">=23.8.0" },
         dependencies: Object.fromEntries(SDK_DEPENDENCIES.map((name) => [name, rangeOf(name)])),
         peerDependencies: Object.fromEntries(SDK_PEERS.map((name) => [name, SDK_PEER_RANGES[name] ?? rangeOf(name)])),
-        peerDependenciesMeta: Object.fromEntries(SDK_OPTIONAL_PEERS.map((name) => [name, { optional: true }])),
+        peerDependenciesMeta: Object.fromEntries(SDK_PEERS.map((name) => [name, { optional: true }])),
     };
     await writeFile(path.join(SDK_DIR, "package.json"), JSON.stringify(pkg, null, 2) + "\n");
 

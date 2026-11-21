@@ -12,7 +12,7 @@ npm install --save-dev tangitweak vitest react react-dom valtio
 npm install --save-dev @testing-library/react
 ```
 
-Needs Node.js 23.8 or later.
+Needs Node.js 23.8 or later and Vitest 2, 3 or 4. Only type-checking? `npm install --save-dev tangitweak` is enough.
 
 ## Type-check a tweak
 
