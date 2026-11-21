@@ -23,6 +23,7 @@ its section below.
 ### Fixed
 
 - **Packages with class static blocks** (e.g. `bson`) no longer fail to load with `this.resetState is not a function`: CommonJS files assigning `exports.x` aren't mistaken for ES modules, and modern class syntax in packages is kept as is.
+- **Two browsers syncing one folder** no longer rewrite `.tweak/stores/*.json` back and forth forever (`changed on disk — applied` every few seconds): a file holding the same data in another key order isn't rewritten.
 - **Bare imports type-check in the Editor**: `import { zip } from "fflate"` in a tweak with `fflate` in its `package.json` `dependencies` gets the package's types instead of `Cannot find module 'fflate'`. Range dependencies like `^0.8.2` now get typings too.
 - **The Editor no longer checks a tweak's `.gitignore` as JSON** (`Expected a JSON object, array or literal`).
 

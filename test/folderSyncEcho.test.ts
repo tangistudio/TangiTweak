@@ -153,6 +153,22 @@ describe("folder sync: received changes are not echoed back", () => {
         await sync.stop();
     });
 
+    it("an external store file with the same data in another key order is only received", async () => {
+        // two browsers syncing one folder hold a store's keys in different orders; rewriting would ping-pong forever
+        const sync = await setup();
+        const { listScripts } = await ss();
+        const { storeOwner } = await import("../src/background/engine/stores");
+        await storeOwner.replace((await listScripts()).find((s) => s.meta.name === "w/index")!.id, "prefs", { b: 1, a: { y: 2, x: 3 } });
+        await settled(sync);
+        expect(JSON.parse(files.get("w/.tweak/stores/prefs.json")!.text)).toEqual({ b: 1, a: { y: 2, x: 3 } });
+        ops.length = 0;
+        shown.length = 0;
+        put("w/.tweak/stores/prefs.json", JSON.stringify({ a: { x: 3, y: 2 }, b: 1 }, null, 2) + "\n");
+        await settled(sync);
+        expect(ops).toEqual([]);
+        await sync.stop();
+    });
+
     it("a local edit is only sent", async () => {
         const sync = await setup();
         const { saveScript, listScripts } = await ss();

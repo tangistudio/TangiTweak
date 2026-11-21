@@ -38,6 +38,7 @@ import { applyTweakDataFile, getDataFolder, tweakDataFiles, tweakTargets } from 
 import { DATA_FOLDER_KEY, STORES_DIR, TWEAK_SETTINGS_FILE } from "../shared/tweakData";
 import { isBundlePackageJson, MANIFEST_FILE } from "../shared/packageMetadata";
 import { storeOwner } from "./engine/stores";
+import { jsonEqual } from "../shared/storeOps";
 import { SETTINGS_FILE, SCHEMA_FILE } from "../shared/settingsJson";
 import { settingsSchemaJson } from "../shared/settingsSchema";
 import { API_DTS_FILE, BUILTIN_TYPINGS_ROOT, ESLINT_CONFIG_FILE, ESLINT_PLUGIN_FILE, OLD_TEST_PKG_ROOT, PACKAGE_JSON_FILE, SDK_BUILTIN_TYPINGS, SDK_ROOT, TSCONFIG_FILE, apiDtsText, eslintConfigText, eslintPluginText, packageJsonText, tsconfigText } from "../shared/generatedFiles";
@@ -1073,6 +1074,17 @@ async function pollTweakData(): Promise<void> {
  * fixed (or `force`: saved in the Editor). Files of stores no longer saved
  * (or of tweaks gone) are removed.
  */
+/** the same JSON, whatever the key order: another browser syncing the folder may hold the keys in another order */
+function sameData(disk: string | null, text: string): boolean {
+    if (disk === text) return true;
+    if (disk === null) return false;
+    try {
+        return jsonEqual(JSON.parse(disk), JSON.parse(text));
+    } catch {
+        return false;
+    }
+}
+
 async function exportTweakDataNow(force = false): Promise<void> {
     if (!dirHandle) return;
     try {
@@ -1081,7 +1093,7 @@ async function exportTweakDataNow(force = false): Promise<void> {
             const sig = await statFile(path);
             const tracked = dataSigs.get(path);
             if (!force && ((sig && !sameSig(sig, tracked)) || dataBroken.has(path))) continue;
-            if (!sig || (await readTextOrNull(path)) !== text) {
+            if (!sig || !sameData(await readTextOrNull(path), text)) {
                 if (!(await writeFile(path, text, false))) continue;
             }
             dataBroken.delete(path);
