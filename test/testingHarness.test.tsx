@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { loadTweak } from "tangitweak/test";
 import { pickStart } from "../src/shared/packageSource";
 
-describe("@tangitweak/test harness", () => {
+describe("tangitweak/test harness", () => {
     it("loads tweak folders from disk (their package.json's entry and what it imports) while ignoring co-located test/config files", async () => {
         const dir = mkdtempSync(join(tmpdir(), "tt-test-pkg-"));
         try {

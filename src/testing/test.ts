@@ -15,7 +15,7 @@ import "./dom";
 import * as nodePath from "node:path";
 import { onTestFinished, test as base } from "vitest";
 import { buildQueries, createEvent, queries } from "@testing-library/dom";
-import { render, type RenderOptions, type RenderResult } from "@testing-library/react";
+import type { RenderOptions, RenderResult } from "@testing-library/react";
 import type { ReactElement } from "react";
 import { listDirFiles, loadTweak, LOADER, type BrowserName, type LoadedTweak, type LoaderAccess, type OpenPageOptions, type SimulatedResponse, type SimulateRequestInit, type TestPage, type TweakLogEntry } from "./index";
 import { bundleDirOf, resetStores, setStore, stackFiles, storeRegistry } from "./standalone";
@@ -24,6 +24,9 @@ import type { RuleSpec } from "../shared/dnrRules";
 
 export { loadTweak } from "./index";
 export type * from "./index";
+
+/** an optional peer dependency: only `renderTweak` needs it */
+const rtl: typeof import("@testing-library/react") | null = await import("@testing-library/react").catch(() => null);
 
 /** a store and the value it starts this test with */
 export type StoreSeed = readonly [store: object, value: object];
@@ -490,6 +493,7 @@ export interface RenderTweakOptions extends RenderOptions {
  * tests in one file run one after another.
  */
 export function renderTweak(ui: ReactElement, options: RenderTweakOptions = {}): RenderResult & { store<T extends object>(store: T): T } {
+    if (!rtl) throw new Error("renderTweak needs React Testing Library: npm install --save-dev @testing-library/react");
     const { stores, ...renderOptions } = options;
     let result: RenderResult | null = null;
     onTestFinished(() => {
@@ -500,7 +504,7 @@ export function renderTweak(ui: ReactElement, options: RenderTweakOptions = {}):
         identityOf(store);
         setStore(store, structuredClone(value));
     }
-    result = render(ui, renderOptions);
+    result = rtl.render(ui, renderOptions);
     return Object.assign(result, {
         store<T extends object>(store: T): T {
             identityOf(store);

@@ -16,15 +16,16 @@ const store: Record<string, any> = {};
     runtime: { lastError: undefined, sendMessage: () => {}, getURL: (p: string) => `chrome-extension://x/${p}` },
 };
 let dts = "declare const tt: { v1: true };\n";
-let testPkg: Record<string, string> = {
-    "package.json": JSON.stringify({ name: "@tangitweak/test", version: "0.36.1-alpha", type: "module", main: "./index.mjs", types: "./index.d.ts" }, null, 2) + "\n",
-    "index.mjs": "export async function loadTweak() { return {}; }\n",
-    "index.d.ts": "export declare function loadTweak(source: any): Promise<any>;\n",
+const sdk: Record<string, string> = {
+    "package.json": JSON.stringify({ name: "tangitweak", version: "0.40.0-alpha", type: "module", types: "./index.d.ts" }, null, 2) + "\n",
+    "index.d.ts": 'declare module "tangitweak" {}\n',
+    "test.js": "export async function loadTweak() { return {}; }\n",
+    "tsconfig.json": "{}\n",
 };
 (globalThis as any).fetch = async (url: string) => {
     if (url === "chrome-extension://x/lib/tt-api.d.ts") return { ok: true, status: 200, text: async () => dts };
-    if (url === "chrome-extension://x/lib/tangitweak-test.json") return { ok: true, status: 200, json: async () => testPkg };
-    if (url === "chrome-extension://x/lib/builtin-types.json") return { ok: true, status: 200, json: async () => ({}) };
+    if (url === "chrome-extension://x/lib/tangitweak-sdk.json") return { ok: true, status: 200, json: async () => sdk };
+    if (url === "chrome-extension://x/lib/builtin-types.json") return { ok: true, status: 200, json: async () => ({ "@types/react/index.d.ts": "export {};\n" }) };
     throw new Error(`unexpected fetch: ${url}`);
 };
 const files = new Map<string, { text: string; t: number }>();
@@ -81,9 +82,21 @@ const dir = makeDir();
 vi.mock("../src/shared/folderSync", async (orig) => ({ ...(await orig<any>()), loadSavedHandle: async () => dir, saveHandle: async () => {}, clearSavedHandle: async () => {} }));
 
 describe("folder sync support files", () => {
-    it("writes typings, tsconfig, test harness and schema on start and preserves user package.json fields", async () => {
+    it("writes typings, tsconfig, the SDK and schema on start and preserves user package.json fields", async () => {
         files.set("feature.ts", { text: "import { tweak } from 'tangitweak'; tweak.onPage('*://example.com/*', () => {});\n", t: clock++ });
-        files.set("feature.test.ts", { text: "import { loadTweak } from '@tangitweak/test';\n", t: clock++ });
+        files.set("feature.test.ts", { text: "import { test } from 'tangitweak/test';\n", t: clock++ });
+        // what Folder Sync wrote before 0.40.0-alpha
+        files.set(".tangitweak/test/index.mjs", { text: "old\n", t: clock++ });
+        files.set(
+            "package.json",
+            {
+                text: JSON.stringify({
+                    imports: { "#tangitweak/test": "./.tangitweak/test/index.mjs" },
+                    devDependencies: { "@tangitweak/test": "file:.tangitweak/test", tangitweak: "file:.tangitweak/sdk/tangitweak" },
+                }),
+                t: clock++,
+            }
+        );
         files.set("ui.spec.tsx", { text: "export {};\n", t: clock++ });
         files.set("__tests__/helper.ts", { text: "export const x = 1;\n", t: clock++ });
         files.set("vitest.config.ts", { text: "export default {};\n", t: clock++ });
@@ -106,36 +119,28 @@ describe("folder sync support files", () => {
         expect(tsParsed.compilerOptions.paths).toMatchObject({
             "https://unpkg.com/*": ["./.tangitweak/types/unpkg.com/*"],
             react: ["./.tangitweak/types/builtin/@types/react/index.d.ts"],
-            "@tangitweak/test": ["./.tangitweak/test/index.d.ts"],
-            "#tangitweak/test": ["./.tangitweak/test/index.d.ts"],
+            "tangitweak/test": ["./.tangitweak/sdk/tangitweak/test.d.ts"],
         });
 
-        // Bundled @tangitweak/test is materialized under .tangitweak/test/
-        expect(files.get(".tangitweak/test/package.json")?.text).toContain('"@tangitweak/test"');
-        expect(files.get(".tangitweak/test/index.mjs")?.text).toContain("loadTweak");
-        expect(files.get(".tangitweak/test/index.d.ts")?.text).toContain("loadTweak");
-
-        // the SDK, which the root package.json links and tweaks' tsconfig.json extends
-        expect(JSON.parse(files.get(".tangitweak/sdk/tangitweak/package.json")!.text)).toMatchObject({ name: "tangitweak", types: "index.d.ts" });
-        expect(files.get(".tangitweak/sdk/tangitweak/index.d.ts")?.text).toContain("v1: true");
-        const sdkTs = files.get(".tangitweak/sdk/tangitweak/tsconfig.json")!.text;
-        expect(JSON.parse(sdkTs.slice(sdkTs.indexOf("\n") + 1)).compilerOptions).toMatchObject({ jsx: "react-jsx", paths: { react: ["../../types/builtin/@types/react/index.d.ts"] } });
+        // the SDK (the build's files plus its typings of the built-ins), which the root package.json links and tweaks' tsconfig.json extends
+        for (const [p, text] of Object.entries(sdk)) expect(files.get(`.tangitweak/sdk/tangitweak/${p}`)?.text).toBe(text);
+        expect(files.get(".tangitweak/sdk/tangitweak/types/builtin/@types/react/index.d.ts")?.text).toBe("export {};\n");
+        // the old @tangitweak/test harness goes
+        expect([...files.keys()].filter((k) => k.startsWith(".tangitweak/test/"))).toEqual([]);
 
         const pkg = JSON.parse(files.get("package.json")!.text);
         expect(pkg.$comment).toContain(GENERATED_NOTE);
-        expect(pkg).toMatchObject({
-            private: true,
-            type: "module",
-            imports: { "#tangitweak/test": "./.tangitweak/test/index.mjs" },
-            devDependencies: { "@tangitweak/test": "file:.tangitweak/test", tangitweak: "file:.tangitweak/sdk/tangitweak" },
-        });
+        expect(pkg).toMatchObject({ private: true, type: "module" });
+        expect(pkg.imports).toBeUndefined();
+        expect(pkg.devDependencies).toEqual({ tangitweak: "file:.tangitweak/sdk/tangitweak" });
         expect(JSON.parse(files.get("settings.schema.json")!.text).$comment).toBe(GENERATED_NOTE);
-        const stamps = ["tt-api.d.ts", "tsconfig.json", "package.json", "settings.schema.json", ".tangitweak/test/index.mjs"].map((f) => files.get(f)!.t);
+        const kept = ["tt-api.d.ts", "tsconfig.json", "package.json", "settings.schema.json", ".tangitweak/sdk/tangitweak/test.js"];
+        const stamps = kept.map((f) => files.get(f)!.t);
 
         // unchanged → nothing rewritten on the next start
         sync.halt();
         await sync.startFromStoredHandle({ fresh: true });
-        expect(["tt-api.d.ts", "tsconfig.json", "package.json", "settings.schema.json", ".tangitweak/test/index.mjs"].map((f) => files.get(f)!.t)).toEqual(stamps);
+        expect(kept.map((f) => files.get(f)!.t)).toEqual(stamps);
 
         // User adds vitest + test scripts to package.json → preserved on restart while restoring managed defaults
         files.set(
@@ -158,11 +163,9 @@ describe("folder sync support files", () => {
         expect(mergedPkg.$comment).toContain(GENERATED_NOTE);
         expect(mergedPkg.type).toBe("module");
         expect(mergedPkg.scripts).toEqual({ test: "vitest run" });
-        expect(mergedPkg.imports["#tangitweak/test"]).toBe("./.tangitweak/test/index.mjs");
         expect(mergedPkg.devDependencies).toEqual({
             vitest: "^2.1.4",
             "happy-dom": "^21.0.0",
-            "@tangitweak/test": "file:.tangitweak/test",
             tangitweak: "file:.tangitweak/sdk/tangitweak",
         });
 

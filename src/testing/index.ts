@@ -1,5 +1,5 @@
 /**
- * `@tangitweak/test` — local & CI test harness for TangiTweak scripts and bundles.
+ * `tangitweak/test`: local & CI test harness for TangiTweak scripts and bundles.
  *
  * Runs TangiTweak's real compiler, module/data resolver, DNR rules probe,
  * `bodyOps` network pipeline, `StoreOwner` + `SiteStoreHost` Valtio replicas,
@@ -551,7 +551,7 @@ function buildKeyboardEventInit(combo: string): KeyboardEventInit {
  */
 export async function loadTweak(source: TweakSource, options: LoadTweakOptions = {}): Promise<LoadedTweak> {
     if (typeof (globalThis as any).URLPattern === "undefined") {
-        throw new Error("@tangitweak/test requires global URLPattern (Node.js >= 23.8)");
+        throw new Error("tangitweak/test requires global URLPattern (Node.js >= 23.8)");
     }
 
     const ws = await loadRawWorkspace(source, options);

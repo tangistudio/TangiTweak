@@ -21,7 +21,10 @@ const listeners: ((c: Record<string, any>) => void)[] = [];
     },
     runtime: { lastError: undefined, sendMessage: () => {}, getURL: (p: string) => `chrome-extension://x/${p}` },
 };
-(globalThis as any).fetch = async () => ({ ok: true, status: 200, text: async () => "declare const tt: any;\n" });
+(globalThis as any).fetch = async (url: string) =>
+    url.endsWith("/tangitweak-sdk.json")
+        ? { ok: true, status: 200, json: async () => ({ "index.d.ts": 'declare module "tangitweak" {}\n' }) }
+        : { ok: true, status: 200, text: async () => "declare const tt: any;\n", json: async () => ({}) };
 
 type Entry = { kind: "file"; text: string; t: number } | { kind: "directory"; dir: Dir };
 interface Dir {

@@ -2,8 +2,8 @@
  * Support files folder sync keeps in the scripts folder for VS Code:
  * tt-api.d.ts (typings), tsconfig.json, package.json and settings.schema.json, plus the
  * package imports' and the built-in modules' (valtio, React) typings under
- * .tangitweak/types/, and the SDK (the `tangitweak` module's typings and the
- * tsconfig tweaks extend) under .tangitweak/sdk/tangitweak/. TangiTweak owns them:
+ * .tangitweak/types/, and the SDK (the npm package `tangitweak`, as this
+ * build made it) under .tangitweak/sdk/tangitweak/. TangiTweak owns them:
  * they are rewritten whenever sync starts (every browser start and
  * extension update) if their content differs, so edits don't stick.
  */
@@ -12,10 +12,12 @@ import { packagePaths, TYPINGS_ROOT } from "./packageImports";
 
 /** the built-in modules' typings in the scripts folder (lib/builtin-types.json keys go under it) */
 export const BUILTIN_TYPINGS_ROOT = `${TYPINGS_ROOT}/builtin`;
-/** local test harness synced into the scripts folder (lib/tangitweak-test.json keys go under it) */
-export const TEST_PKG_ROOT = ".tangitweak/test";
-/** the SDK, laid out like the npm package `tangitweak`: the root package.json links it, so `npm install` makes tweaks' `"extends": "tangitweak/tsconfig.json"` resolve */
+/** the SDK, the same files as the npm package `tangitweak` (lib/tangitweak-sdk.json keys go under it): the root package.json links it, so `npm install` gives tweaks `tangitweak/test` and makes their `"extends": "tangitweak/tsconfig.json"` resolve */
 export const SDK_ROOT = ".tangitweak/sdk/tangitweak";
+/** where the SDK keeps the built-ins' typings its tsconfig.json maps valtio and React to */
+export const SDK_BUILTIN_TYPINGS = "types/builtin";
+/** where Folder Sync wrote `@tangitweak/test` before 0.40.0-alpha: the folder and its package.json entries go */
+export const OLD_TEST_PKG_ROOT = ".tangitweak/test";
 
 export const API_DTS_FILE = "tt-api.d.ts";
 export const TSCONFIG_FILE = "tsconfig.json";
@@ -29,14 +31,16 @@ export const apiDtsText = (dts: string): string => `// ${GENERATED_NOTE}\n\n${dt
 const isPlainObj = (v: unknown): v is Record<string, any> => !!v && typeof v === "object" && !Array.isArray(v);
 
 /**
- * package.json in the synced folder: marks ES modules, links the local
- * `.tangitweak/test` harness (`@tangitweak/test` + `#tangitweak/test`), and
- * preserves user `scripts` / `dependencies` / `devDependencies` for local tests.
+ * package.json in the synced folder: marks ES modules, links the SDK
+ * (`tangitweak`, with `tangitweak/test`), and preserves user `scripts` /
+ * `dependencies` / `devDependencies` for local tests.
  */
 export function packageJsonText(existing?: Record<string, any>): string {
     const prev = isPlainObj(existing) ? existing : {};
-    const prevImports = isPlainObj(prev.imports) ? prev.imports : {};
-    const prevDevDeps = isPlainObj(prev.devDependencies) ? prev.devDependencies : {};
+    const imports = { ...(isPlainObj(prev.imports) ? prev.imports : {}) };
+    const devDeps = { ...(isPlainObj(prev.devDependencies) ? prev.devDependencies : {}) };
+    if (imports["#tangitweak/test"] === `./${OLD_TEST_PKG_ROOT}/index.mjs`) delete imports["#tangitweak/test"];
+    if (devDeps["@tangitweak/test"] === `file:${OLD_TEST_PKG_ROOT}`) delete devDeps["@tangitweak/test"];
     return (
         JSON.stringify(
             {
@@ -44,14 +48,10 @@ export function packageJsonText(existing?: Record<string, any>): string {
                 $comment: `${GENERATED_NOTE} User scripts/devDependencies for local tests are kept; TangiTweak scripts import runtime packages by pinned unpkg URL (https://unpkg.com/pkg@x.y.z).`,
                 private: typeof prev.private === "boolean" ? prev.private : true,
                 type: "module",
-                imports: {
-                    ...prevImports,
-                    "#tangitweak/test": `./${TEST_PKG_ROOT}/index.mjs`,
-                },
+                imports: Object.keys(imports).length ? imports : undefined,
                 devDependencies: {
-                    "@tangitweak/test": `file:${TEST_PKG_ROOT}`,
                     tangitweak: `file:${SDK_ROOT}`,
-                    ...prevDevDeps,
+                    ...devDeps,
                 },
             },
             null,
@@ -76,26 +76,19 @@ const baseCompilerOptions = {
 };
 
 /**
- * The SDK's files (under SDK_ROOT): a package.json, the `tangitweak`
- * module's typings and the tsconfig.json a tweak's own extends.
+ * Two of the SDK's files, for the npm package and Folder Sync alike (the
+ * build makes the rest, scripts/build.mjs): the `tangitweak` module's
+ * typings and the tsconfig.json a tweak's own extends.
  */
-export function sdkFiles(dts: string, version: string): Record<string, string> {
-    const pkg = {
-        $comment: GENERATED_NOTE,
-        name: "tangitweak",
-        version,
-        types: "index.d.ts",
-        exports: { ".": { types: "./index.d.ts" }, "./tsconfig.json": "./tsconfig.json" },
-    };
+export function sdkFiles(dts: string): Record<string, string> {
     const tsconfig = {
         compilerOptions: {
             ...baseCompilerOptions,
-            // relative to this file: the built-ins' typings Folder Sync keeps in .tangitweak/types/builtin
-            paths: builtinPaths(`../../types/builtin`),
+            // relative to this file: the built-ins' typings the SDK ships, so tweaks see TangiTweak's own valtio and React
+            paths: builtinPaths(`./${SDK_BUILTIN_TYPINGS}`),
         },
     };
     return {
-        "package.json": JSON.stringify(pkg, null, 2) + "\n",
         "index.d.ts": apiDtsText(dts),
         "tsconfig.json": `// ${GENERATED_NOTE}\n${JSON.stringify(tsconfig, null, 2)}\n`,
     };
@@ -106,11 +99,10 @@ export function tsconfigText(): string {
     const config = {
         compilerOptions: {
             ...baseCompilerOptions,
-            // local test harness, package imports (`https://unpkg.com/x@1.2.3`) → their downloaded typings
+            // the SDK's test API, package imports (`https://unpkg.com/x@1.2.3`) → their downloaded typings
             // and the built-ins (`valtio`, `react`, `react-dom/client`…) → the extension's typings of them
             paths: {
-                "@tangitweak/test": [`./${TEST_PKG_ROOT}/index.d.ts`],
-                "#tangitweak/test": [`./${TEST_PKG_ROOT}/index.d.ts`],
+                "tangitweak/test": [`./${SDK_ROOT}/test.d.ts`],
                 ...packagePaths(`./${TYPINGS_ROOT}`),
                 ...builtinPaths(`./${BUILTIN_TYPINGS_ROOT}`),
             },

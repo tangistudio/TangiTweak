@@ -40,8 +40,7 @@ import { isBundlePackageJson, MANIFEST_FILE } from "../shared/packageMetadata";
 import { storeOwner } from "./engine/stores";
 import { SETTINGS_FILE, SCHEMA_FILE } from "../shared/settingsJson";
 import { settingsSchemaJson } from "../shared/settingsSchema";
-import { currentTangiTweakVersion } from "../shared/packageMetadata";
-import { API_DTS_FILE, BUILTIN_TYPINGS_ROOT, PACKAGE_JSON_FILE, SDK_ROOT, TEST_PKG_ROOT, TSCONFIG_FILE, apiDtsText, packageJsonText, sdkFiles, tsconfigText } from "../shared/generatedFiles";
+import { API_DTS_FILE, BUILTIN_TYPINGS_ROOT, OLD_TEST_PKG_ROOT, PACKAGE_JSON_FILE, SDK_BUILTIN_TYPINGS, SDK_ROOT, TSCONFIG_FILE, apiDtsText, packageJsonText, tsconfigText } from "../shared/generatedFiles";
 import { broadcastToUi } from "./engine/logs";
 import { dlogLevel } from "../shared/debugLog";
 import { folderPathProblem, isConfigJsonPath, isGitignorePath, isScriptFilePath, scriptFileName, scriptNameFromFile } from "../shared/scriptName";
@@ -1230,34 +1229,47 @@ async function ensurePackageJsonFile(): Promise<void> {
     if (raw !== next) await writeFile(PACKAGE_JSON_FILE, next);
 }
 
-/** the bundled local test harness (lib/tangitweak-test.json), read once */
-let testPkgBundle: Promise<Record<string, string>> | null = null;
-function testPkgFiles(): Promise<Record<string, string>> {
+/** the SDK this build ships (lib/tangitweak-sdk.json), read once */
+let sdkBundle: Promise<Record<string, string>> | null = null;
+function sdkBundleFiles(): Promise<Record<string, string>> {
     if (typeof chrome === "undefined" || !chrome.runtime?.getURL) return Promise.resolve({});
-    testPkgBundle ??= Promise.resolve()
-        .then(() => fetch(chrome.runtime.getURL("lib/tangitweak-test.json")))
+    sdkBundle ??= Promise.resolve()
+        .then(() => fetch(chrome.runtime.getURL("lib/tangitweak-sdk.json")))
         .then((r) => {
             if (!r.ok) throw new Error(`HTTP ${r.status}`);
             return r.json();
         })
         .catch((e: any) => {
-            testPkgBundle = null;
-            dlogLevel("sync", "warn", `Folder sync: could not read local test harness files: ${e?.message || e}`);
+            sdkBundle = null;
+            dlogLevel("sync", "warn", `Folder sync: could not read the SDK's files: ${e?.message || e}`);
             return {};
         });
-    return testPkgBundle;
+    return sdkBundle;
 }
 
-async function ensureTestPackageFiles(): Promise<void> {
+/**
+ * The SDK under SDK_ROOT, the same files as the npm package `tangitweak`
+ * (its typings of the built-ins come from lib/builtin-types.json). The
+ * `@tangitweak/test` harness that came before it goes.
+ */
+async function ensureSdkFiles(): Promise<void> {
     if (!dirHandle) return;
-    for (const [p, text] of Object.entries(await testPkgFiles())) {
-        const path = `${TEST_PKG_ROOT}/${p}`;
+    const files = Object.entries(await sdkBundleFiles());
+    if (!files.length) return;
+    for (const [p, text] of Object.entries(await builtinTypingFiles())) files.push([`${SDK_BUILTIN_TYPINGS}/${p}`, text]);
+    for (const [p, text] of files) {
+        const path = `${SDK_ROOT}/${p}`;
         if ((await readTextOrNull(path)) !== text) await writeFile(path, text);
+    }
+    try {
+        await (await parentDir(OLD_TEST_PKG_ROOT)).removeEntry(baseName(OLD_TEST_PKG_ROOT), { recursive: true });
+    } catch {
+        // not there
     }
 }
 
 /**
- * Typings + tsconfig + local test harness for VS Code, refreshed on every
+ * Typings + tsconfig + the SDK for VS Code, refreshed on every
  * start — so an extension update (new APIs) reaches an already-synced folder.
  */
 async function ensureSupportFiles(): Promise<void> {
@@ -1267,17 +1279,13 @@ async function ensureSupportFiles(): Promise<void> {
             return r.text();
         });
         await ensureFile(API_DTS_FILE, apiDtsText(dts));
-        for (const [p, text] of Object.entries(sdkFiles(dts, currentTangiTweakVersion()))) {
-            const path = `${SDK_ROOT}/${p}`;
-            if ((await readTextOrNull(path)) !== text) await writeFile(path, text);
-        }
     } catch (e: any) {
         dlogLevel("sync", "warn", `Folder sync: could not refresh ${API_DTS_FILE}: ${e?.message || e}`);
     }
     await ensureFile(TSCONFIG_FILE, tsconfigText());
     await ensurePackageJsonFile();
     await ensureSchemaFile();
-    await ensureTestPackageFiles();
+    await ensureSdkFiles();
     await ensurePackageTypingsFiles();
 }
 
