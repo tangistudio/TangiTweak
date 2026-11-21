@@ -216,9 +216,9 @@ export async function unzipPackage(buf: ArrayBuffer): Promise<Record<string, str
     return (await unzipPackageArchive(buf)).files;
 }
 
-/** a source, opened: where its entry or metadata.json is, how to read a path, and the revision it's pinned to */
+/** a source, opened: where its package.json is, how to read a path, and the revision it's pinned to */
 export interface OpenedSource {
-    /** the entry's or the bundle's metadata.json's path, relative to the source's root */
+    /** the bundle's package.json's path (or a file next to it), relative to the source's root */
     start: string;
     read(path: string): Promise<string | null>;
     /** commit / gist revision; undefined: the files' hash (crawl result) */

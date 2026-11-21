@@ -46,7 +46,7 @@ React + `valtio` GUI overlay on the page.
   report to an LLM with "why isn't this working?". It carries your scripts,
   settings, the recent log and the requests the Network view recorded, with what each script did to them,
   so the model can pinpoint the cause. Cookies and authorization headers are redacted.
-- **Install and share scripts** — open any URL ending in `.tangitweak.ts` or `#tangitweak:install` (a gist, a GitHub repo, file or folder, any site, a local file) to install it with the files it imports; the install page shows what it can do first. Installed scripts [update themselves](docs/packages.md#updates) unless an update can do more, which waits for your review.
+- **Install and share tweaks** — a tweak is a folder with a `package.json`; open its URL with `#tangitweak:install` (a gist, a GitHub repo or folder, any site, a local file) to install it with the files it imports and the npm packages its `dependencies` list; the install page shows what it can do first. Installed tweaks [update themselves](docs/packages.md#updates) unless an update can do more, which waits for your review.
 - **Folder sync** — keep scripts, data files (`.json`, `.md`, `.svg`, images) and their folders as plain files in a synced folder of your choice.
 - **Chrome (MV3), MV2 Chromium and Firefox.**
 

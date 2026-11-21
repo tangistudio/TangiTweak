@@ -1,8 +1,16 @@
-# Writing scripts
+# Writing tweaks
 
 [<img src="../icons/icon.svg" width="16" height="16" align="absmiddle" alt=""> README](../README.md) · [Glossary](../GLOSSARY.md)
 
-A script imports `tweak` from `"tangitweak"` and registers **handlers** with
+A tweak is a folder with a `package.json` that has a `"tangitweak"` block
+(see [package.json](packages.md#packagejson)). **New Tweak…** in the
+Explorer creates one. Its **entry** (`main`, else `index.ts`, else
+`index.tsx`) is the tweak's code, called "the script" below; the folder's
+other files are [modules](#modules-and-recipes) the entry imports. A `.ts`
+file outside such a folder doesn't run: the Editor lists it as needing a
+rewrite.
+
+The entry imports `tweak` from `"tangitweak"` and registers **handlers** with
 it at top level. Each handler takes its own [route](#routes) first, then the
 function (the examples below leave the import line out):
 
@@ -49,9 +57,9 @@ tweak.onOverlay("*://app.example.com/*", async (ctx) => {
 ```
 
 Register handlers synchronously at top level. A registration after an
-`await` or inside a callback logs an error and is ignored. A file that
-registers no handlers is a [library](#libraries-and-recipes). To share a
-script, publish it at a URL ending in `.tangitweak.ts`; opening that URL
+`await` or inside a callback logs an error and is ignored. Handlers a
+[module](#modules-and-recipes) registers belong to the tweak. To share a
+tweak, publish its folder; opening its URL with `#tangitweak:install`
 [installs it](packages.md).
 
 Saving a script applies it in place: network handlers change for the next
@@ -309,9 +317,8 @@ It is the same in `onRequest`, `replaceResponse`, `onResponseHeaders` and
 
 ## Parameters
 
-A script's description, version, icon and the rest come from its bundle's
-`metadata.json` (see [Packages](packages.md)); a script has no metadata of
-its own.
+A tweak's description, version, icon and the rest come from its
+`package.json` (see [package.json](packages.md#packagejson)).
 
 `tweak.params` declares typed knobs the user changes from the popup's ⚙
 dialog, the Editor or `settings.json` without touching the script:
@@ -331,7 +338,8 @@ tweak.onRequest({ url: "*://app.example.com/posts/*", strategy: "helper" }, () =
 });
 ```
 
-`tweak.params` may be called more than once (a library can declare its own);
+`tweak.params` may be called more than once (a module can declare its own;
+they're all the tweak's);
 the UI lists params in call order, and defining the same name twice is an
 error.
 
@@ -423,26 +431,24 @@ Changes made in one go are saved once per param, with the last value.
   code could reach the setter.
 - A param with `parse` can't be assigned; change it in ⚙ or
   `settings.json`.
-- A library's params can be changed by any script that imports it.
+## Modules and recipes
 
-## Libraries and recipes
-
-A file that registers no handlers is a **library**: it never runs on its
-own (the popup lists it only when it declares params) but other scripts
-import it.
+A tweak's files other than its entry are **modules**: they run only when the
+entry imports them (directly or through another module), and never on their
+own. What they register — handlers, params, stores — belongs to the tweak:
+its enable switch, badge, log, popup entry and settings.
 
 ```ts
 // utils.ts:
 export function double(n: number) { return n * 2; }
 
-// in your script:
-import { double } from "./utils";   // "./utils", "utils", "utils.ts" all resolve
+// index.ts:
+import { double } from "./utils";   // "./utils" and "./utils.ts" both resolve
 ```
 
-A library can export **recipes** — functions that register handlers. The
-handler belongs to the script that calls the recipe (its badge, log, popup
-entry and params), and so does a `tabStore` / `pageStore` / `siteStore` the
-recipe creates:
+A module can export **recipes** — functions that register handlers. The
+handler belongs to the tweak, and so does a `tabStore` / `pageStore` /
+`siteStore` the recipe creates:
 
 ```ts
 // mocks.ts:
@@ -452,52 +458,45 @@ export function mockJson(url: string, body: object) {
     tweak.onRequest({ url, strategy: "helper" }, () => ({ replaceResponse: { body } }));
 }
 
-// script:
+// index.ts:
 import { mockJson } from "./mocks";
 mockJson("*://api.example.com/me", { id: 1, role: "admin" });
 ```
 
 Recipes can register `tweak.onSite`, `tweak.onPage` and `tweak.onOverlay` handlers
-too. Call them from your script's top level; a call made later (from a
+too. Call them from the top level; a call made later (from a
 handler or a timer) registers nothing. The Problems panel names them like
 "onPage #2 (mocks)".
 
-Libraries may declare params too, as shared config. They're editable in the
-popup (marked 𝑓, no enabled switch), the Editor and `settings.json`, and
-importers see the library's values. Whether a file is a library is decided
-with its current param values, so a library that registers handlers only
-for some value becomes a script when you change it (and back):
+Modules may declare params too. They're the tweak's params, edited in the
+popup, the Editor and `settings.json` with the entry's own. A store ID
+(`tweak.globalStore("id", …)`) can be declared once per tweak: two files of
+one tweak declaring the same ID is an error.
 
-```ts
-// gate.ts: a library until "on" is switched on
-const p = tweak.params({ on: { type: "boolean", default: false } });
-if (p.on) tweak.onRequest({ url: "*://api.example.com/*", strategy: "helper" }, () => ({ block: true }));
-```
-
-Param definitions can be shared too — export them from a library and pass
-them to `tweak.params` (directly or spread); the importer gets its own values:
+Param definitions can be shared too — export them from a module and pass
+them to `tweak.params` (directly or spread):
 
 ```ts
 // utils.ts:
 export const envParam = { type: "stringList", default: ["dev"] } as const;
 
-// script:
+// index.ts:
 import { envParam } from "./utils";
 const cfg = tweak.params({ intercept_environments: envParam });
 ```
 
 ## Imports, folders and data files
 
-A script's name is its path in the explorer: a script `api mock` in the
-folder `mock` is named `mock/api mock` (`mock/api mock.ts` in the synced
-folder). Imports resolve like TypeScript, relative to the importing
-script's folder:
+A file's name is its path in the explorer: `index.ts` in the tweak folder
+`mock` is named `mock/index` (`mock/index.ts` in the synced folder). Imports
+resolve like TypeScript, relative to the importing file's folder, and stay
+inside the tweak's folder:
 
 ```ts
-// in "mock/api mock":
-import { double } from "./helpers";          // the script "mock/helpers"
-import { envParam } from "../utils";         // the script "utils" at the root
-import { mockJson } from "utils";            // bare: resolved from the root
+// in "mock/index":
+import { double } from "./helpers";          // the module "mock/helpers"
+import { envParam } from "./lib/utils";      // the module "mock/lib/utils"
+import dayjs from "dayjs";                   // bare: from package.json's "dependencies"
 ```
 
 The `.ts`/`.tsx`/`.js` extension is optional (with both `x.ts` and `x.tsx`,
@@ -507,9 +506,9 @@ A **data file** is a JSON, Markdown, SVG or image file in the explorer (`.json`,
 never runs, scripts import it by its path:
 
 ```ts
-// data file "mock/rate-limits.json": { "max": 5, "window": 60 }
-import limits from "./mock/rate-limits.json"; // the whole object
-import { max } from "./mock/rate-limits.json"; // one property
+// data file "mock/rate-limits.json": { "max": 5, "window": 60 }, in mock/index:
+import limits from "./rate-limits.json"; // the whole object
+import { max } from "./rate-limits.json"; // one property
 
 tweak.onRequest({ url: "*://api.example.com/*", strategy: "helper" }, () => ({ headers: { set: { "x-limit": String(max) } } }));
 ```
@@ -519,7 +518,7 @@ tweak.onRequest({ url: "*://api.example.com/*", strategy: "helper" }, () => ({ h
 
 Each JSON import gets a freshly parsed copy, so a handler changing it doesn't
 affect other scripts. Saving, renaming or deleting a data file hot-applies
-every script that imports it (directly or through a library). A missing
+every script that imports it (directly or through a module). A missing
 data file or invalid JSON is a compile error on the importing script,
 naming the data file and the JSON error's line and column. In the Code
 view the import is typed from the data file (hovers and completions show its
@@ -529,8 +528,26 @@ pointing at it.
 
 ### Packages from unpkg
 
-A **package import** pulls an npm package into a script by its
-[unpkg.com](https://unpkg.com) URL, pinned to an exact version:
+A **bare import** (`import dayjs from "dayjs"`) pulls in an npm package the
+tweak's `package.json` lists in `"dependencies"`. TangiTweak downloads it
+from [unpkg.com](https://unpkg.com) when you save, at the version unpkg
+serves for the range then, and keeps that copy:
+
+```json
+"dependencies": {
+    "tangitweak": "^0.40.0-alpha",
+    "dayjs": "^1.11.0",
+    "path": "npm:path-browserify@^1.0.1"
+}
+```
+
+npm's alias syntax (`"path": "npm:path-browserify@^1.0.1"`) imports one
+package under another name, in the tweak's dependencies and in a package's
+own. A bare import its `dependencies` don't list is a compile error, as is a
+dependency that isn't an npm range (`file:`, a git URL).
+
+A file can also import a package by its unpkg URL, pinned to an exact
+version:
 
 ```ts
 import dayjs from "https://unpkg.com/dayjs@1.11.13";
@@ -573,9 +590,34 @@ and its types are still downloading, the Editor shows a warning on the URL
 of …`) instead of TypeScript's `Cannot find module` error. A dependency of the
 package that fails to download isn't an error until the package `require`s
 it at runtime, so optional dependencies don't break anything; saving the
-script tries it again. Node.js
-built-ins (`fs`, `path`, `crypto`, …) aren't available: `require("fs")`
-throws `"fs" is a Node.js built-in — not available in TangiTweak scripts`.
+script tries it again.
+
+**Packages written for Node.js.** A package that `require`s a Node.js
+built-in (`events`, `buffer`, `node:events`, …) without depending on it
+itself gets the tweak's own dependency of that name. Add npm's browser
+version to the tweak's `package.json`: `"events": "^3.3.0"`,
+`"buffer": "^6.0.3"`, or an alias where the name differs
+(`"path": "npm:path-browserify@^1.0.1"`). Without one, `require("events")`
+throws `"events" is a Node.js built-in — not available in tweaks — add
+"events": "latest" to the tweak's package.json "dependencies" to use npm's
+browser version`. `fs`, `child_process` and `net` have no browser version.
+Globals a package expects (`Buffer`, `process`) are set by a polyfill the
+entry imports first, since imports run in order:
+
+```ts
+// polyfills.ts
+import { Buffer } from "buffer";   // listed in "dependencies"
+(globalThis as any).Buffer ??= Buffer;
+
+// index.ts
+import "./polyfills";              // first
+import { tweak } from "tangitweak";
+```
+
+A polyfill that patches globals patches them for everything in that world:
+in `onSite` code that's the site, and for network handlers that's
+TangiTweak and other tweaks. Prefer versions that don't (`core-js-pure`
+rather than `core-js`).
 Packages work on every strategy and in `tweak.onSite`, `tweak.onPage` and
 `tweak.onOverlay` handlers (the downloaded code is sent to the page along
 with the script). `onSite` code has no React, so a package that needs it
@@ -593,8 +635,8 @@ VS Code and `tsc` type-check the same imports.
 
 **Limits.**
 
-- Only unpkg.com URLs can be imported. Packages that need Node.js built-ins,
-  native code, WebAssembly fetched at runtime, or a bundler (`import.meta.url`
+- Only npm packages (from unpkg.com) can be imported. Packages that need
+  Node.js built-ins with no browser version, native code, WebAssembly fetched at runtime, or a bundler (`import.meta.url`
   assets, CSS imported from inside a package's JavaScript) don't work.
 - A `.css` file (`import "https://unpkg.com/daisyui@5.0.43/daisyui.css"`)
   becomes a `<style>` in the script's [overlay](#overlays--wtonoverlay);
@@ -632,7 +674,7 @@ read or write goes in `tweak.siteStore`; everything else goes in the other three
 | `tweak.pageStore` | Top-frame document load | **Resets** (SPA route changes kept) | Dropped | Dropped | No | No |
 | `tweak.siteStore` | Page's JS world | **Resets** (SPA route changes kept) | Dropped | Dropped | No | **Yes** (untrusted page data) |
 
-*(All three background-owned stores — `globalStore`, `tabStore`, and `pageStore` — also survive hot script saves and MV3 service-worker restarts while their tab/page remains open. Stores declared in an imported library belong to that library and are shared across all scripts importing it; `siteStore` must be declared in the entry script itself.)*
+*(All three background-owned stores — `globalStore`, `tabStore`, and `pageStore` — also survive hot script saves and MV3 service-worker restarts while their tab/page remains open. Stores declared in a module belong to the tweak; `siteStore` must be declared in the entry itself.)*
 
 ### Which handlers can access each store
 
@@ -774,12 +816,12 @@ tweak.onOverlay("https://example.com/*", (ctx) => {
 
 `tweak.tabStore`, `tweak.pageStore` and `tweak.siteStore` take no name: a
 store is named after the file whose code creates it and its position among
-that file's `tabStore` / `pageStore` / `siteStore` calls (`main#0`,
-`lib/state#1`). Every place a script runs — the background, the page, the
+that file's `tabStore` / `pageStore` / `siteStore` calls (`index#0`,
+`lib/state#1`). Every place a tweak runs — the background, the page, the
 site's world, the overlay — runs the same code in the same order, so they
 all agree on which store is which. Create stores at top level (or in a
-library function called at top level) in a fixed order; a store a library
-function creates belongs to the script that calls it.
+module function called at top level) in a fixed order; they all belong to
+the tweak.
 
 ### Stores in page code
 
@@ -1061,7 +1103,7 @@ answers, so `onSite` code is untrusted:
   Problems shows both, with a quick fix (**Ctrl+.** / **⌘.**) that moves
   the handler to `tweak.onPage`. Call your own functions directly.
 - **No built-in React** (using it throws), so no `ctx.mount`
-  or `ctx.each`. A library script that uses React at its top level
+  or `ctx.each`. A module that uses React at its top level
   (`const Item = memo(…)`) fails the `onSite` side of every script that
   imports it; the error names the line and the import chain, so keep what
   `onSite` code needs in a module without React. Of valtio only its core (`subscribe`, `snapshot`); no

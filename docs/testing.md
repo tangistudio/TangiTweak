@@ -1,14 +1,14 @@
-# Testing scripts
+# Testing tweaks
 
 [<img src="../icons/icon.svg" width="16" height="16" align="absmiddle" alt=""> README](../README.md) · [Glossary](../GLOSSARY.md)
 
-Write automated unit and UI tests for scripts and multi-script bundles locally
+Write automated unit and UI tests for tweaks locally
 in your [synced folder](editor.md#folder-sync) or in CI with `@tangitweak/test`.
 
 Test files (`*.test.ts`, `*.test.tsx`, `*.spec.ts`, `*.spec.tsx`, `__tests__/**`)
 and runner configs (`vitest.config.ts`, `vite.config.ts`, `jest.config.ts`,
 `playwright.config.ts`) stay local on disk: TangiTweak skips them during Folder
-Sync, package installs, **Make Package…** and zip exports.
+Sync, package installs and zip exports.
 
 ## Local setup (Folder Sync)
 
@@ -30,8 +30,9 @@ npm install -D vitest happy-dom @testing-library/react
 
 ## Testing network handlers & rules
 
-`loadTweak(source, options?)` compiles a script file (`"./api.ts"`), a bundle
-folder or `"./metadata.json"`, or inline `{ code, files }` with TangiTweak's
+`loadTweak(source, options?)` compiles a tweak's folder (`"."`), its
+`"./package.json"`, a file in it (`"./api.ts"`: the tweak whose
+`package.json` is next to it), or inline `{ code, files }` with TangiTweak's
 real compiler, relative/data imports and DNR rules probe:
 
 ```ts

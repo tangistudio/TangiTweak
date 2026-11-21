@@ -74,7 +74,7 @@ folder's name.
 
 The explorer on the left looks and works like VS Code's explorer: a tree of
 [folders](scripting.md#imports-folders-and-data-files) (chevron, indent
-guides), one `Name.ts` (or `Name.tsx`, ⚛ icon) row per script ([libraries](scripting.md#libraries-and-recipes) in italics, disabled scripts dimmed and
+guides), one `Name.ts` (or `Name.tsx`, ⚛ icon) row per script ([modules](scripting.md#modules-and-recipes) in italics, disabled tweaks dimmed and
 struck through, ● for unsaved changes, ⚠ for errors) and one `name.json` row
 per [data file](scripting.md#imports-folders-and-data-files) (`{}` icon,
 red when its JSON is invalid; ◈ for an `.svg`). Each folder lists its subfolders
@@ -83,9 +83,11 @@ red when its JSON is invalid; ◈ for an `.svg`). Each folder lists its subfolde
 folder sit at the root, as before. Which folders are collapsed is remembered.
 Click the **TangiTweak** header to collapse the whole tree.
 
-Hovering the explorer shows the header buttons: **New Script…**, **New JSON
-File…**, **New Folder…**, **Install Script…** (opens the [install
-dialog](packages.md#install-a-script); you can also drop a link, a file, a folder
+Hovering the explorer shows the header buttons: **New Tweak…** (a folder
+with a `package.json`, `tsconfig.json`, `index.ts` and `.gitignore` — see
+[Sharing tweaks](packages.md#sharing-tweaks)), **New JSON
+File…**, **New Folder…**, **Install Tweak…** (opens the [install
+dialog](packages.md#install-a-tweak); you can also drop a link, a folder
 or a `.zip` on the explorer) and **Collapse Folders in Explorer**. A new item
 goes into the selected folder (or the selected file's folder) and is named in
 an inline box, like VS Code (Enter creates, Esc cancels). A new data file
@@ -99,17 +101,16 @@ folds or expands a folder and all its subfolders, Enter opens the file and focus
 collapse), Space opens it and keeps focus in the tree, F2 renames, Delete
 (⌘⌫ on macOS) deletes after a confirmation — a folder's warns that it deletes
 its contents, with counts — and Esc returns to the Code view. Right-click a
-row for **Open** (or **Expand All** / **Fold All** on folders), **Enable/Disable** (scripts), **Make Package…** and
-**Export Package…** (scripts, folders and package folders — see [Sharing
-scripts](packages.md#sharing-scripts)), **New Script…**, **New JSON
+row for **Open** (or **Expand All** / **Fold All** on folders), **Enable/Disable** (a tweak's entry),
+**Export Package…** (a tweak's folder — see [Sharing
+tweaks](packages.md#sharing-tweaks)), **New Tweak…**, **New JSON
 File…**, **New Folder…** (in that folder), **Copy Path**, **Rename…** and
 **Delete**; right-click the empty area for **Expand All** / **Fold All** and the New items at the root. Drag a
 script, data file or folder onto a folder to move it there (onto the empty
 area: to the root); hovering a collapsed folder while dragging expands it.
-A package's folder — [installed](packages.md), or one holding a
-`metadata.json`, as **Make Package…** leaves it — has a box icon instead
-of a folder. An installed one-file package's script shows 📦; an installed
-package shows ⬆ when an update waits for review (click it to review); its
+A tweak's folder — one whose `package.json` has a `"tangitweak"` block,
+[installed](packages.md) or made with **New Tweak…** — has a box icon (or
+its `icon`) instead of a folder. An installed tweak shows ⬆ when an update waits for review (click it to review); its
 right-click menu adds **Review Update…**, **Check for Updates**, **Turn
 Auto-Update On/Off**, **Roll Back to …**, **Open Source Page** and **Forget
 Package (Keep Files)**.
@@ -124,7 +125,7 @@ offers **Copy Paths**. Items inside a selected folder go with it. The
 
 Double-click a file (or F2 on a file or folder) to rename it (Enter saves, Esc cancels).
 The box shows the full file name, extension included (`My script.ts`,
-`users.json`), with only the name before it selected (`.tangitweak.ts` too); the `.ts` of a script is
+`users.json`), with only the name before it selected; the `.ts` of a script is
 optional when you type, while `.tsx` makes it a [`.tsx` script](scripting.md#built-in-valtio-and-react). The name is the path in the synced folder; a `/`
 moves it into a folder (`mock/api mock` → `mock/api mock.ts`; renaming a
 folder moves everything in it). Each segment may hold anything
@@ -166,7 +167,11 @@ at the right of the toolbar do the same.
   file path like VS Code's (`mock/api mock.ts`): TypeScript errors and warnings, compile errors,
   invalid `rules` handlers, the last runtime error (exception in a handler),
   route warnings (a handler its strategy can't run here, or the helper being
-  down), `settings.json` errors and JSON syntax errors in data files. Unlike the Log, entries go away by
+  down), `settings.json` errors, JSON syntax errors in data files, a tweak
+  that needs a newer TangiTweak (from its `package.json`'s
+  `dependencies.tangitweak`), and **Needs a rewrite** on files that no
+  longer load — a `.ts` file outside a tweak's folder, or one in a folder
+  described by a `metadata.json`. Their files are kept. Unlike the Log, entries go away by
   themselves once fixed: TypeScript problems update live as you type (even
   before saving); compile, rules and route problems on save; a runtime error
   on save or with its ×. Every entry has a line and column: where the error
@@ -403,8 +408,10 @@ paths. Dot entries (`.git`, `.vscode`, `.tangitweak-backup`, …),
 `node_modules`, test files (`*.test.ts`, `*.test.tsx`, `*.spec.ts`,
 `*.spec.tsx`, `__tests__/`), test runner configs (`vitest.config.ts`,
 `vite.config.ts`, `jest.config.ts`, `playwright.config.ts`), `.d.ts` files and
-config JSON (`package.json`, `package-lock.json`, `tsconfig*.json`,
-`jsconfig.json`, the root `settings.schema.json`) are left alone. Connecting runs a two-way initial
+config JSON at the root (`package.json`, `tsconfig*.json`,
+`settings.schema.json`) and `package-lock.json` / `jsconfig.json` anywhere are left alone.
+A tweak's own `package.json`, `tsconfig.json` and `.gitignore` sync as its
+data files. Connecting runs a two-way initial
 sync: files without a script or data file are imported, scripts and data
 files without a file are written out, and where both exist but differ the
 newer one wins (file modified time vs. the last save) and the other copy is
@@ -422,7 +429,12 @@ TypeScript completions; saves hot apply instantly. The typings of
 scripts change. The built-ins' (`valtio`, `react`, `react-dom`) go to
 `.tangitweak/types/builtin/`, so their imports resolve there too, and the
 [script test harness](testing.md) (`@tangitweak/test`) goes to
-`.tangitweak/test/`.
+`.tangitweak/test/`. The running build's SDK goes to
+`.tangitweak/sdk/tangitweak/` (a `package.json`, its `index.d.ts` and the
+`tsconfig.json` tweaks extend), and the root `package.json` lists it as the
+`tangitweak` devDependency (`file:.tangitweak/sdk/tangitweak`): after
+`npm install` at the root, a tweak's `{ "extends": "tangitweak/tsconfig.json" }`
+and `import { tweak } from "tangitweak"` resolve there.
 
 Those support files are refreshed on every browser start
 and extension update, so new APIs, settings and test helpers reach an already-synced folder.
@@ -517,16 +529,17 @@ rather than duplicated). Untick `settings.json` to leave settings, params
 and `enabled` state alone. When any script has persisted `tweak.globalStore`
 state, **Export…** also lists `stores.json` (unticked by default, marked
 `opt-in`) so you can include persisted store data when needed; **Import…**
-applies `stores.json` when present and ticked. If a picked script imports a library or data
+applies `stores.json` when present and ticked. If a picked script imports a module or data
 file that isn't picked, the dialog warns and **Add them** ticks the missing
 ones.
 
-Importing a new version of a package (a zip from **Export Package…**, whose
+Importing a new version of a tweak (a zip from **Export Package…**, whose
 files are all in one folder, or any folder in the zip with a
-`metadata.json`) also lists the files you have in that folder that the new
+`package.json` that has a `"tangitweak"` block) also lists the files you have in that folder that the new
 version doesn't, struck through and marked **deleted**. They're ticked, so
 importing deletes them. Untick any you want to keep.
-A plain `.ts`/`.tsx`/`.js` file imports as a single script.
+A plain `.ts`/`.tsx`/`.js` file imports as a single file; outside a tweak's
+folder it doesn't run.
 
 ## `settings.json`
 
@@ -560,7 +573,7 @@ Content-Types `onResponseBody` gets as text and replaces the defaults
 
 Right below `settings.json`, the Explorer has a **stores.json** entry holding
 the persisted `tweak.globalStore` data of your scripts (`{ "<script file>": { "<store name>": { … } } }`, e.g. `"mock-users.ts"` or `"bonsai/index.tsx"`).
-Stores declared inside an imported library belong to that library's file (and are shared across all scripts that import it), matching `settings.json`.
+Stores declared in a tweak's modules belong to the tweak's entry file, matching `settings.json`.
 As scripts update their persisted global stores, `stores.json` updates live;
 editing and saving it in the Code view (or in `stores.json` at the root of your
 synced folder) updates open tabs and overlays immediately without reloading.

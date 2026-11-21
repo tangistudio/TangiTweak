@@ -81,7 +81,7 @@ export function storeItemOf(folder: string, rel: string): { kind: "script" | "da
 /** an entry's file name without `.tangitweak.ts` */
 export const entryStem = (entry: string): string => entry.replace(/^.*\//, "").replace(ENTRY_FILE_RE, "").replace(/\.tsx?$/i, "");
 
-/** a package's display name: its metadata's name, else its (first) entry's file name without `.tangitweak.ts` */
+/** a package's display name: its package.json's displayName (else name), else its entry's file name */
 export function packageName(p: { entries: string[]; metadata: Pick<PackageMetadata, "name"> }): string {
     return p.metadata.name || entryStem(p.entries[0] ?? "") || "package";
 }
@@ -96,9 +96,8 @@ export function naturalPackageFolder(p: { entries: string[]; files: Record<strin
 }
 
 /**
- * Where a package installs: a single file at the root, more in a folder
- * named after the bundle (its metadata.json's name) or the entry
- * (`dark.tangitweak.ts` → `dark/`), then `dark (2)/`… past what's `taken`
+ * Where a package installs: a folder named after its package.json's
+ * `name` (or the entry), then `dark (2)/`… past what's `taken`
  * — script names, data paths and folders.
  */
 export function packageFolder(p: { entries: string[]; files: Record<string, string>; bundleName?: string }, taken: string[]): string {

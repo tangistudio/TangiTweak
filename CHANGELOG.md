@@ -10,18 +10,26 @@ its section below.
 ### Added
 
 - **`import { tweak } from "tangitweak"`**, the imported authoring API that replaces `tt`. It works in every world (network handlers, `onSite`, `onPage`, `onOverlay`, `@tangitweak/test`) and in imported files, with full typings in the Editor and in Folder Sync. `tweak.globalStore(id, …)` takes a file-name-safe ID (lowercase letters, digits, `-`, `_`, `.`); `tweak.tabStore`, `tweak.pageStore` and `tweak.siteStore` take no name.
+- **Tweaks are folders with a `package.json`** that has a `"tangitweak"` block (`displayName`, `icon`, `connect`, `updateURL`, `minTangiTweakVersion`); `name`, `version`, `description`, `author`, `license` and `homepage` are the standard fields. The entry is `main`, else `index.ts`, else `index.tsx`: it owns the enable switch, params and stores, and the modules it imports register handlers, params and stores for it. A store ID can be declared once per tweak ([docs](docs/packages.md#packagejson)).
+- **`dependencies.tangitweak`** sets the oldest TangiTweak a tweak runs on (`^0.40.0-alpha` → 0.40.0 or newer; only `major.minor.patch` is compared). On an older TangiTweak the tweak doesn't run and says which version it needs; the install page warns and auto-updates wait for review.
+- **New Tweak…** in the Explorer creates a folder with `package.json` (its `"tangitweak"` block and `"dependencies": { "tangitweak": "^<version>" }`), `tsconfig.json` (`{ "extends": "tangitweak/tsconfig.json" }`), an example `index.ts` and a `.gitignore`.
+- **Bare imports from `dependencies`**: `import dayjs from "dayjs"` downloads the package the tweak's `package.json` lists from unpkg. npm aliases (`"path": "npm:path-browserify@^1.0.1"`) work in a tweak's dependencies and in a package's own. A package that `require`s a Node.js built-in (`events`, `buffer`, `node:events`, …) it doesn't depend on gets the tweak's own dependency of that name, and the error says which line to add ([docs](docs/scripting.md#packages-from-unpkg)).
+- Folder Sync writes the running build's SDK to `.tangitweak/sdk/tangitweak/` (`package.json`, `index.d.ts`, `tsconfig.json`) and lists it as the root `package.json`'s `tangitweak` devDependency, so a tweak's `tsconfig.json` and its `"tangitweak"` import resolve after `npm install`. A tweak's own `package.json`, `tsconfig.json` and `.gitignore` sync as its data files.
 
 ### Changed
 
-- Handlers are keyed by their registration order per API (`onPage:0`, `onPage:1`, `onPage:0@lib` for a library's), the same in every world, with no source rewriting. Unnamed stores are named after the file that creates them and their position among its `tabStore` / `pageStore` / `siteStore` calls (`main#0`, `lib/state#1`); a store or handler a library function creates belongs to the script that calls it, and keeps its name however many scripts import the library.
+- Handlers are keyed by their registration order per API (`onPage:0`, `onPage:1`, `onPage:0@lib` for a module's), the same in every world, with no source rewriting. Unnamed stores are named after the file that creates them and their position among its `tabStore` / `pageStore` / `siteStore` calls (`index#0`, `lib/state#1`); a store or handler a module creates belongs to the tweak.
 - The built-in samples, new-script templates, quick fixes, completions, hover docs, Problems and log messages all use `tweak`.
-- **Make Package** always makes a bundle: the script goes into its own folder with a `metadata.json`.
-- A single-file script has no description, icon, version or `minTangiTweakVersion`; a bundle's `metadata.json` supplies them.
+- **Install, update and Export Package…** read a tweak's `package.json`: its name, version and `updateURL` (in the `"tangitweak"` block). Installing a `.ts` URL installs the tweak whose `package.json` is next to it, and a folder, gist or zip installs its `package.json`'s tweak.
+- **New Script…** and **Install Script…** are now **New Tweak…** and **Install Tweak…**.
+- A synced folder's root `package.json` and `tsconfig*.json`, and `package-lock.json` / `jsconfig.json` anywhere, are left alone; Folder Sync's typings for downloaded packages skip `.tangitweak/sdk/`.
 
 ### Removed
 
 - **The `tt` global**, with no compatibility shim. A script that still uses it fails to load with an error that says to `import { tweak } from "tangitweak"`.
-- **`tt.metadata(…)`**: metadata comes from a bundle's `metadata.json`.
+- **Single-file scripts and `metadata.json` bundles** no longer load or install. The Editor lists their files in Problems as needing a rewrite and keeps them.
+- **Make Package…**: make a tweak with **New Tweak…** instead.
+- **`tt.metadata(…)`**: metadata comes from the tweak's `package.json`.
 - **`tt.defineParam(…)`**: use `tweak.params({ … })`, which may be called more than once.
 
 ## [0.37.0-alpha] - 2026-11-15
