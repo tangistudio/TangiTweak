@@ -4,7 +4,7 @@
 // loader through the compilers and the page hook, and the typings crawl.
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import "../src/shared/transpile";
-import { compileWithLibs, makeModuleResolver } from "../src/shared/compile";
+import { compileManyWithLibs, compileWithLibs, makeModuleResolver } from "../src/shared/compile";
 import { makeLibRequire, importResolver } from "../src/shared/scriptImports";
 import { errorPosition } from "../src/ui/problems";
 import {
@@ -90,7 +90,11 @@ describe("package URLs", () => {
         expect(classifyNested("@s/p/sub/x", from)).toEqual({ bare: "@s/p", sub: "sub/x" });
         expect(rangeUrl("b", "^1.2.0 || 2", "x.js")).toBe("https://unpkg.com/b@%5E1.2.0%20%7C%7C%202/x.js");
         expect(rangeUrl("b", undefined, "")).toBe("https://unpkg.com/b@latest");
-        for (const r of ["npm:other@1", "workspace:*", "github:a/b", "file:../x", "a/b"]) expect(rangeUrl("b", r, "")).toBeNull();
+        for (const r of ["workspace:*", "github:a/b", "file:../x", "a/b"]) expect(rangeUrl("b", r, "")).toBeNull();
+        // npm: aliases name another package
+        expect(rangeUrl("b", "npm:other@1", "")).toBe("https://unpkg.com/other@1");
+        expect(rangeUrl("events", "npm:events@^3", "")).toBe("https://unpkg.com/events@%5E3");
+        expect(rangeUrl("x", "npm:@s/y", "sub/a.js")).toBe("https://unpkg.com/@s/y@latest/sub/a.js");
         expect(typesPackageName("@scope/x")).toBe("@types/scope__x");
     });
 
@@ -181,13 +185,70 @@ describe("downloading a package's module graph", () => {
         const load = makePackageLoader(p.packagesSnapshot());
         expect(load("https://unpkg.com/builtin-lib@1.0.0")).toEqual({
             ok: true,
-            err: `"fs" is a Node.js built-in — not available in TangiTweak scripts`,
-            err2: `"node:path" is a Node.js built-in — not available in TangiTweak scripts`,
+            err: `"fs" is a Node.js built-in — not available in tweaks`,
+            err2: `"node:path" is a Node.js built-in — not available in tweaks — add "path": "npm:path-browserify" to the tweak's package.json "dependencies" to use npm's browser version`,
         });
         const nf = load("https://unpkg.com/nested-fail@1.0.0");
         expect(nf.ok).toBe(1);
         expect(nf.err).toMatch(/cannot import "\.\/missing\.js" \(required by https:\/\/unpkg\.com\/nested-fail@1\.0\.0\/index\.js\): HTTP 404/);
         expect(unpkg.calls.filter((c) => c.includes("fs"))).toEqual([]);
+    });
+
+    it("a package's npm: alias dependency downloads the package it names", async () => {
+        const p = await bg();
+        await p.ensurePackages([`import a from "https://unpkg.com/alias-user@1.0.0";`]);
+        const pkgs = p.packagesSnapshot();
+        expect(pkgs.modules["https://unpkg.com/alias-user@1.0.0/index.js"].requires.evt).toBe("https://unpkg.com/tiny-events@1.0.0/index.js");
+        expect(makePackageLoader(pkgs)("https://unpkg.com/alias-user@1.0.0")).toEqual({ evt: "tiny-events" });
+    });
+
+    it("a tweak's bare imports come from its package.json; a Node.js built-in a package needs falls back to the tweak's dependencies", async () => {
+        const tweak = (deps: Record<string, string>) => [{ path: "t/package.json", text: JSON.stringify({ name: "t", tangitweak: {}, dependencies: deps }) }];
+        const entry = { name: "t/index", code: `import n from "needs-events";` };
+        let p = await bg();
+        await p.ensurePackages([entry], { data: tweak({ "needs-events": "^1.0.0" }) });
+        let load = makePackageLoader(p.packagesSnapshot());
+        const bare = p.packagesSnapshot().aliases["https://unpkg.com/needs-events@%5E1.0.0"];
+        expect(bare).toBe("https://unpkg.com/needs-events@1.0.0/index.js");
+        // not given: the error says how to add it
+        expect(load(bare).err).toMatch(/^"events" is a Node\.js built-in — not available in tweaks — add "events": "latest" to the tweak's package\.json "dependencies"/);
+        for (const k of Object.keys(store)) delete store[k];
+        p = await bg();
+        const deps = { "needs-events": "^1.0.0", events: "npm:tiny-events@^1.0.0" };
+        await p.ensurePackages([entry], { data: tweak(deps) });
+        load = makePackageLoader(p.packagesSnapshot());
+        expect(load("https://unpkg.com/needs-events@1.0.0/index.js", deps)).toEqual({ events: "tiny-events", nodeEvents: "tiny-events" });
+    });
+
+    it("the built-in fallback is per tweak: two tweaks sharing a package each get their own `events`", async () => {
+        const tweak = (name: string, events: string) => ({ path: `${name}/package.json`, text: JSON.stringify({ name, tangitweak: {}, dependencies: { "needs-events": "^1.0.0", events } }) });
+        const data = [tweak("a", "npm:tiny-events@^1.0.0"), tweak("b", "npm:tiny-events@^2.0.0")];
+        const entries = ["a", "b"].map((t) => ({ name: `${t}/index`, code: `import n from "needs-events";` }));
+        let p = await bg();
+        // one tweak at a time, like two saves: the second still gets its own
+        await p.ensurePackages([entries[0]], { data });
+        await p.ensurePackages(entries, { data });
+        const mod = "https://unpkg.com/needs-events@1.0.0/index.js";
+        const check = (pkgs: ReturnType<typeof p.packagesSnapshot>) => {
+            const load = makePackageLoader(pkgs);
+            expect(load(mod, JSON.parse(data[0].text).dependencies)).toEqual({ events: "tiny-events", nodeEvents: "tiny-events" });
+            expect(load(mod, JSON.parse(data[1].text).dependencies)).toEqual({ events: "tiny-events 2", nodeEvents: "tiny-events 2" });
+            expect(load(mod).err).toMatch(/"events" is a Node\.js built-in/);
+        };
+        check(p.packagesSnapshot());
+        // one compile of both tweaks (one loader): each gets its own
+        const seen: string[] = ((globalThis as any).ttSeenEvents = []);
+        const scripts = ["a", "b"].map((t) => ({ id: t, name: `${t}/index`, code: `import n from "needs-events"; (globalThis as any).ttSeenEvents.push("${t}:" + n.events);` }));
+        compileManyWithLibs(["a", "b"], scripts, {}, data, p.packagesSnapshot());
+        expect(seen).toEqual(["a:tiny-events", "b:tiny-events 2"]);
+        delete (globalThis as any).ttSeenEvents;
+        // stored: a fresh background has both
+        p = await bg();
+        await p.loadPackages();
+        check(p.packagesSnapshot());
+        unpkg.calls.length = 0;
+        expect(await p.ensurePackages(entries, { data })).toBe(false); // nothing left to resolve
+        expect(unpkg.calls.filter((u) => u.includes("events"))).toEqual([]);
     });
 
     it("cycles get partial exports; JSON modules export their data", async () => {
@@ -293,11 +354,11 @@ describe("downloading a package's module graph", () => {
 });
 
 describe("package imports in scripts", () => {
-    const SCRIPT = `import twice from "https://unpkg.com/esm-lib@1.0.0";
+    const SCRIPT = `import { tweak } from "tangitweak"; import twice from "https://unpkg.com/esm-lib@1.0.0";
 import { shout } from "https://unpkg.com/cjs-lib@2.0.0";
 export const run = () => shout(String(twice(21)) + "x");
-tt.params({ n: { type: "number", default: twice(2) } });
-tt.onRequest({ url: "*://a.test/*", strategy: "helper" }, () => {});`;
+tweak.params({ n: { type: "number", default: twice(2) } });
+tweak.onRequest({ url: "*://a.test/*", strategy: "helper" }, () => {});`;
 
     it("compile and run through the background resolver", async () => {
         const p = await bg();
@@ -328,7 +389,7 @@ tt.onRequest({ url: "*://a.test/*", strategy: "helper" }, () => {});`;
             const c = compileWithLibs({ id: "m", name: "main", code }, [], {}, [], pkgs);
             return { error: c.error, line: c.error ? errorPosition(c.error)?.line : undefined };
         };
-        const unpinned = at(`// x\n\nimport d from "https://unpkg.com/dayjs";\ntt.onRequest({ url: "*://a/*", strategy: "helper" }, () => d());`);
+        const unpinned = at(`import { tweak } from "tangitweak"; // x\n\nimport d from "https://unpkg.com/dayjs";\ntweak.onRequest({ url: "*://a/*", strategy: "helper" }, () => d());`);
         expect(unpinned.error).toMatch(/cannot import "https:\/\/unpkg\.com\/dayjs": pin an exact version, e\.g\. https:\/\/unpkg\.com\/dayjs@1\.2\.3/);
         expect(unpinned.line).toBe(3);
         expect(at(`import d from "https://example.com/x.js";\nd();`).error).toMatch(/only pinned https:\/\/unpkg\.com/);
@@ -337,7 +398,7 @@ tt.onRequest({ url: "*://a.test/*", strategy: "helper" }, () => {});`;
             line: 2,
         });
 
-        const missing = `\nimport x from "https://unpkg.com/nope@1.0.0";\ntt.onRequest({ url: "*://a/*", strategy: "helper" }, () => x());`;
+        const missing = `import { tweak } from "tangitweak"; \nimport x from "https://unpkg.com/nope@1.0.0";\ntweak.onRequest({ url: "*://a/*", strategy: "helper" }, () => x());`;
         await p.ensurePackages([missing], { retry: true });
         expect(at(missing)).toEqual({ error: expect.stringMatching(/cannot import "https:\/\/unpkg\.com\/nope@1\.0\.0": download failed \(HTTP 404 — no such package, version or file\)/), line: 2 });
 

@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import { pathDir, seedBundle } from "./bundleHelper";
 
 // in-memory chrome.storage + directory handle (with a backup subfolder)
 const store: Record<string, any> = {};
@@ -21,29 +22,7 @@ const files: F = new Map();
 const backups: F = new Map();
 let clock = 1;
 function fakeDir(m: F, name: string): any {
-    return {
-        name,
-        async *values() {
-            for (const [n, f] of m) yield { kind: "file", name: n, getFile: async () => ({ lastModified: f.t, size: f.text.length, text: async () => f.text }) };
-        },
-        async getFileHandle(n: string, o?: any) {
-            if (!m.has(n)) {
-                if (!o?.create) throw Object.assign(new Error("nf"), { name: "NotFoundError" });
-                m.set(n, { text: "", t: clock++ });
-            }
-            return {
-                getFile: async () => ({ lastModified: m.get(n)!.t, size: m.get(n)!.text.length, text: async () => m.get(n)!.text }),
-                createWritable: async () => ({ write: async (t: string) => m.set(n, { text: t, t: clock++ }), close: async () => {} }),
-            };
-        },
-        async getDirectoryHandle(n: string) {
-            if (n !== ".tangitweak-backup") throw new Error("nf");
-            return fakeDir(backups, n);
-        },
-        async removeEntry(n: string) {
-            m.delete(n);
-        },
-    };
+    return pathDir(m, { tick: () => clock++, dots: true, special: (p) => (p === ".tangitweak-backup" ? fakeDir(backups, p) : undefined) }, "", name);
 }
 const dir = fakeDir(files, "d");
 vi.mock("../src/shared/folderSync", async (orig) => ({ ...(await orig<any>()), loadSavedHandle: async () => dir, saveHandle: async () => {}, clearSavedHandle: async () => {} }));
@@ -54,6 +33,7 @@ const all = async () => (await (await ss()).listScripts()).map((s) => ({ id: s.i
 const scriptFiles = () => [...files.keys()].filter((n) => n.endsWith(".ts") && n !== "tt-api.d.ts").sort();
 
 async function started() {
+    await import("../src/shared/transpile");
     const sync = await import("../src/background/folderSync");
     await sync.startFromStoredHandle({ fresh: true });
     return sync;
@@ -153,18 +133,20 @@ describe("folder sync: the background is the only writer", () => {
         await sync.stop();
     });
 
-    it("renaming in the store renames the script's settings.json entry", async () => {
+    it("moving a tweak's entry to another bundle moves its data folder file", async () => {
         const sync = await started();
         const { saveScript } = await ss();
-        const code = `tt.params({ n: { type: "number", default: 1 } });`;
-        await saveScript({ id: "p", code, name: "old" });
+        const code = `import { tweak } from "tangitweak"; tweak.params({ n: { type: "number", default: 1 } });`;
+        await seedBundle("old");
+        await seedBundle("new");
+        await saveScript({ id: "p", code, name: "old/index" });
         await sync.flush();
-        put("settings.json", JSON.stringify({ scripts: { "old.ts": { n: 9 } } }, null, 2) + "\n");
+        put("old/.tweak/settings.json", JSON.stringify({ enabled: true, params: { n: 9 } }));
         await sync.flush();
-        expect(JSON.parse(files.get("settings.json")!.text)).toEqual({ scripts: { "old.ts": { n: 9 } } });
-        await saveScript({ id: "p", code, name: "new" });
+        await saveScript({ id: "p", code, name: "new/index" });
         await sync.flush();
-        expect(JSON.parse(files.get("settings.json")!.text)).toEqual({ scripts: { "new.ts": { n: 9 } } });
+        expect(JSON.parse(files.get("new/.tweak/settings.json")!.text)).toEqual({ enabled: true, params: { n: 9 } });
+        expect(files.has("old/.tweak/settings.json")).toBe(false);
         await sync.stop();
     });
 });
@@ -263,6 +245,7 @@ describe("folder sync: worker restart keeps the merge base", () => {
         await saveScript({ id: ids.m, code: "// m store", name: "m" }); // store-only change
         put("n.ts", "// n disk"); // disk-only change
         vi.resetModules();
+        await import("../src/shared/transpile");
         sync = await import("../src/background/folderSync");
         await sync.startFromStoredHandle();
         await sync.flush();

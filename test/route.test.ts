@@ -110,10 +110,11 @@ describe("page shim (onPage in the page)", () => {
     const shim = () => makePageShim({ world: "isolated", params: { host: "a.com", n: 3 }, log: () => {}, storage: { get: () => undefined, set: () => undefined } });
 
     it("collects several onPage handlers with routes; network handlers are inert", () => {
-        const { tt, dom } = shim();
-        tt.onRequest({ url: "*", strategy: "helper" }, () => {});
-        tt.onPage({ url: "*://a.com/*", when: "document_idle" }, () => 1);
-        tt.onPage("*://b.com/*", () => 2);
+        const { host, dom } = shim();
+        const tweak = host.module("main.ts").tweak;
+        tweak.onRequest({ url: "*", strategy: "helper" }, () => {});
+        tweak.onPage({ url: "*://a.com/*", when: "document_idle" }, () => 1);
+        tweak.onPage("*://b.com/*", () => 2);
         expect(dom.map((d) => [d.when, d.route.index])).toEqual([
             ["document_idle", 0],
             ["document_end", 1],
@@ -123,10 +124,9 @@ describe("page shim (onPage in the page)", () => {
     });
 
     it("params resolve from the bundle", () => {
-        const { tt } = shim();
-        expect(tt.params({ host: { type: "string" } })).toEqual({ host: "a.com" });
-        expect(tt.defineParam("n", { type: "number" })).toBe(3);
-        expect(() => tt.onPage("*")).toThrow(/second argument/);
+        const tweak = shim().host.module("main.ts").tweak;
+        expect(tweak.params({ host: { type: "string" }, n: { type: "number" } })).toEqual({ host: "a.com", n: 3 });
+        expect(() => tweak.onPage("*")).toThrow(/second argument/);
     });
 });
 

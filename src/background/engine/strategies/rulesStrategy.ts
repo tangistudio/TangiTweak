@@ -15,7 +15,7 @@
  */
 import { routeLabel, routeMatches, type NetKind, type RouteMeta } from "../../../shared/route";
 import { reportSkipped } from "../skipped";
-import { regexCost, ruleErrorLine, substitute, type RuleSpec } from "../../../shared/dnrRules";
+import { regexProblemText, ruleErrorLine, substitute, type RuleSpec } from "../../../shared/dnrRules";
 import { probeScriptRules, type ScriptRules } from "../../../shared/rulesProbe";
 import { strategyUnsupported } from "../../../shared/strategyInfo";
 import { dlogLevel } from "../../../shared/debugLog";
@@ -72,17 +72,8 @@ async function regexProblem(regex: string, pattern: string, requireCapturing: bo
     try {
         const r: any = await regexSupported(regex, requireCapturing);
         if (!r || r.isSupported) return null;
-        if (r.reason === "memoryLimitExceeded") {
-            const { classes, groups, captures } = regexCost(regex);
-            const capturesOnly = requireCapturing && (await regexSupported(regex, false).catch(() => null))?.isSupported;
-            const fix = capturesOnly
-                ? `it fits without captures, so the redirect's ${captures} captures push it over — use fewer ctx.groups in the redirect`
-                : `use fewer groups or wildcards, e.g. one * for a run of segments`;
-            return `url pattern "${pattern}" is too complex for a rule: its regex exceeds the browser's regex memory limit ` +
-                `(2 KB of compiled RE2 program in Chrome; the size grows with character classes and groups, not text length — roughly 10 :name groups or wildcards fit). ` +
-                `Regex: ${regex} (${regex.length} chars, ${classes} character classes, ${groups} groups${requireCapturing ? `, ${captures} captured for the redirect` : ""}) — ${fix}`;
-        }
-        return `url pattern "${pattern}" can't be a rule: the browser's regex engine (RE2) rejects its regex ${regex} (${r.reason || "syntaxError"}) — no lookahead, lookbehind or backreferences in custom groups`;
+        const capturesOnly = r.reason === "memoryLimitExceeded" && requireCapturing && !!(await regexSupported(regex, false).catch(() => null))?.isSupported;
+        return regexProblemText(regex, pattern, r.reason || "syntaxError", requireCapturing, capturesOnly);
     } catch {
         return null;
     }
@@ -244,7 +235,7 @@ export class RulesStrategy {
         return out;
     }
 
-    /** remove every session rule (the extension owns them all, `tt.fetch` bypass rules aside), then add `rules` */
+    /** remove every session rule (the extension owns them all, `tweak.fetch` bypass rules aside), then add `rules` */
     private async replace(rules: any[]): Promise<void> {
         const existing: any[] = ((await dnrCall("getSessionRules")) || []).filter((r: any) => r.id < BYPASS_RULE_BASE);
         if (!existing.length && !rules.length) return;

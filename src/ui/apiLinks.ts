@@ -1,5 +1,5 @@
 /**
- * Clickable `tt` API types in hovers: which declared types a TS signature
+ * Clickable `tweak` API types in hovers: which declared types a TS signature
  * mentions and where they live in tt-api.d.ts (so a hover can show theirs).
  */
 

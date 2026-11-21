@@ -1,14 +1,11 @@
 // Folders + JSON data files: path-aware import resolution, JSON imports,
-// dependants, stacking order, path validation, settings.json keys with `/`
-// and export zips.
+// dependants, stacking order, path validation and export zips.
 import { describe, it, expect } from "vitest";
 import "../src/shared/transpile";
 import { compileWithLibs } from "../src/shared/compile";
 import { dependantsOf, importPath, importResolver, makeLibRequire, missingImports } from "../src/shared/scriptImports";
 import { stackingOrder, allFolders, movedPath, isInFolder } from "../src/shared/folders";
 import { cleanScriptName, dataFilePathProblem, folderPathProblem, scriptFileName, scriptNameProblem } from "../src/shared/scriptName";
-import { parseSettings, planSettings, renderSettings, type ScriptSettingsState } from "../src/shared/settingsJson";
-import { buildSettingsSchema } from "../src/shared/settingsSchema";
 import { errorPosition } from "../src/ui/problems";
 import { buildExportZip, readExportZip } from "../src/shared/exportZip";
 
@@ -36,10 +33,10 @@ describe("import paths", () => {
     });
 });
 
-const LIMIT_SCRIPT = `import limits from "./mock/rate-limits.json";
+const LIMIT_SCRIPT = `import { tweak } from "tangitweak"; import limits from "./mock/rate-limits.json";
 import { max } from "./mock/rate-limits.json";
 export const both = [limits.max, max];
-tt.onRequest({ url: "*://a.test/*", strategy: "helper" }, () => {});`;
+tweak.onRequest({ url: "*://a.test/*", strategy: "helper" }, () => {});`;
 
 describe("JSON data file imports", () => {
     const data = [{ path: "mock/rate-limits.json", text: '{ "max": 7 }' }];
@@ -53,7 +50,7 @@ describe("JSON data file imports", () => {
 
     it("libraries in folders import relative to their own folder", () => {
         const lib = { id: "l", name: "mock/helpers", code: `import d from "./rate-limits.json"; export const max = d.max;` };
-        const main = { id: "m", name: "main", code: `import { max } from "./mock/helpers";\ntt.params({ n: { type: "number", default: max } });` };
+        const main = { id: "m", name: "main", code: `import { tweak } from "tangitweak"; import { max } from "./mock/helpers";\ntweak.params({ n: { type: "number", default: max } });` };
         const c = compileWithLibs(main, [lib], {}, data);
         expect(c.error).toBeNull();
         expect(c.paramDefs?.n.default).toBe(7);
@@ -62,7 +59,7 @@ describe("JSON data file imports", () => {
 
     it("parses fresh per import: a mutation doesn't leak", () => {
         const lib = { id: "l", name: "a", code: `import d from "./mock/rate-limits.json"; d.max = 99; export const x = 1;` };
-        const main = { id: "m", name: "main", code: `import "./a";\nimport d from "./mock/rate-limits.json";\ntt.params({ n: { type: "number", default: d.max } });` };
+        const main = { id: "m", name: "main", code: `import { tweak } from "tangitweak"; import "./a";\nimport d from "./mock/rate-limits.json";\ntweak.params({ n: { type: "number", default: d.max } });` };
         expect(compileWithLibs(main, [lib], {}, data).paramDefs?.n.default).toBe(7);
     });
 
@@ -167,7 +164,13 @@ describe("names are paths", () => {
         expect(dataFilePathProblem("mock/rate-limits")).toMatch(/\.json/);
         expect(dataFilePathProblem("mock/.json")).toMatch(/just/);
         expect(dataFilePathProblem("package.json")).toMatch(/reserved/);
-        expect(dataFilePathProblem("a/tsconfig.base.json")).toMatch(/reserved/);
+        expect(dataFilePathProblem("tsconfig.base.json")).toMatch(/reserved/);
+        expect(dataFilePathProblem("a/package-lock.json")).toMatch(/reserved/);
+        // a tweak's own package.json, tsconfig.json and .gitignore are in its folder
+        expect(dataFilePathProblem("a/package.json")).toBe("");
+        expect(dataFilePathProblem("a/tsconfig.json")).toBe("");
+        expect(dataFilePathProblem("a/.gitignore")).toBe("");
+        expect(dataFilePathProblem(".gitignore")).toMatch(/tweak's folder/);
         expect(dataFilePathProblem("settings.schema.json")).toMatch(/reserved/);
         expect(dataFilePathProblem("a/settings.schema.json")).toBe("");
         expect(folderPathProblem("mock/api")).toBe("");
@@ -178,21 +181,6 @@ describe("names are paths", () => {
         expect(cleanScriptName("mock/a:b")).toBe("mock/ab");
         expect(scriptFileName("mock/helpers")).toBe("mock/helpers.ts");
         expect(scriptFileName("a:b/c?")).toBe("a_b/c_.ts");
-    });
-});
-
-describe("settings.json keys with /", () => {
-    const s: ScriptSettingsState = { name: "mock/helpers.ts", declared: true, enabled: true, defs: { n: { type: "number", default: 1 } } as any, values: {} };
-    const G = { logLevel: "info", logCap: 500 } as any;
-    it("renders, parses and plans a path-named entry", () => {
-        const t = renderSettings(G, [{ ...s, enabled: false, values: { n: 3 } }]);
-        expect(JSON.parse(t)).toEqual({ scripts: { "mock/helpers.ts": { enabled: false, n: 3 } } });
-        expect(parseSettings(t).scripts["mock/helpers.ts"]).toEqual({ enabled: false, n: 3 });
-        expect(planSettings(parseSettings(t), G, [{ ...s, enabled: false, values: { n: 3 } }])).toEqual({ globals: {}, scripts: [] });
-    });
-    it("is a schema property name", () => {
-        const schema: any = buildSettingsSchema([s]);
-        expect(Object.keys(schema.properties.scripts.properties)).toContain("mock/helpers.ts");
     });
 });
 

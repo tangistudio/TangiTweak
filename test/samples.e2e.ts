@@ -14,6 +14,8 @@ import crypto from "node:crypto";
 import { chromium, type Page } from "playwright-core";
 import { resolveBrowser } from "./browserSetup";
 import { SAMPLES } from "../src/ui/samples";
+import { jsxElementAt } from "../src/shared/builtinSpecs";
+import { deleteTweak, saveTweak } from "./e2eTweak";
 
 const EXT_ROOT = path.join(new URL("..", import.meta.url).pathname, "dist-mv3");
 const EXT_ID = crypto.createHash("sha256").update(EXT_ROOT, "utf8").digest("hex").split("").map((c) => String.fromCharCode(parseInt(c, 16) + 97)).join("").slice(0, 32);
@@ -49,7 +51,7 @@ const overlayFrame = (p: Page, sel: string) =>
 
 // sample name → how to see its effect (opens the page itself)
 const VERIFY: Record<string, (p: Page) => Promise<[boolean, string]>> = {
-    "Overlay panel (React + tt.globalStore)": async (p) => {
+    "Overlay panel (React + tweak.globalStore)": async (p) => {
         await open(p, "https://dummyjson.com/");
         const f = await overlayFrame(p, "#tt-fetch");
         if (!f) return [false, "no overlay panel"];
@@ -62,7 +64,7 @@ const VERIFY: Record<string, (p: Page) => Promise<[boolean, string]>> = {
         const real = await fetchUser(mocked);
         return [mocked === "Mocked User" && !!real && real !== "Mocked User", `${mocked} → ${real}`];
     },
-    "Watch and mock the site's fetch (tt.siteStore)": async (p) => {
+    "Watch and mock the site's fetch (tweak.siteStore)": async (p) => {
         await open(p, "https://dummyjson.com/");
         const f = await overlayFrame(p, "#tt-site-fetch");
         if (!f) return [false, "no overlay panel"];
@@ -141,7 +143,7 @@ const VERIFY: Record<string, (p: Page) => Promise<[boolean, string]>> = {
         const b = await hits();
         return [a > 0 && b === a + 1, `${a} → ${b}`];
     },
-    "Parameters (tt.params)": async (p) => {
+    "Parameters (tweak.params)": async (p) => {
         await open(p, "https://postman-echo.com/headers");
         const t = await text(p);
         return [/"x-mode":\s*"dev"/.test(t) && /"x-retries":\s*"3"/.test(t) && /"x-tags":\s*"tangitweak"/.test(t), t.slice(0, 200)];
@@ -190,13 +192,15 @@ try {
     } catch (e) {
         check("welcome: Try it opens the page with the sample running", false, String(e).split("\n")[0]);
     }
-    for (const s of await send({ type: "listScripts" })) await send({ type: "deleteScript", id: s.id });
+    // the tweak Try it added: its whole folder
+    for (const s of await send({ type: "listScripts" })) await send(s.meta.name.includes("/") ? { type: "deleteFolder", path: s.meta.name.split("/")[0] } : { type: "deleteScript", id: s.id });
 
     for (const sample of SAMPLES) {
         const verify = VERIFY[sample.name];
         if (!verify) continue;
         const id = "sample_" + sample.name.replace(/\W+/g, "_");
-        const saved = await send({ type: "saveScript", id, code: sample.code, name: sample.name });
+        // a tweak of its own, as Use this adds it (.tsx when it has JSX)
+        const saved = await saveTweak(send, id, id, sample.code, jsxElementAt(sample.code) >= 0 ? { file: "index.tsx" } : {});
         await new Promise((r) => setTimeout(r, 1500)); // pipeline reload → tiers armed
         const page = await ctx.newPage();
         try {
@@ -206,7 +210,7 @@ try {
             check(sample.name, false, String(e).split("\n")[0]);
         }
         await page.close();
-        await send({ type: "deleteScript", id });
+        await deleteTweak(send, id);
         await new Promise((r) => setTimeout(r, 300));
     }
 } catch (e) {

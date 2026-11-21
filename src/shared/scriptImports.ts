@@ -12,6 +12,7 @@ import { builtinSpec, jsxImportSource, usesJsx } from "./builtinSpecs";
 import { scriptFrame } from "./scriptError";
 import { isUrlSpec, makePackageLoader, PACKAGE_ORIGIN, parsePackageUrl, type PackageModule, type PackageModules, type PackageStatus } from "./packageImports";
 import type { PackageFn } from "./siteCode";
+import { bareImport, dataReader, dependenciesOf } from "./tweakBundle";
 
 const IMPORT_RE = /(?:\bfrom\s*|\bimport\s*\(?\s*|\brequire\s*\(\s*)["']([^"'\n]+)["']/g;
 
@@ -187,18 +188,6 @@ export function isRelativeIconSpec(icon: string | undefined): icon is string {
     return !!s && !/^(data:|https?:\/\/|<svg[\s>])/i.test(s) && !/^[a-z][a-z0-9+.-]*:/i.test(s);
 }
 
-/** literal `icon: "..."` inside a `tt.metadata({ ... })` call */
-export function metadataIconValue(code: string): string | undefined {
-    const m = /\btt\s*\.\s*metadata\s*\(\s*\{[\s\S]*?\bicon\s*:\s*(["'`])([^"'`\n]+)\1/.exec(code);
-    return m ? m[2].trim() : undefined;
-}
-
-/** literal `icon: "..."` inside a `tt.metadata({ ... })` call, if relative, so package export/crawl includes the file */
-export function metadataIconSpec(code: string): string | undefined {
-    const v = metadataIconValue(code);
-    return isRelativeIconSpec(v) ? v : undefined;
-}
-
 /**
  * Resolve a script or package `icon` (`./icon.svg`, `icon.png`, `data:image/...`,
  * `https://...`, or inline `<svg>...</svg>`) against `baseFolder` and `dataFiles`
@@ -329,7 +318,7 @@ export function missingImports<T extends { name: string; code: string; data?: bo
 
 /** a library source, data file or package module shipped to the page (getHookBundle `libs`) */
 export interface ShippedLib {
-    /** a library script's id (when `src` is set), so its `tt.globalStore` / `tt.pageStore` belong to it */
+    /** a library script's id (when `src` is set), so its `tweak.globalStore` / `tweak.pageStore` belong to it */
     id?: string;
     name: string;
     /** a library's runnable JS */
@@ -427,16 +416,22 @@ export function makeLibRequire<L extends ShippedLib>(libs: L[], run: (lib: L, re
         scriptLibs.filter((l) => l.json === undefined).map((l) => l.name),
         scriptLibs.filter((l) => l.json !== undefined).map((l) => l.name)
     );
+    const read = dataReader(scriptLibs.filter((l) => l.json !== undefined).map((l) => ({ path: l.name, text: l.json! })));
     const modules = new Map<string, any>();
     const requireFrom =
         (importer: string) =>
         (spec: string): any => {
             const r = isUrlSpec(spec) ? null : resolve(importer, spec);
             if (!r && builtinSpec(spec)) return builtin ? builtin(spec, importer, loadPackage) : pageBuiltin(spec);
-            if (isUrlSpec(spec)) {
-                if (!opts.onSite) return loadPackage(spec);
+            // a bundle's bare import: its package.json dependency's download
+            const bare = r ? undefined : bareImport(importer, spec, read);
+            if (bare && "error" in bare) throw new Error(bare.error);
+            if (bare || isUrlSpec(spec)) {
+                const deps = bare ? dependenciesOf(importer, read) : undefined;
+                if (bare) spec = bare.url;
+                if (!opts.onSite) return loadPackage(spec, deps);
                 try {
-                    return loadPackage(spec);
+                    return loadPackage(spec, deps);
                 } catch (e: any) {
                     const why = String(e?.message ?? e).replace(/^cannot import "[^"]*": /, "");
                     return unusable(spec, `it doesn't load there (${why}) — a package that needs React works in onPage or onOverlay code`);

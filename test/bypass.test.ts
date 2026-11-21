@@ -23,7 +23,7 @@ describe("bypass registry", () => {
         expect(bypassed({ method: "get", url: "https://api.example.com/x?a=1#frag" })).toBe(true);
         expect(bypassed({ method: "GET", url: "https://api.example.com/x?a=1" })).toBe(false);
         expect(logged).toHaveLength(1);
-        expect(logged[0][1]).toMatch(/\[One\] tt\.fetch bypass: GET/);
+        expect(logged[0][1]).toMatch(/\[One\] tweak\.fetch bypass: GET/);
         expect(logged[0][3]).toBe("s1");
     });
 

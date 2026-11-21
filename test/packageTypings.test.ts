@@ -187,6 +187,22 @@ const bad: string = useSnapshot(s).n;
         }
     });
 
+    it('`import { tweak } from "tangitweak"` resolves in the synced folder (tt-api.d.ts; real tsc)', () => {
+        const dir = mkdtempSync(join(process.cwd(), ".tmp-tweak-typings-"));
+        try {
+            writeFileSync(join(dir, "tsconfig.json"), tsconfigText());
+            writeFileSync(join(dir, "tt-api.d.ts"), readFileSync("src/types/tt-api.d.ts", "utf8"));
+            writeFileSync(join(dir, "c.ts"), `import { tweak } from "tangitweak";\nexport const p = tweak.pageStore({ hits: 0 });\nexport const n: string = p.hits;\n`);
+            const cfg = ts.readConfigFile(join(dir, "tsconfig.json"), ts.sys.readFile);
+            const parsed = ts.parseJsonConfigFileContent(cfg.config, ts.sys, dir);
+            const program = ts.createProgram({ rootNames: parsed.fileNames, options: { ...parsed.options, types: [] } });
+            const diags = ts.getPreEmitDiagnostics(program);
+            expect(diags.map((d) => `${d.file ? d.file.fileName.slice(dir.length + 1) : ""}:${d.start && d.file ? d.file.getLineAndCharacterOfPosition(d.start).line + 1 : ""}:${d.code}`)).toEqual(["c.ts:3:2322"]);
+        } finally {
+            rmSync(dir, { recursive: true, force: true });
+        }
+    });
+
     it("resolve in the synced folder with the generated tsconfig (real tsc)", () => {
         const dir = mkdtempSync(join(process.cwd(), ".tmp-package-typings-"));
         try {

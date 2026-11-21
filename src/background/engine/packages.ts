@@ -5,7 +5,7 @@
  */
 import { compileForStorage } from "../compileHost";
 import { addedCapabilities, capabilitiesOf, type Capabilities } from "../../shared/packageCaps";
-import { compareVersions, highestVersion, MANIFEST_FILE, minTangiTweakProblem, parseManifest, type PackageMetadata } from "../../shared/packageMetadata";
+import { compareVersions, MANIFEST_FILE, minTangiTweakProblem, parseManifest, type PackageMetadata } from "../../shared/packageMetadata";
 import {
     PACKAGES_KEY,
     entryIds,
@@ -28,6 +28,7 @@ import { SCRIPT_FILE_RE, crawl, fetchPackage, filesHash, hashText, isRemote, par
 import { allFolders, isInFolder } from "../../shared/folders";
 import { scriptFileKey, scriptFileName } from "../../shared/scriptName";
 import { log } from "./logs";
+import { getDataFolder } from "../tweakDataFiles";
 import {
     createFolder,
     deleteDataFile,
@@ -72,7 +73,7 @@ export interface Analysis {
     metadata: PackageMetadata;
     /** resolved `<img src>` URL when the script or bundle declares an icon */
     iconUrl?: string;
-    /** a bundle (a metadata.json lists its scripts) */
+    /** a bundle (a package.json with a "tangitweak" block): always, now */
     bundle: boolean;
     caps: Capabilities;
     /** an entry's compile error */
@@ -148,18 +149,29 @@ function layout(version: Pick<PackageVersion, "entries" | "files">, folder: stri
     return items;
 }
 
+/**
+ * a package's files without its data folder (ours, or any dot folder like
+ * the author's `.tweak`): installing never takes or overwrites saved data
+ */
+async function codeFiles(files: Record<string, string>): Promise<Record<string, string>> {
+    const df = await getDataFolder();
+    return Object.fromEntries(Object.entries(files).filter(([rel]) => !/(^|\/)\.[^/]*\//.test(rel) && !rel.startsWith(df + "/")));
+}
+
 /** compile the entries as they would install, against the package's own files and the stored ones */
-async function analyze(version: Pick<FetchedPackage, "entries" | "files">, pkg?: InstalledPackage): Promise<Analysis> {
+async function analyze(fetched: Pick<FetchedPackage, "entries" | "files">, pkg?: InstalledPackage): Promise<Analysis> {
+    const version = { entries: fetched.entries, files: await codeFiles(fetched.files) };
     const { entries, files } = version;
     if (!entries.length) throw new Error("the package has no script to run");
     for (const e of entries) {
         if (files[e] === undefined) throw new Error(`the package has no ${e}`);
         if (!SCRIPT_FILE_RE.test(e)) throw new Error(`${e}: a package's scripts are .ts or .tsx files`);
     }
-    const manifest = files[MANIFEST_FILE] !== undefined ? parseManifest(files[MANIFEST_FILE]) : undefined;
+    if (files[MANIFEST_FILE] === undefined) throw new Error(`the package has no ${MANIFEST_FILE} — a tweak is a folder with a package.json that has a "tangitweak" block`);
+    const manifest = parseManifest(files[MANIFEST_FILE]);
     const [scripts, dataFiles, folders] = await Promise.all([listScripts(), listDataFiles(), listFolders()]);
     const taken = [...scripts.map((s) => s.meta.name), ...dataFiles.map((d) => d.path), ...allFolders(folders, [])];
-    const folder = pkg ? pkg.folder : packageFolder({ entries, files, bundleName: manifest?.name }, taken);
+    const folder = pkg ? pkg.folder : packageFolder({ entries, files, bundleName: manifest.packageName ?? manifest.name }, taken);
     const items = layout(version, folder, pkg, scripts.map((s) => s.meta.name));
     const own = new Set(pkg ? Object.values(pkg.files).map((f) => f.id) : []);
     const idOf = (rel: string) => priorOf(pkg, version, rel)?.id ?? `pkg:${rel}`;
@@ -178,19 +190,9 @@ async function analyze(version: Pick<FetchedPackage, "entries" | "files">, pkg?:
     for (const e of entries) {
         const id = idOf(e);
         const libs = pkgScripts.filter((s) => s.rel !== e).map(({ id, name, code }) => ({ id, name, code }));
-        compiled.push({ e, c: await compileForStorage(files[e], items[e].name, values[id], { id, scripts: [...libs, ...others], paramValues: values, data }) });
+        compiled.push({ e, c: await compileForStorage(files[e], items[e].name, values[id], { id, scripts: [...libs, ...others], paramValues: values, data, anyVersion: true }) });
     }
-    const declared = compiled.map(({ c }) => c.meta.metadata);
-    let metadata: PackageMetadata;
-    if (manifest) {
-        const { scripts: _, ...m } = manifest;
-        const minVer = highestVersion([m.minTangiTweakVersion, ...declared.map((d) => d?.minTangiTweakVersion)]);
-        metadata = {
-            ...m,
-            ...(minVer ? { minTangiTweakVersion: minVer } : {}),
-            connect: [...new Set([...m.connect, ...declared.flatMap((d) => d?.connect ?? [])])],
-        };
-    } else metadata = declared[0] ?? { connect: [] };
+    const { scripts: _, main: _main, packageName: _name, dependencies: _deps, ...metadata } = manifest;
     const failed = compiled.find(({ c }) => c.error);
     const error = failed ? (entries.length > 1 ? `${failed.e}: ${failed.c.error}` : failed.c.error) : null;
     const versionWarning = minTangiTweakProblem(metadata.minTangiTweakVersion);
@@ -199,12 +201,8 @@ async function analyze(version: Pick<FetchedPackage, "entries" | "files">, pkg?:
         metadata.connect,
         Object.keys(files).filter((rel) => !isDataPath(rel)).map((rel) => files[rel])
     );
-    const iconUrl = resolvePackageIcon(
-        { entries, files, metadata },
-        declared.map((d) => d?.icon),
-        dataFiles
-    );
-    return { name: packageName({ entries, metadata }), metadata, ...(iconUrl ? { iconUrl } : {}), bundle: !!manifest, caps, error, ...(versionWarning ? { versionWarning } : {}), folder, items };
+    const iconUrl = resolvePackageIcon({ entries, files, metadata }, dataFiles);
+    return { name: packageName({ entries, metadata }), metadata, ...(iconUrl ? { iconUrl } : {}), bundle: true, caps, error, ...(versionWarning ? { versionWarning } : {}), folder, items };
 }
 
 const normSource = (u: string): string => stripInstallHash(u).replace(/\/+$/, "");
@@ -242,19 +240,17 @@ async function synthesizeFolderTarget(
     const mf = dirData.find((d) => d.path.slice(dir.length + 1).toLowerCase() === MANIFEST_FILE);
     if (mf) {
         try {
-            const parsed = parseManifest(mf.text);
-            const { scripts: sList, ...rest } = parsed;
+            const { scripts: sList, main: _main, packageName: _name, dependencies: _deps, ...rest } = parseManifest(mf.text);
             entries = sList;
             metadata = rest;
             hasValidManifest = true;
         } catch {
-            // malformed local metadata.json: fall back to discovered entries
+            // not a bundle's package.json: fall back to discovered entries
         }
     }
     if (!entries.length) {
         const active = dirScripts.filter((s) => s.meta.active !== false);
         entries = (active.length ? active : dirScripts).map((s) => scriptFileName(s.meta.name.slice(dir.length + 1)));
-        if (dirScripts.length === 1 && dirScripts[0].meta.metadata) metadata = dirScripts[0].meta.metadata;
     }
 
     // Crawl the local package so unimported companion files (README.md, unused
@@ -262,33 +258,25 @@ async function synthesizeFolderTarget(
     const incomingByLower = new Map(Object.keys(incomingFiles).map((r) => [r.toLowerCase(), r]));
     const includedLower = new Set<string>(incomingByLower.keys());
     if (mf) includedLower.add(MANIFEST_FILE);
-    const readLocal = (useManifest: boolean) => async (p: string) => {
-        if (!useManifest && p.toLowerCase() === MANIFEST_FILE) return entries.length ? JSON.stringify({ scripts: entries }) : null;
+    const readLocal = async (p: string) => {
         const k = byLower.get(p.toLowerCase());
         return k !== undefined ? allTexts[k] : null;
     };
     let crawled = false;
-    for (const useManifest of hasValidManifest ? [true, false] : [false]) {
-        if (!useManifest && !entries.length) break;
+    if (hasValidManifest) {
         try {
-            const c = await crawl(MANIFEST_FILE, readLocal(useManifest));
-            for (const p of Object.keys(c.files)) {
-                if (!useManifest && p.toLowerCase() === MANIFEST_FILE) continue;
-                includedLower.add(p.toLowerCase());
-            }
+            const c = await crawl(MANIFEST_FILE, readLocal);
+            for (const p of Object.keys(c.files)) includedLower.add(p.toLowerCase());
+            entries = c.entries;
             crawled = true;
-            break;
         } catch {
-            // e.g. local manifest lists a missing script; retry from discovered entries
+            // e.g. its entry is missing: every file in the folder
         }
     }
     if (!crawled) for (const k of byLower.keys()) includedLower.add(k);
 
     const pkgScripts = dirScripts.filter((s) => includedLower.has(scriptFileName(s.meta.name.slice(dir.length + 1)).toLowerCase()));
     const pkgData = dirData.filter((d) => includedLower.has(d.path.slice(dir.length + 1).toLowerCase()));
-    if (hasValidManifest) {
-        metadata = { ...metadata, connect: [...new Set([...metadata.connect, ...pkgScripts.flatMap((s) => s.meta.metadata?.connect ?? [])])] };
-    }
 
     const files: Record<string, InstalledFile> = {};
     const rawTexts: Record<string, string> = {};
@@ -327,7 +315,7 @@ async function synthesizeFolderTarget(
 }
 
 async function synthesizeScriptTarget(s: Script, entryRel: string): Promise<InstalledPackage> {
-    const metadata: PackageMetadata = s.meta.metadata ?? { connect: [] };
+    const metadata: PackageMetadata = { connect: [] };
     const caps = capabilitiesOf(s.meta.routes ?? [], metadata.connect, [s.code]);
     const now = Date.now();
     return {
@@ -353,12 +341,13 @@ async function findExistingTarget(
     const liveIds = new Set([...scripts.map((s) => s.id), ...dataFiles.map((d) => d.id)]);
     const livePkgs = Object.values(allPkgs).filter((p) => Object.values(p.files).some((f) => liveIds.has(f.id)));
     const manifest = fetched.files[MANIFEST_FILE] !== undefined ? parseManifest(fetched.files[MANIFEST_FILE]) : undefined;
-    const wantFolder = naturalPackageFolder({ entries: fetched.entries, files: fetched.files, bundleName: manifest?.name });
+    const bundleName = manifest?.packageName ?? manifest?.name;
+    const wantFolder = naturalPackageFolder({ entries: fetched.entries, files: fetched.files, bundleName });
     const onlyEntry = fetched.entries[0] ?? "";
     const wantEntry = wantFolder ? "" : storeItemOf("", onlyEntry).name;
     const taken = [...scripts.map((s) => s.meta.name), ...dataFiles.map((d) => d.path), ...allFolders(folders, [])];
     const copyName = wantFolder
-        ? packageFolder({ entries: fetched.entries, files: fetched.files, bundleName: manifest?.name }, taken)
+        ? packageFolder({ entries: fetched.entries, files: fetched.files, bundleName }, taken)
         : uniqueEntryName(wantEntry, scripts.map((s) => s.meta.name));
 
     const srcKey = fetched.source ? normSource(fetched.source) : "";
@@ -391,7 +380,8 @@ async function findExistingTarget(
             const mf = dataFiles.find((df) => df.path.toLowerCase() === `${d.toLowerCase()}/${MANIFEST_FILE}`);
             if (!mf) return false;
             try {
-                return parseManifest(mf.text).name?.toLowerCase() === wantedName;
+                const m = parseManifest(mf.text);
+                return m.name?.toLowerCase() === wantedName || m.packageName?.toLowerCase() === wantedName;
             } catch {
                 return false;
             }
@@ -404,8 +394,7 @@ async function findExistingTarget(
         const rootScripts = scripts.filter((s) => !s.meta.name.includes("/"));
         const hit =
             rootScripts.find((s) => scriptFileKey(s.meta.name) === scriptFileKey(wantEntry)) ??
-            rootScripts.find((s) => scriptFileKey(entryStem(s.meta.name)) === scriptFileKey(entryStem(onlyEntry))) ??
-            (wantedName ? rootScripts.find((s) => s.meta.metadata?.name?.toLowerCase() === wantedName) : undefined);
+            rootScripts.find((s) => scriptFileKey(entryStem(s.meta.name)) === scriptFileKey(entryStem(onlyEntry)));
         if (hit) return { pkg: await synthesizeScriptTarget(hit, onlyEntry), managed: false, copyName };
     }
     return undefined;
@@ -474,7 +463,10 @@ async function writeFiles(version: Pick<PackageVersion, "entries" | "files">, it
     const scriptByKey = new Map(curScripts.map((s) => [scriptFileKey(s.meta.name), s.id]));
     const dataByPath = new Map(curData.map((d) => [d.path.toLowerCase(), d.id]));
     const out: Record<string, InstalledFile> = {};
-    const rels = Object.keys(files).sort((a, b) => rank(a) - rank(b));
+    // `items` leaves out the data folder (see codeFiles)
+    const rels = Object.keys(files)
+        .filter((rel) => items[rel])
+        .sort((a, b) => rank(a) - rank(b));
     function rank(rel: string) {
         return entries.includes(rel) ? 2 : items[rel].kind === "data" ? 0 : 1;
     }
@@ -663,9 +655,10 @@ async function offer(pkg: InstalledPackage, fetched: FetchedPackage, manual: boo
 }
 
 async function sameFiles(pkg: InstalledPackage, fetched: Pick<FetchedPackage, "entries" | "files">): Promise<boolean> {
-    const rels = Object.keys(fetched.files);
+    const files = await codeFiles(fetched.files);
+    const rels = Object.keys(files);
     if (rels.length !== Object.keys(pkg.files).length || fetched.entries.join("\0") !== pkg.entries.join("\0")) return false;
-    for (const rel of rels) if (pkg.files[rel]?.hash !== (await hashText(fetched.files[rel]))) return false;
+    for (const rel of rels) if (pkg.files[rel]?.hash !== (await hashText(files[rel]))) return false;
     return true;
 }
 

@@ -28,10 +28,10 @@ import { isThenable, rulesProblems, siteProblems, toRunnableJs } from "../../sha
 import "../../shared/transpile";
 import { log, noteRan, getScriptErrors, getScriptTypeErrors, getScriptRuleErrors, getScriptRouteWarnings, setScriptRouteWarnings, bodyObservedSince, bodySkipSince, noteBodySkip } from "./logs";
 import { bypassed } from "./bypass";
-import { prepareStores, storeOwner, exportPersistedStores, importPersistedStores } from "./stores";
+import { prepareStores, storeOwner } from "./stores";
 import { ensureBuiltins, needsReact } from "../../shared/builtins";
 import { missedLine } from "../../shared/netTypes";
-import { binaryOptedOut, frameHasHook as pingHook, isLoopbackUrl, missedReason, missedWhat, routeProblem, MISSED_SKIP_TYPES } from "../../shared/missedTap";
+import { binaryOptedOut, debuggerMissedLine, frameHasHook as pingHook, isLoopbackUrl, missedReason, missedWhat, routeProblem, MISSED_SKIP_TYPES } from "../../shared/missedTap";
 import { resolveParamValues } from "../../shared/scriptDef";
 import { shippedLibIds, type ShippedLib } from "../../shared/scriptImports";
 import { effectiveStrategy, hookCanSee, isNetKind, pageWorld, routeLabel, routeMatches, takesBinary, type RouteMeta, type Strategy } from "../../shared/route";
@@ -376,10 +376,9 @@ export function createPipeline(
                 setTimeout(() => {
                     if (cdp.wasPaused(d.tabId, d.url) || renavigated.has(`${d.tabId}|${d.url}`)) return;
                     const what = d.type === "main_frame" ? "page load" : d.type;
-                    const hint = __MV3__ ? "Reload the tab (it stays attached from now on)." : "Reload the tab within a few seconds (the debugger detaches when the page goes idle).";
                     cdpWarned.add(`${d.tabId}|${d.url}`);
                     setTimeout(() => cdpWarned.delete(`${d.tabId}|${d.url}`), 10000);
-                    log(d.tabId, `[debugger] ${what} ${d.url}${d.fromCache ? " (from cache)" : ""} was NOT intercepted by ${names.map((n) => `"${n}"`).join(", ")} — it loaded before the debugger attached to this tab. ${hint}`, "warn");
+                    log(d.tabId, debuggerMissedLine(what, d.url, names, __MV3__, d.fromCache), "warn");
                 }, 300);
             },
             { urls: ["<all_urls>"] }
@@ -655,7 +654,7 @@ export function createPipeline(
             const a = analyzed.get(s.id);
             if (preview !== undefined) {
                 if (s.id !== preview) continue;
-                previewWhy = !a || a.error ? "the script doesn't compile" : "the script has no overlay handler (tt.onOverlay)";
+                previewWhy = !a || a.error ? "the script doesn't compile" : "the script has no overlay handler (tweak.onOverlay)";
             } else if (!s.enabled) continue;
             if (!a || a.error || !a.meta.active) continue;
             let main = false;
@@ -882,8 +881,6 @@ export function createPipeline(
             packageRollback: () => rollbackPackage(msg.id),
             packageSetAutoUpdate: () => setAutoUpdate(msg.id, !!msg.on),
             packageForget: () => forgetPackage(msg.id),
-            exportStores: () => exportPersistedStores(),
-            importStores: () => importPersistedStores(msg.stores),
         };
         if (msg && Object.prototype.hasOwnProperty.call(pkgOp, msg.type)) {
             pkgOp[msg.type]()
@@ -926,7 +923,7 @@ export function createPipeline(
             void (async () => {
                 const url = msg.url || "";
                 const { bundle } = await hookBundle(url, sender.frameId === 0 || sender.frameId === undefined);
-                // MV2: the bridge runs isolated onPage code — its stores' current state (this page's tt.pageStore copies), so they read synchronously
+                // MV2: the bridge runs isolated onPage code — its stores' current state (this page's tweak.pageStore copies), so they read synchronously
                 const tabId = sender.tab?.id;
                 const isoIds = !__MV3__ ? [...new Set([...bundle.isoHandlers.map((h) => h.scriptId), ...shippedLibIds(bundle.isoLibs)])] : [];
                 if (isoIds.length && typeof tabId === "number" && tabId >= 0) {

@@ -1,23 +1,18 @@
 /**
- * settings.json — extension settings and per-script overrides as a minimal,
- * sparse JSON document (like VS Code's settings.json).
+ * settings.json — extension settings as a minimal, sparse JSON document
+ * (like VS Code's settings.json). A tweak's own enable switch and params live
+ * in its data folder (shared/tweakData.ts), not here.
  *
  * Only non-default values are written (`{}` when everything uses defaults).
  * Omitting a key (or clearing the file to `{}`) resets it to its default:
  *
  *   {
  *     "logLevel": "debug",
- *     "scripts": {
- *       "bonsai/index.tsx": {
- *         "enabled": false,
- *         "env": "staging"
- *       }
- *     }
+ *     "dataFolder": ".data"
  *   }
  */
-import { isParamDef, isParamGroup, isValidParamValue, paramDefault, resolveParamValues, type ParamTree } from "./scriptDef";
 import { DEFAULT_TEXT_TYPES } from "./bodyKind";
-import { scriptPathKey } from "./scriptName";
+import { DEFAULT_DATA_FOLDER, dataFolderProblem } from "./tweakData";
 
 export const SETTINGS_FILE = "settings.json";
 export const SCHEMA_FILE = "settings.schema.json";
@@ -44,85 +39,37 @@ export interface GlobalSettings {
     textTypes?: string[];
     /** Network body capture cap in kB; undefined = DEFAULT_BODY_CAP */
     bodyCap?: number;
-}
-
-export interface ScriptSettingsState {
-    name: string;
-    /** registers handlers (libraries have no enabled switch) */
-    declared: boolean;
-    enabled: boolean;
-    defs: ParamTree;
-    /** raw stored values (unresolved) */
-    values: Record<string, any>;
+    /** each tweak's data folder name; undefined = DEFAULT_DATA_FOLDER */
+    dataFolder?: string;
 }
 
 export interface SettingsDoc {
     globals: Partial<GlobalSettings>;
-    scripts: Record<string, Record<string, any>>;
-    /** when set (partial zip import), only these scripts are reconciled; others stay untouched */
-    onlyScripts?: string[];
 }
 
-export interface SettingsPlan {
-    globals: Partial<GlobalSettings>;
-    scripts: { name: string; enabled?: boolean; params: Record<string, any> }[];
-}
+export type SettingsPlan = Partial<GlobalSettings>;
 
 export const isObj = (v: unknown): v is Record<string, any> => !!v && typeof v === "object" && !Array.isArray(v);
 const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
 
-function nonDefaultParams(defs: ParamTree, vals: Record<string, any> | undefined, skipEnabled: boolean): Record<string, any> {
+/** Build the sparse JSON object representing non-default settings. */
+export function buildSettingsObject(g: Partial<GlobalSettings>): Record<string, any> {
     const out: Record<string, any> = {};
-    for (const [k, node] of Object.entries(defs)) {
-        if (skipEnabled && k === "enabled") continue;
-        if (isParamDef(node)) {
-            const v = vals?.[k];
-            if (v !== undefined && !same(v, paramDefault(node))) out[k] = v;
-        } else if (isParamGroup(node)) {
-            const sub = nonDefaultParams(node, vals?.[k], false);
-            if (Object.keys(sub).length) out[k] = sub;
-        }
-    }
-    return out;
-}
-
-/** Build the sparse JSON object representing non-default settings and script overrides. */
-export function buildSettingsObject(g: GlobalSettings, scripts: ScriptSettingsState[]): Record<string, any> {
-    const out: Record<string, any> = {};
-    if (g.logLevel !== DEFAULT_LOG_LEVEL) out.logLevel = g.logLevel;
-    if (g.logCap !== DEFAULT_LOG_CAP) out.logCap = g.logCap;
+    if (g.logLevel !== undefined && g.logLevel !== DEFAULT_LOG_LEVEL) out.logLevel = g.logLevel;
+    if (g.logCap !== undefined && g.logCap !== DEFAULT_LOG_CAP) out.logCap = g.logCap;
     if (g.bodyCap !== undefined && g.bodyCap !== DEFAULT_BODY_CAP) out.bodyCap = g.bodyCap;
     if (g.textTypes !== undefined && !same(g.textTypes, DEFAULT_TEXT_TYPES)) out.textTypes = g.textTypes;
-
-    const scriptsMap: Record<string, Record<string, any>> = {};
-    for (const s of scripts) {
-        const entry: Record<string, any> = {};
-        if (s.declared && !s.enabled) entry.enabled = false;
-        Object.assign(entry, nonDefaultParams(s.defs, resolveParamValues(s.defs, s.values), true));
-        if (Object.keys(entry).length) scriptsMap[s.name] = entry;
-    }
-    if (Object.keys(scriptsMap).length) out.scripts = scriptsMap;
+    if (g.dataFolder !== undefined && g.dataFolder !== DEFAULT_DATA_FOLDER) out.dataFolder = g.dataFolder;
     return out;
 }
 
-export function renderSettings(g: GlobalSettings, scripts: ScriptSettingsState[]): string {
-    return JSON.stringify(buildSettingsObject(g, scripts), null, 2) + "\n";
-}
-
-export function serializeSettingsDoc(doc: SettingsDoc): string {
-    const out: Record<string, any> = {};
-    if (doc.globals.logLevel !== undefined && doc.globals.logLevel !== DEFAULT_LOG_LEVEL) out.logLevel = doc.globals.logLevel;
-    if (doc.globals.logCap !== undefined && doc.globals.logCap !== DEFAULT_LOG_CAP) out.logCap = doc.globals.logCap;
-    if (doc.globals.bodyCap !== undefined && doc.globals.bodyCap !== DEFAULT_BODY_CAP) out.bodyCap = doc.globals.bodyCap;
-    if (doc.globals.textTypes !== undefined && !same(doc.globals.textTypes, DEFAULT_TEXT_TYPES)) out.textTypes = doc.globals.textTypes;
-    const scriptsMap = Object.fromEntries(Object.entries(doc.scripts).filter(([, v]) => isObj(v) && Object.keys(v).length > 0));
-    if (Object.keys(scriptsMap).length) out.scripts = scriptsMap;
-    return JSON.stringify(out, null, 2) + "\n";
+export function renderSettings(g: Partial<GlobalSettings>): string {
+    return JSON.stringify(buildSettingsObject(g), null, 2) + "\n";
 }
 
 /**
  * Parse `settings.json` text; throws on JSON syntax errors or non-object root.
- * Also accepts `{ settings: { ... }, params: { ... } }` objects for compatibility.
+ * Also accepts `{ settings: { ... } }` objects for compatibility.
  */
 export function parseSettings(text: string): SettingsDoc {
     let raw: unknown;
@@ -135,23 +82,13 @@ export function parseSettings(text: string): SettingsDoc {
 
     const gSrc = isObj(raw.settings) ? { ...raw.settings, ...raw } : raw;
     const globals: Partial<GlobalSettings> = {};
-    if ("logLevel" in gSrc) globals.logLevel = gSrc.logLevel;
-    if ("logCap" in gSrc) globals.logCap = gSrc.logCap;
-    if ("textTypes" in gSrc) globals.textTypes = gSrc.textTypes;
-    if ("bodyCap" in gSrc) globals.bodyCap = gSrc.bodyCap;
-
-    const sSrc = isObj(raw.scripts) ? raw.scripts : isObj(raw.params) ? raw.params : {};
-    const scripts: Record<string, Record<string, any>> = {};
-    for (const [n, v] of Object.entries(sSrc)) {
-        if (isObj(v)) scripts[n] = v;
-        else if (v === null) scripts[n] = {};
-    }
-    return { globals, scripts };
+    for (const k of ["logLevel", "logCap", "textTypes", "bodyCap", "dataFolder"] as const) if (k in gSrc) globals[k] = gSrc[k];
+    return { globals };
 }
 
 /** What must change in `current` for storage to match `doc` (invalid values are skipped). */
-export function planSettings(doc: SettingsDoc, current: GlobalSettings, scripts: ScriptSettingsState[]): SettingsPlan {
-    const globals: Partial<GlobalSettings> = {};
+export function planSettings(doc: SettingsDoc, current: GlobalSettings): SettingsPlan {
+    const globals: SettingsPlan = {};
     const lv = doc.globals.logLevel === undefined ? DEFAULT_LOG_LEVEL : doc.globals.logLevel;
     if (typeof lv === "string" && (LOG_LEVELS as readonly string[]).includes(lv) && lv !== current.logLevel) globals.logLevel = lv;
     const cap = doc.globals.logCap === undefined ? DEFAULT_LOG_CAP : doc.globals.logCap;
@@ -160,38 +97,7 @@ export function planSettings(doc: SettingsDoc, current: GlobalSettings, scripts:
     if (isTextTypes(tt) && !same(tt, current.textTypes ?? DEFAULT_TEXT_TYPES)) globals.textTypes = tt;
     const bc = doc.globals.bodyCap === undefined ? DEFAULT_BODY_CAP : doc.globals.bodyCap;
     if (isBodyCap(bc) && bc !== (current.bodyCap ?? DEFAULT_BODY_CAP)) globals.bodyCap = bc;
-
-    const byKey = new Map<string, Record<string, any>>();
-    for (const [k, v] of Object.entries(doc.scripts)) byKey.set(scriptPathKey(k), v);
-    const scope = doc.onlyScripts ? new Set(doc.onlyScripts.map(scriptPathKey)) : null;
-
-    const plans: SettingsPlan["scripts"] = [];
-    for (const s of scripts) {
-        const key = scriptPathKey(s.name);
-        if (scope && !scope.has(key)) continue;
-        const t = byKey.get(key) ?? {};
-        const plan: SettingsPlan["scripts"][number] = { name: s.name, params: {} };
-        if (s.declared) {
-            const e = t.enabled === undefined ? true : t.enabled;
-            if (typeof e === "boolean" && e !== s.enabled) plan.enabled = e;
-        }
-        const cur = resolveParamValues(s.defs, s.values);
-        const planGroup = (defs: ParamTree, docMap: Record<string, any>, curMap: Record<string, any> | undefined, prefix: string, skipEnabled: boolean) => {
-            for (const [k, node] of Object.entries(defs)) {
-                if (skipEnabled && k === "enabled") continue;
-                const full = prefix ? `${prefix}.${k}` : k;
-                if (isParamDef(node)) {
-                    const v = docMap[k] === undefined ? paramDefault(node) : docMap[k];
-                    if (isValidParamValue(node, v) && !same(v, curMap?.[k])) plan.params[full] = v;
-                } else if (isParamGroup(node)) {
-                    const sub = docMap[k];
-                    if (sub === undefined || sub === null) planGroup(node, {}, curMap?.[k], full, false);
-                    else if (isObj(sub)) planGroup(node, sub, curMap?.[k], full, false);
-                }
-            }
-        };
-        planGroup(s.defs, t, cur, "", true);
-        if (plan.enabled !== undefined || Object.keys(plan.params).length) plans.push(plan);
-    }
-    return { globals, scripts: plans };
+    const df = doc.globals.dataFolder === undefined ? DEFAULT_DATA_FOLDER : doc.globals.dataFolder;
+    if (!dataFolderProblem(df) && df !== (current.dataFolder ?? DEFAULT_DATA_FOLDER)) globals.dataFolder = df;
+    return globals;
 }

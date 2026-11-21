@@ -1,5 +1,5 @@
 /**
- * What `tt.params` returns: the script's param values, assignable like a
+ * What `tweak.params` returns: the script's param values, assignable like a
  * valtio proxy. `cfg.on = false` (or `cfg.hosts.push("a")` on a list) is
  * checked against the param's type, seen right away by the code, and saved
  * like a change in the ⚙ panel — the script then hot-reloads with it.
@@ -15,9 +15,9 @@ export interface ParamWriter {
     send(key: string, value: any): void;
 }
 
-export const PARAM_AT_TOP = "tt.params: change a param from a handler, not from the script's top level (each change re-runs the script)";
-export const PARAM_ON_SITE = "tt.params: onSite code can't change params (it runs in the site's world, where the site's code could too) — change them from onPage, onOverlay or network handlers";
-export const PARAM_NOT_HERE = "tt.params: params can't be changed here";
+export const PARAM_AT_TOP = "tweak.params: change a param from a handler, not from the script's top level (each change re-runs the script)";
+export const PARAM_ON_SITE = "tweak.params: onSite code can't change params (it runs in the site's world, where the site's code could too) — change them from onPage, onOverlay or network handlers";
+export const PARAM_NOT_HERE = "tweak.params: params can't be changed here";
 
 const LIST_METHODS = new Set(["push", "pop", "shift", "unshift", "splice", "sort", "reverse", "fill", "copyWithin"]);
 const hasParse = (d: ParamDef) => (d as { parse?: unknown }).parse !== undefined;
@@ -78,14 +78,14 @@ export function paramsProxy(defs: ParamTree, raw: Record<string, any>, unknown: 
         const assign = (k: PropertyKey, v: any): void => {
             const key = String(k);
             const full = pathOf(key);
-            if (!own(group, k)) throw new Error(`tt.params: there's no parameter ${JSON.stringify(full)}${unkObj && own(unkObj, k) ? " here (it comes from an import)" : ""}`);
+            if (!own(group, k)) throw new Error(`tweak.params: there's no parameter ${JSON.stringify(full)}${unkObj && own(unkObj, k) ? " here (it comes from an import)" : ""}`);
             const node = group[key];
-            if (isParamGroup(node)) throw new Error(`tt.params: "${full}" is a parameter section — assign its parameters instead`);
-            if (!isParamDef(node)) throw new Error(`tt.params: there's no parameter ${JSON.stringify(full)}`);
-            if (hasParse(node)) throw new Error(`tt.params: "${full}" has a parse function, so it can't be assigned — change it in ⚙ or settings.json`);
+            if (isParamGroup(node)) throw new Error(`tweak.params: "${full}" is a parameter section — assign its parameters instead`);
+            if (!isParamDef(node)) throw new Error(`tweak.params: there's no parameter ${JSON.stringify(full)}`);
+            if (hasParse(node)) throw new Error(`tweak.params: "${full}" has a parse function, so it can't be assigned — change it in ⚙ or settings.json`);
             const why = w.blocked();
             if (why) throw new Error(why);
-            if (!isValidParamValue(node, v)) throw new TypeError(`tt.params: "${full}" can't be ${shown(v)}: it takes ${expected(node)}`);
+            if (!isValidParamValue(node, v)) throw new TypeError(`tweak.params: "${full}" can't be ${shown(v)}: it takes ${expected(node)}`);
             const next = Array.isArray(v) ? [...v] : v;
             if (JSON.stringify(next) === JSON.stringify(cur[key])) return;
             cur[key] = next;
@@ -117,7 +117,7 @@ export function paramsProxy(defs: ParamTree, raw: Record<string, any>, unknown: 
                         return true;
                     },
                     deleteProperty: () => {
-                        throw new Error(`tt.params: remove items from "${full}" with splice, pop or a new array`);
+                        throw new Error(`tweak.params: remove items from "${full}" with splice, pop or a new array`);
                     },
                     has: (_t, p) => Reflect.has(cur[k], p),
                     ownKeys: () => Reflect.ownKeys(cur[k]),
@@ -138,10 +138,10 @@ export function paramsProxy(defs: ParamTree, raw: Record<string, any>, unknown: 
                 return true;
             },
             deleteProperty: (_t, p) => {
-                throw new Error(`tt.params: a param can't be deleted (${pathOf(String(p))})`);
+                throw new Error(`tweak.params: a param can't be deleted (${pathOf(String(p))})`);
             },
             defineProperty: (_t, p) => {
-                throw new Error(`tt.params: assign a param instead of defining it (${pathOf(String(p))})`);
+                throw new Error(`tweak.params: assign a param instead of defining it (${pathOf(String(p))})`);
             },
         });
     };

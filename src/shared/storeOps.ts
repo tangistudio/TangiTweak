@@ -1,5 +1,5 @@
 /**
- * `tt.globalStore` data helpers shared by the owner (background) and the
+ * `tweak.globalStore` data helpers shared by the owner (background) and the
  * replicas (every context running the script): applying ops, checking
  * paths and values, merging an `initial` into existing data.
  */
@@ -158,7 +158,7 @@ export const jsonBytes = (v: unknown): number => {
     }
 };
 
-/** a store's key among its script's stores: `name`, or `name␀scope` for a `tt.pageStore` / `tt.tabStore` copy */
+/** a store's key among its script's stores: `name`, or `name␀scope` for a `tweak.pageStore` / `tweak.tabStore` copy */
 export const storeKey = (name: string, page?: string): string => (page ? `${name}\u0000${page}` : name);
 
 /** `storeKey`'s parts */
@@ -169,7 +169,7 @@ export function splitStoreKey(key: string): { name: string; page?: string } {
 
 export const TAB_SCOPE_PREFIX = "tab:";
 
-/** scope key for `tabId`'s `tt.tabStore` copies */
+/** scope key for `tabId`'s `tweak.tabStore` copies */
 export const tabScope = (tabId: number): string => `${TAB_SCOPE_PREFIX}${tabId}`;
 
 export const isTabScope = (scope: string | undefined): boolean => !!scope && scope.startsWith(TAB_SCOPE_PREFIX);
@@ -181,7 +181,7 @@ export function tabScopeId(scope: string | undefined): number | undefined {
     return /^\d+$/.test(rest) ? Number(rest) : undefined;
 }
 
-/** the `tt.tabStore` scope key of a page key (`"42.1.abc"` → `"tab:42"`, `"v1.abc"` → `"tab:v1.abc"`) */
+/** the `tweak.tabStore` scope key of a page key (`"42.1.abc"` → `"tab:42"`, `"v1.abc"` → `"tab:v1.abc"`) */
 export function tabScopeOfPage(page: string | null | undefined): string | null {
     if (!page) return null;
     if (page.startsWith(TAB_SCOPE_PREFIX)) return page;
@@ -189,21 +189,21 @@ export function tabScopeOfPage(page: string | null | undefined): string | null {
     return dot > 0 && /^\d+$/.test(page.slice(0, dot)) ? `${TAB_SCOPE_PREFIX}${page.slice(0, dot)}` : `${TAB_SCOPE_PREFIX}${page}`;
 }
 
-/** `tt.globalStore`'s `persist` option, checked */
-export function storePersist(name: string, opts: unknown): StorePersist {
+/** `tweak.globalStore`'s (`api`'s) `persist` option, checked */
+export function storePersist(name: string, opts: unknown, api = "tweak.globalStore"): StorePersist {
     if (opts === undefined || opts === null) return true;
-    if (typeof opts !== "object") throw new TypeError(`tt.globalStore("${name}"): the third argument must be an options object`);
+    if (typeof opts !== "object") throw new TypeError(`${api}("${name}"): the third argument must be an options object`);
     const p = (opts as { persist?: unknown }).persist;
     if (p === undefined) return true;
     if (typeof p === "boolean") return p;
     if (Array.isArray(p) && p.every((k) => typeof k === "string")) return [...p];
-    throw new TypeError(`tt.globalStore("${name}"): persist must be true, false or a list of top-level field names`);
+    throw new TypeError(`${api}("${name}"): persist must be true, false or a list of top-level field names`);
 }
 
-/** a store's name and initial value, checked; `names` (name → the API that took it) holds each name once per script */
+/** a store's name and initial value, checked; `names` (name → the API that took it) holds each name once per tweak */
 export function claimStoreName(names: Map<string, string>, api: string, name: unknown, initial: unknown): asserts name is string {
     if (typeof name !== "string" || !name) throw new TypeError(`${api}: the first argument must be the store's name (a non-empty string)`);
     const had = names.get(name);
-    if (had) throw new Error(`${api}("${name}"): this script already has a store named "${name}" (${had}) — a name may be used once per script (call ${api} at top level and share the result)`);
+    if (had) throw new Error(`${api}("${name}"): this tweak already has a store named "${name}" (${had}) — a name may be used once per tweak (call ${api} at top level and share the result)`);
     if (!initial || typeof initial !== "object" || Array.isArray(initial)) throw new TypeError(`${api}("${name}"): initial must be an object`);
 }

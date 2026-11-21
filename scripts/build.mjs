@@ -14,7 +14,7 @@
  */
 import { rolldown } from "rolldown";
 import { cp, mkdir, rm, writeFile, copyFile, readFile, readdir } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { execSync } from "node:child_process";
 import path from "node:path";
 
@@ -67,7 +67,7 @@ function entriesFor(dist, mv3) {
             output: { file: path.join(dist, "builtins-react.js"), format: "iife" },
         },
         {
-            // a script's overlay frame (tt.onOverlay), framed into pages by the bridge
+            // a script's overlay frame (tweak.onOverlay), framed into pages by the bridge
             input: path.join(root, "src/overlay/overlayRuntime.ts"),
             output: { file: path.join(dist, "overlay.js"), format: "iife" },
         },
@@ -252,10 +252,216 @@ async function copyStatic(dist, mv3) {
     // typings of the built-in modules (src/shared/builtins.ts), which the Editor loads when a script imports one
     await writeFile(path.join(dist, "lib/builtin-types.json"), JSON.stringify(await builtinTypes()));
 
+    // the SDK (dist-sdk/), which Folder Sync writes to .tangitweak/sdk/tangitweak/
+    await writeFile(path.join(dist, "lib/tangitweak-sdk.json"), await getSdkJson());
+
     console.log("static assets copied →", path.relative(root, dist));
 }
 
+/**
+ * The SDK npm package `tangitweak` (docs/research/tweak-architecture-plan.md §8):
+ *
+ *   index.js / index.d.ts  `import { tweak } from "tangitweak"` outside the browser
+ *                          (src/testing/standalone.ts) and the API typings
+ *   test.js / test.d.ts    `tangitweak/test` (src/testing/test.ts)
+ *   tsconfig.json          what a tweak's own tsconfig.json extends
+ *   types/                 test.d.ts's declarations, and the built-ins' typings
+ *                          (valtio, React) that tsconfig.json maps them to
+ *
+ * Folder Sync writes the same files to .tangitweak/sdk/tangitweak/ (§8.3):
+ * lib/tangitweak-sdk.json holds them, except types/builtin/, which it
+ * already has from lib/builtin-types.json.
+ */
+const SDK_DIR = path.join(root, "dist-sdk");
+/** the SDK's runtime dependencies */
+const SDK_DEPENDENCIES = ["re2js", "happy-dom", "@testing-library/dom"];
+/**
+ * Shared with the tweak's own tests and code: the test file's copies. All
+ * optional, so a tweak that only type-checks (its package.json lists
+ * `tangitweak`) doesn't install them; `tangitweak/test` needs all but
+ * @testing-library/react, which only `renderTweak` needs.
+ */
+const SDK_PEERS = ["react", "react-dom", "valtio", "vitest", "@testing-library/react"];
+/** peers whose range isn't package.json's: the fixtures need `test.extend` and `onTestFinished` (2.1.4); tested with Vitest 3 and 4 */
+const SDK_PEER_RANGES = { vitest: "^2.1.4 || ^3.0.0 || ^4.0.0" };
+const SDK_EXPORTS = {
+    ".": { types: "./index.d.ts", default: "./index.js" },
+    "./test": { types: "./test.d.ts", default: "./test.js" },
+    "./tsconfig.json": "./tsconfig.json",
+    "./package.json": "./package.json",
+};
+
+let cachedSdkJson = null;
+
+/** src/shared/generatedFiles.ts, bundled to run here: Folder Sync's generator of the SDK's index.d.ts and tsconfig.json */
+async function generatedFilesModule() {
+    const bundle = await rolldown({ input: path.join(root, "src/shared/generatedFiles.ts"), platform: "node", logLevel: "silent" });
+    const { output } = await bundle.generate({ format: "esm" });
+    await bundle.close();
+    return import(`data:text/javascript;base64,${Buffer.from(output[0].code).toString("base64")}`);
+}
+
+/** test.d.ts's declarations (path under src/ → text), with `.js` on relative imports so any moduleResolution finds them */
+async function sdkDeclarations() {
+    const ts = (await import("typescript")).default;
+    const cfg = ts.getParsedCommandLineOfConfigFile(path.join(root, "tsconfig.json"), {}, { ...ts.sys, onUnRecoverableConfigFileDiagnostic: () => {} });
+    const src = path.join(root, "src");
+    const program = ts.createProgram([path.join(src, "testing/test.ts"), path.join(src, "types/globals.d.ts"), path.join(src, "types/tt-api.d.ts")], {
+        ...cfg.options,
+        noEmit: false,
+        declaration: true,
+        emitDeclarationOnly: true,
+        rootDir: src,
+        outDir: src,
+    });
+    const emitted = new Map();
+    const res = program.emit(undefined, (file, text) => emitted.set(path.relative(src, file).split(path.sep).join("/"), text));
+    if (res.emitSkipped || res.diagnostics.length) {
+        throw new Error(`SDK typings: ${ts.formatDiagnostics(res.diagnostics, { getCanonicalFileName: (f) => f, getCurrentDirectory: () => root, getNewLine: () => "\n" })}`);
+    }
+    const out = new Map();
+    const queue = ["testing/test.d.ts"];
+    while (queue.length) {
+        const file = queue.pop();
+        if (out.has(file)) continue;
+        const text = emitted.get(file).replace(/((?:from|import)\s*\(?\s*")(\.\.?\/[^"]*)(")/g, (all, pre, spec, post) => {
+            const base = path.posix.join(path.posix.dirname(file), spec);
+            const hit = [".d.ts", "/index.d.ts"].map((ext) => base + ext).find((f) => emitted.has(f));
+            if (!hit) throw new Error(`SDK typings: ${file} imports ${spec}, which has no declarations`);
+            queue.push(hit);
+            return pre + spec + (hit.endsWith("/index.d.ts") ? "/index.js" : ".js") + post;
+        });
+        out.set(file, text);
+    }
+    return out;
+}
+
+/** every file under `dir` (relative path, "/"-separated) → text */
+async function readTree(dir) {
+    const out = {};
+    for (const f of await readdir(dir, { recursive: true, withFileTypes: true })) {
+        if (!f.isFile()) continue;
+        const full = path.join(f.parentPath, f.name);
+        out[path.relative(dir, full).split(path.sep).join("/")] = await readFile(full, "utf8");
+    }
+    return out;
+}
+
+/** Build the SDK into dist-sdk/ (the npm package) and return lib/tangitweak-sdk.json's text. */
+async function buildSdk() {
+    await rm(SDK_DIR, { recursive: true, force: true });
+    await mkdir(SDK_DIR, { recursive: true });
+    const rootPkg = JSON.parse(await readFile(path.join(root, "package.json"), "utf8"));
+    const manifest = JSON.parse(await readFile(path.join(root, "manifest.json"), "utf8"));
+    const version = manifest.version_name || manifest.version;
+    const rangeOf = (name) => {
+        const range = rootPkg.dependencies?.[name] ?? rootPkg.devDependencies?.[name];
+        if (!range) throw new Error(`SDK: ${name} isn't in package.json`);
+        return range;
+    };
+
+    const external = [...SDK_DEPENDENCIES, ...SDK_PEERS];
+    const bundle = await rolldown({
+        input: { index: path.join(root, "src/testing/standalone.ts"), test: path.join(root, "src/testing/test.ts") },
+        platform: "node",
+        external: (id) => id.startsWith("node:") || external.some((name) => id === name || id.startsWith(`${name}/`)),
+        transform: {
+            define: {
+                __MV3__: "false",
+                __NO_EVAL__: "false",
+                __COMMIT__: JSON.stringify(gitCommit()),
+                __HOOK_SRC__: JSON.stringify(""),
+                __BUILD_TIME__: JSON.stringify(new Date().toISOString()),
+            },
+            jsx: { runtime: "automatic", importSource: "react" },
+        },
+    });
+    await bundle.write({
+        dir: SDK_DIR,
+        format: "esm",
+        entryFileNames: "[name].js",
+        chunkFileNames: "lib/[name].js",
+        // a chunk of its own so it runs before react-dom loads (which looks for a DOM once): imports of external packages go first
+        codeSplitting: { groups: [{ name: "dom", test: /src[\\/]testing[\\/]dom\.ts$/ }] },
+    });
+    await bundle.close();
+
+    for (const [file, text] of await sdkDeclarations()) {
+        await mkdir(path.dirname(path.join(SDK_DIR, "types", file)), { recursive: true });
+        await writeFile(path.join(SDK_DIR, "types", file), text);
+    }
+    await writeFile(path.join(SDK_DIR, "test.d.ts"), `export * from "./types/testing/test.js";\n`);
+
+    const { sdkFiles } = await generatedFilesModule();
+    for (const [file, text] of Object.entries(sdkFiles(await readFile(path.join(root, "src/types/tt-api.d.ts"), "utf8")))) {
+        await writeFile(path.join(SDK_DIR, file), text);
+    }
+    await copyFile(path.join(root, "src/testing/README.md"), path.join(SDK_DIR, "README.md"));
+    await copyFile(path.join(root, "LICENSE"), path.join(SDK_DIR, "LICENSE"));
+
+    const pkg = {
+        name: "tangitweak",
+        version,
+        description: "Write, type-check and test TangiTweak tweaks: the `tweak` API and `tangitweak/test`.",
+        license: rootPkg.license,
+        repository: rootPkg.repository,
+        homepage: "https://github.com/tangistudio/TangiTweak#readme",
+        keywords: ["tangitweak", "browser-extension", "userscript", "testing", "vitest"],
+        type: "module",
+        types: "./index.d.ts",
+        exports: SDK_EXPORTS,
+        files: ["*.js", "*.d.ts", "lib/", "types/", "tsconfig.json"],
+        engines: { node: ">=23.8.0" },
+        dependencies: Object.fromEntries(SDK_DEPENDENCIES.map((name) => [name, rangeOf(name)])),
+        peerDependencies: Object.fromEntries(SDK_PEERS.map((name) => [name, SDK_PEER_RANGES[name] ?? rangeOf(name)])),
+        peerDependenciesMeta: Object.fromEntries(SDK_PEERS.map((name) => [name, { optional: true }])),
+    };
+    await writeFile(path.join(SDK_DIR, "package.json"), JSON.stringify(pkg, null, 2) + "\n");
+
+    const files = await readTree(SDK_DIR);
+    // the built-ins' typings, which the tsconfig maps valtio and React to (Folder Sync writes them from lib/builtin-types.json)
+    for (const [p, text] of Object.entries(await builtinTypes())) {
+        const file = path.join(SDK_DIR, "types/builtin", p);
+        await mkdir(path.dirname(file), { recursive: true });
+        await writeFile(file, text);
+    }
+    await checkSdkPackage();
+
+    const jsonText = JSON.stringify(files);
+    const bytes = Buffer.byteLength(jsonText);
+    if (bytes > 5 * 1024 * 1024) throw new Error(`tangitweak-sdk.json exceeds AMO's 5 MB per-file limit (${bytes} bytes)`);
+    console.log(`built dist-sdk/ + tangitweak-sdk.json (${(bytes / 1024).toFixed(0)} KB)`);
+    cachedSdkJson = jsonText;
+    return jsonText;
+}
+
+/** what `npm pack` puts in the SDK has every file its exports name, with the typings they need */
+async function checkSdkPackage() {
+    const [{ files }] = JSON.parse(execSync("npm pack --dry-run --json --ignore-scripts", { cwd: SDK_DIR, stdio: ["ignore", "pipe", "pipe"] }).toString());
+    const packed = new Set(files.map((f) => f.path));
+    const targets = Object.values(SDK_EXPORTS).flatMap((t) => (typeof t === "string" ? [t] : Object.values(t)));
+    const missing = targets.map((t) => t.replace(/^\.\//, "")).filter((t) => !packed.has(t));
+    if (missing.length) throw new Error(`SDK package: exports name files npm pack leaves out: ${missing.join(", ")}`);
+    const has = (file, re) => packed.has(file) && re.test(readFileSync(path.join(SDK_DIR, file), "utf8"));
+    const checks = [
+        ["index.d.ts", /declare module "tangitweak"/],
+        ["types/testing/test.d.ts", /export declare function createTweakTest\b/],
+        ["types/testing/test.d.ts", /export declare function renderTweak\b/],
+        ["types/builtin/@types/react/index.d.ts", /\S/],
+        ["types/builtin/valtio/esm/index.d.mts", /\S/],
+    ];
+    const bad = checks.filter(([file, re]) => !has(file, re)).map(([file]) => file);
+    if (bad.length) throw new Error(`SDK package: typings missing from ${[...new Set(bad)].join(", ")}`);
+    console.log(`dist-sdk/: npm pack has ${files.length} files, exports and typings present`);
+}
+
+async function getSdkJson() {
+    return cachedSdkJson ?? buildSdk();
+}
+
 async function buildAll() {
+    cachedSdkJson = null;
+    await buildSdk();
     // MV2: dist/ (existing output, unchanged behavior) + dist-mv2/ copy
     await rm(path.join(root, "dist"), { recursive: true, force: true });
     await mkdir(path.join(root, "dist"), { recursive: true });

@@ -9,11 +9,13 @@ import { saveTheme, type ThemePref } from "../theme";
 import { aboutText } from "../about";
 import { cleanFolderPath, copyPathHint, hostOs, type LaunchMode } from "../bundle";
 import { BODY_CAP_KEY, BODY_CAP_MAX, BODY_CAP_MIN, DEFAULT_BODY_CAP } from "../../shared/settingsJson";
+import { DEFAULT_DATA_FOLDER } from "../../shared/tweakData";
 import { Overlay, useControl, useFlash } from "./controls";
 
 const SECTIONS: [string, string][] = [
     ["settings-sec-appearance", "Appearance"],
     ["settings-sec-folder", "Synced folder"],
+    ["settings-sec-tweaks", "Tweaks"],
     ["settings-sec-io", "Import / Export"],
     ["settings-sec-helper", "Local helper"],
     ["settings-sec-logging", "Logging"],
@@ -63,13 +65,14 @@ export function SettingsDialog() {
                     <div className="dialog-body settings-body" ref={body} onScroll={onScroll}>
                         <Appearance />
                         <SyncedFolder />
+                        <Tweaks />
                         <section id="settings-sec-io" className="settings-section">
                             <h3>Import / Export</h3>
                             <div className="setting">
                                 <span className="setting-label">Zip</span>
                                 <div className="setting-control">
                                     <div id="settings-io-row" className="setting-inline"><button id="btn-export" onClick={() => actions.exportBundle()}>Export…</button>{" "}<button id="btn-import" onClick={() => actions.importBundle()}>Import…</button></div>
-                                    <p className="setting-help">Export any subset of scripts, data files, folders, settings.json and stores.json to a zip laid out like the scripts folder. Import such a zip (or a zipped scripts folder), picking which of its files to take, or a single .ts/.tsx/.js file.</p>
+                                    <p className="setting-help">Export any subset of scripts, data files, folders and settings.json to a zip laid out like the scripts folder; each tweak's settings and saved data (its data folder) only if you include them. Import such a zip (or a zipped scripts folder), picking which of its files to take, or a single .ts/.tsx/.js file.</p>
                                 </div>
                             </div>
                         </section>
@@ -297,6 +300,31 @@ function Logging() {
                 <div className="setting-control">
                     <label className="setting-check"><input id="settings-log-badge" ref={badge} type="checkbox" /> Count current problems in the Problems view, errors/warnings in the Log view and observed/modified requests in the Network view, in the status bar</label>
                     <p className="setting-help">Problems counts follow the scripts — they drop as problems are fixed. Log and Network counts stay until the view is cleared. Network counts start once the Network view has been opened (that starts recording). Observed: a script handler ran on the request without changing it; modified: a handler changed it.</p>
+                </div>
+            </div>
+        </section>
+    );
+}
+
+function Tweaks() {
+    const { dataFolder } = useSnapshot(settings);
+    const [error, setError] = useState("");
+    const input = useControl<HTMLInputElement>(dataFolder, (el) => {
+        const name = el.value.trim();
+        void actions.setDataFolder(name).then((e) => {
+            setError(e);
+            if (e) el.value = settings.dataFolder;
+        });
+    });
+    return (
+        <section id="settings-sec-tweaks" className="settings-section">
+            <h3>Tweaks</h3>
+            <div className="setting">
+                <label className="setting-label" htmlFor="settings-data-folder">Tweak data folder</label>
+                <div className="setting-control">
+                    <input id="settings-data-folder" ref={input} type="text" spellCheck={false} placeholder={DEFAULT_DATA_FOLDER} />
+                    {error && <p id="settings-data-folder-error" className="setting-help error">{error}</p>}
+                    <p className="setting-help">The folder inside each tweak that holds its settings (enable switch, changed params) and saved stores. It isn't code: builds, tests and exports leave it out. Renaming it renames it in every tweak.</p>
                 </div>
             </div>
         </section>

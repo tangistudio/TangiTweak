@@ -1,8 +1,8 @@
 /**
  * Utility scripts (no handlers at top level) with params: their params are
- * editable (popup / settings.json), and a param value may make them
+ * editable (popup / the data folder's settings.json), and a param value may make them
  * register handlers — changing it must turn the utility into a script
- * (stored meta, settings.json `enabled`, reload) and back.
+ * (stored meta, reload) and back.
  */
 import { describe, it, expect, beforeEach } from "vitest";
 import "../src/shared/transpile";
@@ -24,37 +24,39 @@ const store: Record<string, any> = {};
 
 const { saveScript, listScripts, setParamValue, loadAllParamValues, onScriptsChanged } = await import("../src/background/engine/scriptStore");
 const { analyzeScripts } = await import("../src/background/compileHost");
-const { currentSettingsState, applySettingsText } = await import("../src/background/settingsFile");
+const { tweakDataFiles, applyTweakDataFile } = await import("../src/background/tweakDataFiles");
+const { seedBundle } = await import("./bundleHelper");
 
-const GATE = `
-const p = tt.params({ on: { type: "boolean", default: false, description: "intercept" } });
+const GATE = `import { tweak } from "tangitweak"; 
+const p = tweak.params({ on: { type: "boolean", default: false, description: "intercept" } });
 export const helper = () => p.on;
-if (p.on) tt.onRequest({ url: "*://example.com/*", strategy: "helper" }, () => ({ block: true }));
+if (p.on) tweak.onRequest({ url: "*://example.com/*", strategy: "helper" }, () => ({ block: true }));
 `;
 
 const get = async (id: string) => (await listScripts()).find((s) => s.id === id)!;
 
-describe("library scripts with params", () => {
-    beforeEach(() => {
+describe("tweaks whose params gate their handlers", () => {
+    beforeEach(async () => {
         for (const k of Object.keys(store)) delete store[k];
+        await seedBundle("gate");
     });
 
     it("stores a param-gated library as a library with its paramDefs", async () => {
-        const s = await saveScript({ id: "g", name: "gate.tangitweak", code: GATE });
+        const s = await saveScript({ id: "g", name: "gate/index", code: GATE });
         expect(s.error).toBeNull();
         expect(s.meta.active).toBe(false);
         expect(s.paramDefs?.on).toMatchObject({ type: "boolean" });
     });
 
     it("changing the param turns it into a script and back (stored meta)", async () => {
-        await saveScript({ id: "g", name: "gate.tangitweak", code: GATE });
+        await saveScript({ id: "g", name: "gate/index", code: GATE });
         let notified = 0;
         const off = onScriptsChanged(() => notified++);
         await setParamValue("g", "on", true);
         let s = await get("g");
         expect(s.meta.active).toBe(true);
         expect(s.meta.match).toEqual(["*://example.com/*"]);
-        expect(s.meta.name).toBe("gate.tangitweak");
+        expect(s.meta.name).toBe("gate/index");
         expect(notified).toBeGreaterThan(0);
         // a later save (e.g. setEnabled) compiles with the stored values too
         s = await saveScript({ id: "g", code: GATE });
@@ -67,29 +69,34 @@ describe("library scripts with params", () => {
     });
 
     it("the reload-time analyze uses the param values", async () => {
-        await saveScript({ id: "g", name: "gate.tangitweak", code: GATE });
-        const scripts = [{ id: "g", name: "gate.tangitweak", code: GATE, updatedAt: 1 }];
+        await saveScript({ id: "g", name: "gate/index", code: GATE });
+        const scripts = [{ id: "g", name: "gate/index", code: GATE, updatedAt: 1 }];
         expect((await analyzeScripts(scripts, {})).get("g")!.meta.active).toBe(false);
         expect((await analyzeScripts(scripts, { g: { on: true } })).get("g")!.meta.active).toBe(true);
     });
 
-    it("settings.json applies the library's params and gains `enabled` once it's a script", async () => {
-        await saveScript({ id: "g", name: "gate.tangitweak", code: GATE });
-        let st = await currentSettingsState();
-        expect(st.scripts.find((x) => x.name === "gate.tangitweak.ts")).toMatchObject({ declared: false, defs: { on: { type: "boolean" } } });
-        expect((await applySettingsText(JSON.stringify({ scripts: { "gate.tangitweak.ts": { on: true } } }))).error).toBeUndefined();
+    it("its data folder settings.json applies the params that turn it into a script", async () => {
+        await saveScript({ id: "g", name: "gate/index", code: GATE });
+        expect((await get("g")).meta.active).toBe(false);
+        expect((await applyTweakDataFile("gate/.tweak/settings.json", JSON.stringify({ params: { on: true } }))).error).toBeUndefined();
         expect((await loadAllParamValues()).g).toEqual({ on: true });
         expect((await get("g")).meta.active).toBe(true);
-        st = await currentSettingsState();
-        expect(st.scripts.find((x) => x.name === "gate.tangitweak.ts")?.declared).toBe(true);
+        expect(JSON.parse((await tweakDataFiles())[0].text)).toEqual({ enabled: true, params: { on: true } });
     });
 
-    it("importers keep working when a library flips (its exports stay importable)", async () => {
-        await saveScript({ id: "g", name: "gate.tangitweak", code: GATE });
-        const m = await saveScript({ id: "m", name: "main.tangitweak", code: `import { helper } from "./gate.tangitweak";\ntt.onRequest({ url: "*://a.test/*", strategy: "helper" }, () => { helper(); });` });
+    it("a module's params and registrations belong to the entry that imports it", async () => {
+        await seedBundle("t");
+        const g = await saveScript({ id: "g2", name: "t/gate", code: GATE });
+        const m = await saveScript({ id: "m", name: "t/index", code: `import { tweak } from "tangitweak";\nimport { helper } from "./gate";\ntweak.onRequest({ url: "*://a.test/*", strategy: "helper" }, () => { helper(); });` });
+        expect(g.meta.active).toBe(false);
+        expect(g.paramDefs).toEqual({});
         expect(m.error).toBeNull();
         expect(m.meta.active).toBe(true);
-        await setParamValue("g", "on", true);
-        expect((await get("m")).error).toBeNull();
+        expect(m.paramDefs?.on).toMatchObject({ type: "boolean" });
+        expect(m.meta.match).toEqual(["*://a.test/*"]);
+        await setParamValue("m", "on", true);
+        const after = await get("m");
+        expect(after.error).toBeNull();
+        expect(after.meta.match).toEqual(["*://example.com/*", "*://a.test/*"]);
     });
 });

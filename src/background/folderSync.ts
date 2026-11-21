@@ -23,22 +23,27 @@
  *    scripts (named by their path), `.json`/`.svg` files data files (`ownedData`
  *    is their `owned`). Dot-entries, node_modules and tooling config JSON
  *    are skipped. `known` keys are relative paths; a folder's ends in "/".
+ *  - each tweak's data folder (shared/tweakData.ts) mirrors its settings
+ *    and saved stores: `dataSigs` tracks those files apart from `known`,
+ *    and the scan skips the folder.
  */
 import { computeEvents, contentHash, loadSavedHandle, clearSavedHandle, saveHandle, type FileSig } from "../shared/folderSync";
 import {
-    saveScript, deleteScript, newId, listScripts, onScriptsChanged, onScriptRenamed, type Script,
+    saveScript, deleteScript, newId, listScripts, onScriptsChanged, type Script,
     listDataFiles, saveDataFile, deleteDataFile, newDataFileId, listFolders, createFolder, deleteFolder,
 } from "./engine/scriptStore";
 import type { DataFile } from "./engine/dataFiles";
-import { getSettingsText, applySettingsText, currentSettingsState, settingsTextParses } from "./settingsFile";
-import { getStoresText, applyStoresText, storesTextParses, STORES_FILE } from "./storesFile";
+import { getSettingsText, applySettingsText, settingsTextParses } from "./settingsFile";
+import { applyTweakDataFile, getDataFolder, tweakDataFiles, tweakTargets } from "./tweakDataFiles";
+import { DATA_FOLDER_KEY, STORES_DIR, TWEAK_SETTINGS_FILE } from "../shared/tweakData";
+import { isBundlePackageJson, MANIFEST_FILE } from "../shared/packageMetadata";
 import { storeOwner } from "./engine/stores";
 import { SETTINGS_FILE, SCHEMA_FILE } from "../shared/settingsJson";
 import { settingsSchemaJson } from "../shared/settingsSchema";
-import { API_DTS_FILE, BUILTIN_TYPINGS_ROOT, ESLINT_CONFIG_FILE, ESLINT_PLUGIN_FILE, PACKAGE_JSON_FILE, TSCONFIG_FILE, apiDtsText, eslintConfigText, eslintPluginText, packageJsonText, tsconfigText } from "../shared/generatedFiles";
+import { API_DTS_FILE, BUILTIN_TYPINGS_ROOT, ESLINT_CONFIG_FILE, ESLINT_PLUGIN_FILE, OLD_TEST_PKG_ROOT, PACKAGE_JSON_FILE, SDK_BUILTIN_TYPINGS, SDK_ROOT, TSCONFIG_FILE, apiDtsText, eslintConfigText, eslintPluginText, packageJsonText, tsconfigText } from "../shared/generatedFiles";
 import { broadcastToUi } from "./engine/logs";
 import { dlogLevel } from "../shared/debugLog";
-import { folderPathProblem, isConfigJsonPath, scriptFileName, scriptNameFromFile } from "../shared/scriptName";
+import { folderPathProblem, isConfigJsonPath, isGitignorePath, isScriptFilePath, scriptFileName, scriptNameFromFile } from "../shared/scriptName";
 import { bytesToImageDataUrl, imageDataUrlToBytes, isDataSpec, isImageDataPath } from "../shared/scriptImports";
 import { ancestorFolders, isInFolder } from "../shared/folders";
 import { PACKAGE_TYPINGS_KEY, TYPINGS_ROOT, type StoredTypings } from "../shared/packageImports";
@@ -50,8 +55,8 @@ function canonicalFileName(name: string): string {
     return scriptFileName(name);
 }
 
-const isScriptFile = (name: string) => (name.endsWith(".ts") && !name.endsWith(".d.ts")) || name.endsWith(".tsx");
-const isDataFile = (path: string) => isDataSpec(path) && !isConfigJsonPath(path) && !baseName(path).startsWith(".");
+const isScriptFile = isScriptFilePath;
+const isDataFile = (path: string) => (isDataSpec(path) && !isConfigJsonPath(path) && !baseName(path).startsWith(".")) || (isGitignorePath(path) && path.includes("/"));
 const isSyncedFile = (path: string) => isScriptFile(path) || isDataFile(path);
 const baseName = (path: string) => path.slice(path.lastIndexOf("/") + 1);
 /** `known` signature of a folder (they only appear and vanish) */
@@ -70,6 +75,8 @@ let ownedData = new Map<string, Owned>();
 let timer: ReturnType<typeof setInterval> | null = null;
 let displayPath = "";
 let settingsHooked = false;
+/** each tweak's data folder name (the "Tweak data folder" setting) */
+let dataFolder = ".tweak";
 
 // ---- one operation at a time ----
 let chain: Promise<unknown> = Promise.resolve();
@@ -185,7 +192,8 @@ async function scanFolder(handle: any = dirHandle, prefix = "", seen = new Map<s
     for await (const entry of handle.values()) {
         const path = prefix + entry.name;
         if (entry.kind === "directory") {
-            if (entry.name.startsWith(".") || entry.name === "node_modules" || folderPathProblem(path)) continue;
+            if (entry.name.startsWith(".") || entry.name === "node_modules" || entry.name === "__tests__" || folderPathProblem(path)) continue;
+            if (entry.name === dataFolder && (await isTweakDir(handle))) continue;
             seen.set(path + "/", FOLDER_SIG);
             await scanFolder(entry, path + "/", seen);
             continue;
@@ -202,6 +210,15 @@ async function scanFolder(handle: any = dirHandle, prefix = "", seen = new Map<s
         seen.set(path, { lastModified: f.lastModified, size: f.size });
     }
     return seen;
+}
+
+/** a folder with a tweak's package.json (its data folder isn't scanned) */
+async function isTweakDir(handle: any): Promise<boolean> {
+    try {
+        return isBundlePackageJson(await (await (await handle.getFileHandle(MANIFEST_FILE)).getFile()).text());
+    } catch {
+        return false;
+    }
 }
 
 /** the folder holding `path` (relative to `root`); missing folders are created when `create` */
@@ -251,7 +268,7 @@ async function statFile(fileName: string): Promise<FileSig | null> {
  * files the resulting signature (and its folders) go into `known` right
  * away, so the next poll doesn't see our own write as an external edit.
  */
-async function writeFile(fileName: string, content: string): Promise<boolean> {
+async function writeFile(fileName: string, content: string, track = true): Promise<boolean> {
     if (!dirHandle) return false;
     try {
         const fh = await fileHandleAt(fileName, true);
@@ -263,7 +280,7 @@ async function writeFile(fileName: string, content: string): Promise<boolean> {
         dlogLevel("sync", "warn", `Folder sync: writing "${fileName}" failed: ${e?.message || e}`);
         return false;
     }
-    if (isSyncedFile(fileName)) {
+    if (track && isSyncedFile(fileName)) {
         const sig = await statFile(fileName);
         if (sig) known.set(fileName, sig);
         for (const f of ancestorFolders(fileName)) known.set(f + "/", FOLDER_SIG);
@@ -958,11 +975,7 @@ export async function previewStoredHandle(): Promise<FolderPreview | null> {
 
 let settingsSig: FileSig | null = null;
 let settingsBroken = false;
-let storesSig: FileSig | null = null;
-let storesBroken = false;
-let applyingDiskStores = false;
 let reconcileTimer: ReturnType<typeof setTimeout> | null = null;
-let storesTimer: ReturnType<typeof setTimeout> | null = null;
 
 async function readSettingsFile(): Promise<{ text: string; sig: FileSig } | null> {
     try {
@@ -973,87 +986,184 @@ async function readSettingsFile(): Promise<{ text: string; sig: FileSig } | null
     }
 }
 
-async function readStoresFile(): Promise<{ text: string; sig: FileSig } | null> {
-    try {
-        const f = await (await dirHandle.getFileHandle(STORES_FILE)).getFile();
-        return { text: await f.text(), sig: { lastModified: f.lastModified, size: f.size } };
-    } catch {
-        return null;
+// ---- tweak data folders: rendered from storage, mirrored both ways ----
+
+/** data folder files as we last wrote or read them */
+let dataSigs = new Map<string, FileSig>();
+/** data folder files on disk that are invalid: not applied, and not overwritten until fixed */
+let dataBroken = new Set<string>();
+let dataTimer: ReturnType<typeof setTimeout> | null = null;
+let applyingDiskData = false;
+
+const sameSig = (a: FileSig | null | undefined, b: FileSig | null | undefined): boolean => !!a && !!b && a.lastModified === b.lastModified && a.size === b.size;
+
+/** the settings.json and stores/*.json files in each bundle's data folder on disk */
+async function scanDataFolders(roots: readonly string[]): Promise<Map<string, FileSig>> {
+    const out = new Map<string, FileSig>();
+    for (const root of roots) {
+        let dir: any;
+        try {
+            dir = await parentDir(`${root}${dataFolder}/x`);
+        } catch {
+            continue;
+        }
+        const add = async (path: string, fh: any) => {
+            try {
+                const f = await fh.getFile();
+                out.set(path, { lastModified: f.lastModified, size: f.size });
+            } catch {}
+        };
+        try {
+            await add(`${root}${dataFolder}/${TWEAK_SETTINGS_FILE}`, await dir.getFileHandle(TWEAK_SETTINGS_FILE));
+        } catch {}
+        try {
+            for await (const e of (await dir.getDirectoryHandle(STORES_DIR)).values())
+                if (e.kind === "file" && e.name.endsWith(".json")) await add(`${root}${dataFolder}/${STORES_DIR}/${e.name}`, e);
+        } catch {}
     }
+    return out;
+}
+
+/** apply a data folder file read from disk (null: deleted there) */
+async function applyDiskData(path: string, text: string | null): Promise<boolean> {
+    applyingDiskData = true;
+    let error: string | undefined;
+    try {
+        ({ error } = await applyTweakDataFile(path, text));
+    } finally {
+        applyingDiskData = false;
+    }
+    if (error) {
+        if (!dataBroken.has(path)) dlogLevel("sync", "warn", `Folder sync: ${path} has an error and was not applied: ${error}`);
+        dataBroken.add(path);
+        return false;
+    }
+    dataBroken.delete(path);
+    signal("receiving");
+    dlogLevel("sync", "info", text === null ? `Folder sync: ${path} was deleted — back to its defaults` : `Folder sync: ${path} changed on disk — applied`);
+    return true;
+}
+
+/** data folder files on disk → storage: new and edited files apply, a deleted one resets what it held */
+async function pollTweakData(): Promise<void> {
+    if (!dirHandle) return;
+    const roots = (await tweakTargets()).map((t) => t.root);
+    const inTweak = (p: string) => roots.some((r) => p.startsWith(`${r}${dataFolder}/`));
+    const seen = await scanDataFolders(roots);
+    let applied = false;
+    for (const [path, sig] of seen) {
+        if (sameSig(dataSigs.get(path), sig)) continue;
+        dataSigs.set(path, sig);
+        const text = await readTextOrNull(path);
+        if (text !== null && (await applyDiskData(path, text))) applied = true;
+    }
+    for (const path of [...dataSigs.keys()]) {
+        if (seen.has(path)) continue;
+        dataSigs.delete(path);
+        dataBroken.delete(path);
+        // its tweak is gone or moved: nothing to reset
+        if (inTweak(path) && (await applyDiskData(path, null))) applied = true;
+    }
+    if (applied) await writingAs("receiving", () => exportTweakDataNow());
 }
 
 /**
- * StoreOwner → stores.json on disk. Only creates the file once at least one
- * script has persisted globalStore data (or `forceWrite` is set, e.g. saved in
- * the Editor or opened in VS Code); once present on disk, keeps it synced.
- * A file on disk with a JSON error is never clobbered until fixed.
+ * storage → each tweak's data folder. A file edited on disk since we last
+ * saw it is left for the poll; an invalid one isn't overwritten until it's
+ * fixed (or `force`: saved in the Editor). Files of stores no longer saved
+ * (or of tweaks gone) are removed.
  */
-async function exportStores(forceWrite = false): Promise<void> {
+async function exportTweakDataNow(force = false): Promise<void> {
     if (!dirHandle) return;
     try {
-        const existing = await readStoresFile();
-        if (!forceWrite && existing && (!storesSig || existing.sig.lastModified !== storesSig.lastModified || existing.sig.size !== storesSig.size)) {
-            await pollStores();
-            return;
+        const want = new Map((await tweakDataFiles()).map((f) => [f.path, f.text]));
+        for (const [path, text] of want) {
+            const sig = await statFile(path);
+            const tracked = dataSigs.get(path);
+            if (!force && ((sig && !sameSig(sig, tracked)) || dataBroken.has(path))) continue;
+            if (!sig || (await readTextOrNull(path)) !== text) {
+                if (!(await writeFile(path, text, false))) continue;
+            }
+            dataBroken.delete(path);
+            const now = await statFile(path);
+            if (now) dataSigs.set(path, now);
         }
-        if (!forceWrite && existing && !storesTextParses(existing.text)) {
-            if (!storesBroken) dlogLevel("sync", "warn", `Folder sync: ${STORES_FILE} on disk has a JSON error — it is not overwritten until it is fixed`);
-            storesBroken = true;
-            return;
+        const dirs = new Set<string>();
+        for (const [path, tracked] of [...dataSigs]) {
+            if (want.has(path)) continue;
+            if (sameSig(await statFile(path), tracked)) await removeFile(path);
+            dataSigs.delete(path);
+            dataBroken.delete(path);
+            dirs.add(path.slice(0, path.lastIndexOf("/")));
         }
-        storesBroken = false;
-        const text = await getStoresText();
-        if (!existing && !forceWrite && text === "{}\n") return;
-        if (existing?.text !== text) {
-            await writeFile(STORES_FILE, text);
-            storesSig = (await readStoresFile())?.sig ?? null;
-        } else if (existing) {
-            storesSig = existing.sig;
+        // emptied stores/ and data folders go (removeEntry refuses one that isn't empty)
+        for (const d of [...dirs].sort((a, b) => b.length - a.length)) {
+            for (const dir of d.endsWith(`/${STORES_DIR}`) ? [d, d.slice(0, -STORES_DIR.length - 1)] : [d]) {
+                try {
+                    await (await parentDir(dir)).removeEntry(baseName(dir));
+                } catch {}
+            }
         }
     } catch (e: any) {
-        dlogLevel("sync", "warn", `Folder sync: writing ${STORES_FILE} failed: ${e?.message || e}`);
+        dlogLevel("sync", "warn", `Folder sync: writing the tweaks' ${dataFolder} folders failed: ${e?.message || e}`);
     }
 }
 
-export function exportStoresFrom(_text: string): Promise<void> {
-    return serial(() => exportStores(true));
+/** a data folder file was saved in the Editor: write the data folders now */
+export function exportTweakData(): Promise<void> {
+    return serial(() => exportTweakDataNow(true));
 }
 
-export function ensureStoresFile(): Promise<void> {
-    return serial(() => exportStores(true));
-}
-
-function scheduleStoresExport(): void {
-    if (!dirHandle || applyingDiskStores) return;
-    if (storesTimer) clearTimeout(storesTimer);
-    storesTimer = setTimeout(() => {
-        storesTimer = null;
-        void serial(() => exportStores());
+function scheduleDataExport(): void {
+    if (!dirHandle || applyingDiskData) return;
+    if (dataTimer) clearTimeout(dataTimer);
+    dataTimer = setTimeout(() => {
+        dataTimer = null;
+        void serial(() => exportTweakDataNow());
     }, 500);
 }
 
-/** stores.json on disk → StoreOwner, when changed externally */
-async function pollStores(): Promise<void> {
-    const f = await readStoresFile();
-    if (!f) return;
-    if (storesSig && storesSig.lastModified === f.sig.lastModified && storesSig.size === f.sig.size) return;
-    storesSig = f.sig;
-    applyingDiskStores = true;
-    let error: string | undefined;
-    try {
-        ({ error } = await applyStoresText(f.text));
-    } finally {
-        applyingDiskStores = false;
-    }
-    if (error) {
-        storesBroken = true;
-        dlogLevel("sync", "warn", `Folder sync: ${STORES_FILE} has an error and was not applied: ${error}`);
+/** the "Tweak data folder" setting changed: move every tweak's data folder on disk */
+async function renameDataFolders(to: string): Promise<void> {
+    const from = dataFolder;
+    if (!dirHandle || from === to) {
+        dataFolder = to;
         return;
     }
-    storesBroken = false;
-    signal("receiving");
-    dlogLevel("sync", "info", `Folder sync: ${STORES_FILE} changed on disk — reloaded persisted stores`);
-    await writingAs("receiving", () => exportStores(true));
+    const copy = async (src: any, dst: any) => {
+        for await (const e of src.values()) {
+            if (e.kind === "directory") await copy(e, await dst.getDirectoryHandle(e.name, { create: true }));
+            else {
+                const w = await (await dst.getFileHandle(e.name, { create: true })).createWritable();
+                await w.write(await (await e.getFile()).arrayBuffer());
+                await w.close();
+            }
+        }
+    };
+    for (const { root } of await tweakTargets()) {
+        let src: any;
+        try {
+            src = await parentDir(`${root}${from}/x`);
+        } catch {
+            continue;
+        }
+        if (await folderExists(`${root}${to}`)) {
+            dlogLevel("sync", "warn", `Folder sync: ${root}${to} already exists — ${root}${from} stays where it is (move its files yourself)`);
+            continue;
+        }
+        try {
+            await copy(src, await parentDir(`${root}${to}/x`, true));
+            await (await parentDir(`${root}${from}`)).removeEntry(from, { recursive: true });
+            signal(writeKind);
+        } catch (e: any) {
+            dlogLevel("sync", "warn", `Folder sync: moving ${root}${from} to ${root}${to} failed: ${e?.message || e}`);
+        }
+    }
+    dataFolder = to;
+    dataSigs = new Map();
+    dataBroken = new Set();
+    await pollTweakData();
+    await exportTweakDataNow();
 }
 
 /**
@@ -1095,12 +1205,72 @@ async function ensureFile(fileName: string, content: string): Promise<void> {
 
 /** the JSON schema the settings.json modeline points at (VS Code YAML extension) */
 async function ensureSchemaFile(): Promise<void> {
-    await ensureFile(SCHEMA_FILE, settingsSchemaJson((await currentSettingsState()).scripts));
+    await ensureFile(SCHEMA_FILE, settingsSchemaJson());
+}
+
+async function ensurePackageJsonFile(): Promise<void> {
+    if (!dirHandle) return;
+    const raw = await readTextOrNull(PACKAGE_JSON_FILE);
+    let existing: Record<string, any> | undefined;
+    if (raw && raw.trim()) {
+        try {
+            const parsed = JSON.parse(raw);
+            if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+                dlogLevel("sync", "warn", `Folder sync: ${PACKAGE_JSON_FILE} on disk is not a JSON object — leaving it untouched`);
+                return;
+            }
+            existing = parsed;
+        } catch {
+            dlogLevel("sync", "warn", `Folder sync: ${PACKAGE_JSON_FILE} on disk has a JSON error — leaving it untouched until fixed`);
+            return;
+        }
+    }
+    const next = packageJsonText(existing);
+    if (raw !== next) await writeFile(PACKAGE_JSON_FILE, next);
+}
+
+/** the SDK this build ships (lib/tangitweak-sdk.json), read once */
+let sdkBundle: Promise<Record<string, string>> | null = null;
+function sdkBundleFiles(): Promise<Record<string, string>> {
+    if (typeof chrome === "undefined" || !chrome.runtime?.getURL) return Promise.resolve({});
+    sdkBundle ??= Promise.resolve()
+        .then(() => fetch(chrome.runtime.getURL("lib/tangitweak-sdk.json")))
+        .then((r) => {
+            if (!r.ok) throw new Error(`HTTP ${r.status}`);
+            return r.json();
+        })
+        .catch((e: any) => {
+            sdkBundle = null;
+            dlogLevel("sync", "warn", `Folder sync: could not read the SDK's files: ${e?.message || e}`);
+            return {};
+        });
+    return sdkBundle;
 }
 
 /**
- * Typings + tsconfig for VS Code, refreshed on every start — so an
- * extension update (new APIs) reaches an already-synced folder.
+ * The SDK under SDK_ROOT, the same files as the npm package `tangitweak`
+ * (its typings of the built-ins come from lib/builtin-types.json). The
+ * `@tangitweak/test` harness that came before it goes.
+ */
+async function ensureSdkFiles(): Promise<void> {
+    if (!dirHandle) return;
+    const files = Object.entries(await sdkBundleFiles());
+    if (!files.length) return;
+    for (const [p, text] of Object.entries(await builtinTypingFiles())) files.push([`${SDK_BUILTIN_TYPINGS}/${p}`, text]);
+    for (const [p, text] of files) {
+        const path = `${SDK_ROOT}/${p}`;
+        if ((await readTextOrNull(path)) !== text) await writeFile(path, text);
+    }
+    try {
+        await (await parentDir(OLD_TEST_PKG_ROOT)).removeEntry(baseName(OLD_TEST_PKG_ROOT), { recursive: true });
+    } catch {
+        // not there
+    }
+}
+
+/**
+ * Typings + tsconfig + the SDK for VS Code, refreshed on every
+ * start — so an extension update (new APIs) reaches an already-synced folder.
  */
 async function ensureSupportFiles(): Promise<void> {
     try {
@@ -1113,10 +1283,11 @@ async function ensureSupportFiles(): Promise<void> {
         dlogLevel("sync", "warn", `Folder sync: could not refresh ${API_DTS_FILE}: ${e?.message || e}`);
     }
     await ensureFile(TSCONFIG_FILE, tsconfigText());
-    await ensureFile(PACKAGE_JSON_FILE, packageJsonText());
+    await ensurePackageJsonFile();
     await ensureFile(ESLINT_CONFIG_FILE, eslintConfigText());
     await ensureEslintPlugin();
     await ensureSchemaFile();
+    await ensureSdkFiles();
     await ensurePackageTypingsFiles();
 }
 
@@ -1211,24 +1382,25 @@ function scheduleReconcile(): void {
     reconcileTimer = setTimeout(() => {
         reconcileTimer = null;
         void serial(async () => {
+            // first: a tweak deleted or moved takes its data folder files along, so its old folder can go
+            await exportTweakDataNow();
             await reconcileToDisk();
             await exportSettings();
-            await exportStores();
         });
     }, 300);
 }
 
 /** Test seam: run pending storage → disk work and one poll now. */
 export async function flush(): Promise<void> {
-    if (reconcileTimer || storesTimer) {
+    if (reconcileTimer || dataTimer) {
         if (reconcileTimer) clearTimeout(reconcileTimer);
-        if (storesTimer) clearTimeout(storesTimer);
+        if (dataTimer) clearTimeout(dataTimer);
         reconcileTimer = null;
-        storesTimer = null;
+        dataTimer = null;
         await serial(async () => {
+            await exportTweakDataNow();
             await reconcileToDisk();
             await exportSettings();
-            await exportStores();
         });
     }
     await pollOnce();
@@ -1267,12 +1439,13 @@ async function pollNow(): Promise<void> {
     if (!dirHandle) return;
     try {
         await pollSettings();
-        await pollStores();
         const seen = await scanFolder();
         const events = computeEvents(known, seen);
         known = seen;
         await applyEvents(events);
         if (events.changed.length || events.added.length || events.removed.length) await persistState();
+        // after the scan: a tweak folder moved on disk has its scripts moved by now, and its data folder with it
+        await pollTweakData();
         lastPollError = "";
     } catch (e: any) {
         if (e?.name === "NotAllowedError" || e?.name === "SecurityError") {
@@ -1390,42 +1563,40 @@ async function start(opts: { fresh?: boolean }): Promise<boolean> {
     if (!settingsHooked) {
         settingsHooked = true;
         onScriptsChanged(scheduleReconcile);
-        onScriptRenamed(() => {
-            if (dirHandle) void serial(async () => {
-                await exportSettings();
-                await exportStores();
-            });
-        });
         storeOwner.onChange((_s, _name, page) => {
-            if (!page) scheduleStoresExport();
+            if (!page) scheduleDataExport();
         });
         chrome.storage.onChanged.addListener((c) => {
-            if (c.resLogLevel || c.resLogCap || c.resTextTypes || c.resBodyCap) scheduleReconcile();
+            if (c.resLogLevel || c.resLogCap || c.resTextTypes || c.resBodyCap || c[DATA_FOLDER_KEY]) scheduleReconcile();
+            if (c[DATA_FOLDER_KEY] && dirHandle) void serial(async () => renameDataFolders(await getDataFolder()));
             if (c[PACKAGE_TYPINGS_KEY] && dirHandle) void serial(ensurePackageTypingsFiles);
         });
     }
     settingsSig = null;
     settingsBroken = false;
-    storesSig = null;
-    storesBroken = false;
+    dataFolder = await getDataFolder();
+    dataSigs = new Map();
+    dataBroken = new Set();
     if (await readSettingsFile()) await pollSettings();
     else await exportSettings();
-    if (await readStoresFile()) await pollStores();
-    else await exportStores();
+    // the data folders on disk win; then the missing files are written
+    await pollTweakData();
+    await exportTweakDataNow();
     await ensureSupportFiles();
     broadcastStatus();
     dlogLevel("sync", "info", `Folder sync: watching "${displayPath}"`);
     return true;
 }
 
-/** Stop timers only, keeping persisted state — as when the worker dies (test seam). */
+/** Stop timers and detach handle, keeping persisted state — as when the worker dies (test seam). */
 export function halt(): void {
+    dirHandle = null;
     if (timer) clearInterval(timer);
     timer = null;
     if (reconcileTimer) clearTimeout(reconcileTimer);
     reconcileTimer = null;
-    if (storesTimer) clearTimeout(storesTimer);
-    storesTimer = null;
+    if (dataTimer) clearTimeout(dataTimer);
+    dataTimer = null;
     stopKeepAlive();
 }
 
@@ -1438,12 +1609,14 @@ async function stopNow(): Promise<void> {
     timer = null;
     if (reconcileTimer) clearTimeout(reconcileTimer);
     reconcileTimer = null;
-    if (storesTimer) clearTimeout(storesTimer);
-    storesTimer = null;
+    if (dataTimer) clearTimeout(dataTimer);
+    dataTimer = null;
     dirHandle = null;
     paused = false;
     displayPath = "";
     settingsSig = null;
+    dataSigs = new Map();
+    dataBroken = new Set();
     known = new Map();
     owned = new Map();
     ownedData = new Map();

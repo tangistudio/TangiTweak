@@ -16,13 +16,13 @@ describe("hover markdown", () => {
         const [, body] = quickInfoToMarkdown({
             displayParts: [t("x")],
             tags: [
-                { name: "example", text: [t("tt.log(1);\ntt.log(2);")] },
+                { name: "example", text: [t("tweak.log(1);\ntweak.log(2);")] },
                 { name: "example", text: [t("```js\nfoo()\n```")] },
                 { name: "example", text: [t("<caption>Cap</caption>\nbar()")] },
             ],
         });
         expect(body).toBe(
-            "*@example*  \n```typescript\ntt.log(1);\ntt.log(2);\n```\n\n" +
+            "*@example*  \n```typescript\ntweak.log(1);\ntweak.log(2);\n```\n\n" +
                 "*@example*  \n```js\nfoo()\n```\n\n" +
                 "*@example*  \nCap\n```typescript\nbar()\n```"
         );

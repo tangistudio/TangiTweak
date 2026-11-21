@@ -1,6 +1,6 @@
 /**
- * Installed packages: a script, or a bundle of scripts (a folder with a
- * metadata.json listing them), with the files they import — installed from
+ * Installed packages: a tweak bundle (a folder whose package.json has a
+ * "tangitweak" block), its entry and the files it imports — installed from
  * a URL, a GitHub repository, a gist or a local folder and recorded so it
  * updates, all files together, from where it came from. The files themselves are ordinary
  * scripts and data files; the record maps each package file to the store
@@ -10,7 +10,7 @@
 import type { Capabilities } from "./packageCaps";
 import { MANIFEST_FILE, parseManifest, type PackageMetadata } from "./packageMetadata";
 import { ENTRY_FILE_RE } from "./packageSource";
-import { folderOf, isDataSpec, metadataIconValue, resolveIconSrc } from "./scriptImports";
+import { folderOf, isDataSpec, resolveIconSrc } from "./scriptImports";
 import { scriptFileKey } from "./scriptName";
 
 export const PACKAGES_KEY = "wtPackages"; // the extension's former name (Wiretrick): kept so stored data survives
@@ -18,7 +18,7 @@ export const PACKAGES_KEY = "wtPackages"; // the extension's former name (Wiretr
 /** what a package is at one revision: its files' texts */
 export interface PackageVersion {
     revision: string;
-    /** its entries' paths among `files` (a bundle: its metadata.json's scripts) */
+    /** its entry's path among `files` (package.json's `main`, else index.ts / index.tsx) */
     entries: string[];
     files: Record<string, string>;
     metadata: PackageMetadata;
@@ -81,7 +81,7 @@ export function storeItemOf(folder: string, rel: string): { kind: "script" | "da
 /** an entry's file name without `.tangitweak.ts` */
 export const entryStem = (entry: string): string => entry.replace(/^.*\//, "").replace(ENTRY_FILE_RE, "").replace(/\.tsx?$/i, "");
 
-/** a package's display name: its metadata's name, else its (first) entry's file name without `.tangitweak.ts` */
+/** a package's display name: its package.json's displayName (else name), else its entry's file name */
 export function packageName(p: { entries: string[]; metadata: Pick<PackageMetadata, "name"> }): string {
     return p.metadata.name || entryStem(p.entries[0] ?? "") || "package";
 }
@@ -96,9 +96,8 @@ export function naturalPackageFolder(p: { entries: string[]; files: Record<strin
 }
 
 /**
- * Where a package installs: a single file at the root, more in a folder
- * named after the bundle (its metadata.json's name) or the entry
- * (`dark.tangitweak.ts` → `dark/`), then `dark (2)/`… past what's `taken`
+ * Where a package installs: a folder named after its package.json's
+ * `name` (or the entry), then `dark (2)/`… past what's `taken`
  * — script names, data paths and folders.
  */
 export function packageFolder(p: { entries: string[]; files: Record<string, string>; bundleName?: string }, taken: string[]): string {
@@ -130,8 +129,14 @@ export function modifiedFiles(pkg: Pick<InstalledPackage, "files">, current: (f:
     return out.sort();
 }
 
+/** a bundle's entry script: its `main`, else index.ts, else index.tsx */
+function entryScriptOf<S>(folder: string, manifest: { main?: string; scripts: string[] }, byKey: Map<string, S>): S | undefined {
+    const at = (rel: string) => byKey.get(scriptFileKey(storeItemOf(folder, rel).name));
+    return at(manifest.scripts[0]) ?? (manifest.main ? undefined : at("index.tsx"));
+}
+
 /**
- * For each bundle (`<folder>/metadata.json`) or installed folder package
+ * For each bundle (`<folder>/package.json`) or installed folder package
  * (`pkg.folder !== ""`) with a single entry script, map that script's id to
  * the bundle's display name (and description fallback) for the popup menu.
  */
@@ -154,8 +159,7 @@ export function singleScriptBundles(
         } catch {
             continue;
         }
-        if (manifest.scripts.length !== 1) continue;
-        const s = byKey.get(scriptFileKey(storeItemOf(folder, manifest.scripts[0]).name));
+        const s = entryScriptOf(folder, manifest, byKey);
         if (!s) continue;
         out.set(s.id, { name: manifest.name || folder, description: manifest.description });
     }
@@ -172,25 +176,16 @@ export function singleScriptBundles(
 /**
  * Resolved `<img src>` icon URLs for scripts (`scriptIcons`: script id → src)
  * and package/bundle folders (`folderIcons`: folder path → src), from
- * `tt.metadata({ icon })`, `<folder>/metadata.json`'s `icon`, and installed
- * packages' metadata.
+ * `<folder>/package.json`'s `tangitweak.icon` and installed packages' metadata.
  */
 export function resolveWorkspaceIcons(
-    scripts: readonly { id: string; meta: { name: string; metadata?: Pick<PackageMetadata, "icon"> } }[],
+    scripts: readonly { id: string; meta: { name: string } }[],
     dataFiles: readonly { path: string; text: string }[] = [],
     installed: Record<string, InstalledPackage> = {}
 ): { scriptIcons: Map<string, string>; folderIcons: Map<string, string> } {
     const scriptIcons = new Map<string, string>();
     const folderIcons = new Map<string, string>();
     const byKey = new Map(scripts.map((s) => [scriptFileKey(s.meta.name), s]));
-    const ownIcon = (s: { meta: { name: string; metadata?: Pick<PackageMetadata, "icon"> } }) =>
-        resolveIconSrc(s.meta.metadata?.icon, folderOf(s.meta.name), dataFiles);
-
-    for (const s of scripts) {
-        const ic = ownIcon(s);
-        if (ic) scriptIcons.set(s.id, ic);
-    }
-
     for (const d of dataFiles) {
         if (!d.path.toLowerCase().endsWith("/" + MANIFEST_FILE)) continue;
         const folder = d.path.slice(0, -MANIFEST_FILE.length - 1);
@@ -201,13 +196,9 @@ export function resolveWorkspaceIcons(
         } catch {
             continue;
         }
-        const entryScripts = manifest.scripts.flatMap((rel) => {
-            const s = byKey.get(scriptFileKey(storeItemOf(folder, rel).name));
-            return s ? [s] : [];
-        });
-        const bundleIcon =
-            resolveIconSrc(manifest.icon, folder, dataFiles) ??
-            (entryScripts.length === 1 ? scriptIcons.get(entryScripts[0].id) : undefined);
+        const entry = entryScriptOf(folder, manifest, byKey);
+        const entryScripts = entry ? [entry] : [];
+        const bundleIcon = resolveIconSrc(manifest.icon, folder, dataFiles);
         if (bundleIcon) {
             folderIcons.set(folder, bundleIcon);
             for (const s of entryScripts) if (!scriptIcons.has(s.id)) scriptIcons.set(s.id, bundleIcon);
@@ -216,9 +207,7 @@ export function resolveWorkspaceIcons(
 
     for (const pkg of Object.values(installed)) {
         const ids = entryIds(pkg);
-        const pkgIcon =
-            resolveIconSrc(pkg.metadata.icon, pkg.folder, dataFiles) ??
-            (ids.length === 1 ? scriptIcons.get(ids[0]) : undefined);
+        const pkgIcon = resolveIconSrc(pkg.metadata.icon, pkg.folder, dataFiles);
         if (!pkgIcon) continue;
         if (pkg.folder && !folderIcons.has(pkg.folder)) folderIcons.set(pkg.folder, pkgIcon);
         for (const id of ids) if (!scriptIcons.has(id)) scriptIcons.set(id, pkgIcon);
@@ -229,12 +218,10 @@ export function resolveWorkspaceIcons(
 
 /**
  * Resolve a package version's `<img src>` icon URL from its `metadata.icon`
- * (or, for a single-entry bundle without one, its entry's `icon`) against the
- * package's own `files` (plus optional fallback `extraDataFiles`).
+ * against the package's own `files` (plus optional fallback `extraDataFiles`).
  */
 export function resolvePackageIcon(
     pkg: { entries: string[]; files: Record<string, string>; metadata?: Pick<PackageMetadata, "icon"> },
-    entryIcons?: readonly (string | undefined)[],
     extraDataFiles: readonly { path: string; text: string }[] = []
 ): string | undefined {
     const pkgData = [
@@ -247,10 +234,6 @@ export function resolvePackageIcon(
         const base = pkg.files[MANIFEST_FILE] !== undefined ? "" : folderOf(pkg.entries[0] ?? "");
         const resolved = resolveIconSrc(pkg.metadata.icon, base, pkgData);
         if (resolved) return resolved;
-    }
-    if (pkg.entries.length === 1) {
-        const rawEntryIcon = entryIcons?.[0] ?? metadataIconValue(pkg.files[pkg.entries[0]] ?? "");
-        if (rawEntryIcon) return resolveIconSrc(rawEntryIcon, folderOf(pkg.entries[0]), pkgData);
     }
     return undefined;
 }

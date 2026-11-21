@@ -12,10 +12,10 @@ const rules = (code: string, rule?: string) => scriptLint(code).filter((d) => !r
 describe("no-invalid-world-access", () => {
     it("follows outside helpers a handler calls, and ignores a local that shadows a store", () => {
         const code = [
-            `const g = tt.globalStore("g", { n: 0 });`,
+            `import { tweak } from "tangitweak"; const g = tweak.globalStore("g", { n: 0 });`,
             `function bump() { g.n++; }`,
-            `tt.onSite("*", () => { bump(); });`,
-            `tt.onSite("*", () => { const g = { n: 1 }; g.n++; });`,
+            `tweak.onSite("*", () => { bump(); });`,
+            `tweak.onSite("*", () => { const g = { n: 1 }; g.n++; });`,
         ].join("\n");
         const d = rules(code, "no-invalid-world-access");
         expect(d).toHaveLength(1);
@@ -24,19 +24,29 @@ describe("no-invalid-world-access", () => {
         expect(siteProblems(code, c.meta.routes)).toEqual([`onSite #1: uses \`g\` — ${SITE_NO_STORES}`]);
     });
 
-    it("flags tt.siteStore in a network handler, through a helper", () => {
-        const code = `const s = tt.siteStore("s", {});\nconst read = () => s.x;\ntt.onRequest({ url: "*://a/*" }, () => { read(); });`;
+    it("flags tweak.siteStore in a network handler, through a helper", () => {
+        const code = `const s = tweak.siteStore({});\nconst read = () => s.x;\ntweak.onRequest({ url: "*://a/*" }, () => { read(); });`;
         expect(rules(code, "no-invalid-world-access").map((d) => d.message)).toEqual([`onRequest #1: uses \`s\` — ${NO_SITE_STORE}`]);
+    });
+
+    it("follows the imported tweak API under an alias, and ignores a local named tweak", () => {
+        const code = [
+            `import { tweak as t } from "tangitweak";`,
+            `const g = t.globalStore("g", { n: 0 });`,
+            `t.onSite("*", () => { g.n++; });`,
+            `function f(tweak) { const p = tweak.pageStore({}); tweak.onSite("*", () => { p.x = 1; }); }`,
+        ].join("\n");
+        expect(rules(code, "no-invalid-world-access").map((d) => d.line)).toEqual([3]);
     });
 });
 
 describe("no-rules-side-effects", () => {
     it("flags side effects reached through a helper, only on a literal rules strategy", () => {
         const code = [
-            `const log = (m) => console.log(m);`,
-            `tt.onRequest({ url: "*://a/*", strategy: "rules" }, () => { log("x"); return { block: true }; });`,
-            `tt.onRequest({ url: "*://b/*", strategy: "extension" }, () => { log("y"); });`,
-            `tt.onRequest({ url: "*://c/*", strategy: "rules" }, () => { const console = { log() {} }; console.log(1); return {}; });`,
+            `import { tweak } from "tangitweak"; const log = (m) => console.log(m);`,
+            `tweak.onRequest({ url: "*://a/*", strategy: "rules" }, () => { log("x"); return { block: true }; });`,
+            `tweak.onRequest({ url: "*://b/*", strategy: "extension" }, () => { log("y"); });`,
+            `tweak.onRequest({ url: "*://c/*", strategy: "rules" }, () => { const console = { log() {} }; console.log(1); return {}; });`,
         ].join("\n");
         const d = rules(code, "no-rules-side-effects");
         expect(d.map((x) => [x.line, x.message.slice(0, x.message.indexOf(" runs"))])).toEqual([[2, "onRequest #1: `console.log`"]]);
@@ -46,12 +56,12 @@ describe("no-rules-side-effects", () => {
 });
 
 describe("valid-selectors-and-shortcuts", () => {
-    const run = (body: string) => rules(`tt.onPage("*", (ctx) => {\n${body}\n});`, "valid-selectors-and-shortcuts");
+    const run = (body: string) => rules(`tweak.onPage("*", (ctx) => {\n${body}\n});`, "valid-selectors-and-shortcuts");
 
     it("flags invalid static selectors, resolving top-level consts", () => {
         expect(run(`ctx.elements("div > ", () => {});`)[0]).toMatchObject({ severity: "error", line: 2 });
         expect(run(`ctx.mount("a[href", () => null);`)[0]?.message).toMatch(/unclosed "\["/);
-        expect(rules(`const SEL = ".a,,.b";\ntt.onPage("*", (ctx) => { ctx.iframes(SEL, () => {}); });`)[0]).toMatchObject({ line: 2, severity: "error" });
+        expect(rules(`const SEL = ".a,,.b";\ntweak.onPage("*", (ctx) => { ctx.iframes(SEL, () => {}); });`)[0]).toMatchObject({ line: 2, severity: "error" });
         expect(run(`ctx.elements("main .card > a[href^='x,y']", () => {});\nctx.elements(pick(), () => {});`)).toEqual([]);
     });
 
@@ -70,7 +80,7 @@ describe("valid-selectors-and-shortcuts", () => {
     });
 
     it("reaches the Problems view as line warnings, listed once when the editor marks it live", () => {
-        const code = `tt.onPage("*", (ctx) => {\n    ctx.elements("div >", () => {});\n});`;
+        const code = `tweak.onPage("*", (ctx) => {\n    ctx.elements("div >", () => {});\n});`;
         const routeWarnings = siteProblems(code, compileScript(code).meta.routes);
         expect(routeWarnings).toEqual([expect.stringMatching(/^line 2 \(error\): ctx\.elements: "div >"/)]);
         const script = { id: "a", label: "a.ts", error: null, code, routeWarnings };
@@ -88,9 +98,9 @@ describe("ESLint plugin (.tangitweak/eslint-plugin.mjs)", () => {
         expect(Object.keys(plugin.rules)).toEqual(["no-invalid-world-access", "no-rules-side-effects", "valid-selectors-and-shortcuts", "valid-package-imports"]);
         expect(plugin.configs.recommended.rules["tangitweak/no-rules-side-effects"]).toBe("warn");
         const code = [
-            `const g = tt.globalStore("g", {});`,
-            `tt.onSite("*", () => { g.n = 1; });`,
-            `tt.onPage("*", (ctx) => { ctx.shortcut("Hyper+K", () => {}); });`,
+            `const g = tweak.globalStore("g", {});`,
+            `tweak.onSite("*", () => { g.n = 1; });`,
+            `tweak.onPage("*", (ctx) => { ctx.shortcut("Hyper+K", () => {}); });`,
             `import a from "https://unpkg.com/lodash";`,
             `import b from "https://esm.sh/valtio@2";`,
             `import c from "https://unpkg.com/dayjs@1.11.10";`,

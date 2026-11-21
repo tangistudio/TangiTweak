@@ -10,11 +10,11 @@
  */
 import { formatScriptError } from "../shared/scriptError";
 import { makeScriptConsole, formatLogArgs, scriptLogLine, type ScriptLogLevel } from "../shared/scriptLog";
-import { scriptFunction, type ScriptFn } from "../shared/scriptFn";
+import { scriptFunction, withTweak, type RawScriptFn, type ScriptFn } from "../shared/scriptFn";
 import { siteUnits, type PackageFn } from "../shared/siteCode";
 import { makeLibRequire, type ShippedLib } from "../shared/scriptImports";
 import { routeMatches, takesBinary, type DocumentWhen, type RouteMeta } from "../shared/route";
-import { makePageShim, domHandlersFor, scheduleDocument, fireRun, type PageDocumentHandler } from "../shared/pageShim";
+import { makePageShim, domHandlersFor, scheduleDocument, fireRun, type PageDocumentHandler, type PageShim } from "../shared/pageShim";
 import { ScriptLife, type Generation } from "../shared/runLifecycle";
 import { noteShadowRoot } from "../shared/domElements";
 import { CANCEL_FN, Exposer, isRpcCall, NOT_RUNNING, type RpcCall, type RpcResult } from "../shared/rpc";
@@ -113,7 +113,7 @@ import { watchCall, type CallWatch } from "../shared/callWatch";
         if (!__NO_EVAL__) return scriptFunction(src, name);
         const fn = fk ? units!.get(fk) : undefined;
         if (!fn) throw new Error(`${name}'s onSite code isn't on this page: reload the page to run it`);
-        return fn as ScriptFn;
+        return withTweak(fn as RawScriptFn, name);
     }
     /** a package module's function (MV3: its unit) */
     function packageFn(lib: ShippedLib): PackageFn {
@@ -192,7 +192,7 @@ import { watchCall, type CallWatch } from "../shared/callWatch";
         } catch {}
     }
 
-    /** a user script's own output (tt.log / console.* / errors) → extension LOG, attributed to the script */
+    /** a user script's own output (tweak.log / console.* / errors) → extension LOG, attributed to the script */
     function scriptLogUp(scriptId: string | null, level: ScriptLogLevel, msg: string): void {
         try {
             window.postMessage({ source: HOOK_SOURCE, kind: "scriptLog", scriptId, level, msg }, window.location.origin);
@@ -348,9 +348,12 @@ import { watchCall, type CallWatch } from "../shared/callWatch";
         // module registry over the shipped library sources and data files:
         // the page-side `require` backing ES imports ("./utils" → the script
         // named utils, "./a.json" → the data file)
+        // the tweak whose top level runs: its modules run with its `tweak` (their handlers, params and stores are its own)
+        let entry: { id: string; host: PageShim["host"] } | undefined;
         const requireFrom = makeLibRequire(
             libSources,
-            (lib, require, moduleObj) => scriptFn(lib.name, lib.src!, lib.fk)(makeDocumentShim(null, lib.name, lib.params || {}).tt, scriptConsole(null, lib.name), require, moduleObj, moduleObj.exports),
+            (lib, require, moduleObj) =>
+                scriptFn(lib.name, lib.src!, lib.fk)(entry?.host ?? makeDocumentShim(null, lib.name, lib.params || {}).host, scriptConsole(entry?.id ?? null, lib.name), require, moduleObj, moduleObj.exports),
             { builtin: siteBuiltin, onSite: true, ...(__NO_EVAL__ ? { packageFn } : {}) }
         );
         const compiledDocument: { scriptId: string; name: string; when: DocumentWhen; d: PageDocumentHandler; exposer: Exposer; life: ScriptLife; gen: Generation }[] = [];
@@ -387,7 +390,12 @@ import { watchCall, type CallWatch } from "../shared/callWatch";
                 const fn = scriptFn(d.name, d.src, d.fk);
                 const moduleObj = { exports: {} as any };
                 const shim = makeDocumentShim(d.scriptId, d.name, d.params || {}, ex);
-                shim.top(() => fn(shim.tt, scriptConsole(d.scriptId, d.name), requireFrom(d.name), moduleObj, moduleObj.exports));
+                entry = { id: d.scriptId, host: shim.host };
+                try {
+                    shim.top(() => fn(shim.host, scriptConsole(d.scriptId, d.name), requireFrom(d.name), moduleObj, moduleObj.exports));
+                } finally {
+                    entry = undefined;
+                }
                 if (gen) for (const h of domHandlersFor(shim.dom, location.href, ex)) compiledDocument.push({ scriptId: d.scriptId, name: d.name, when: h.when, d: h, exposer, life, gen });
             } catch (e: any) {
                 // the previous code keeps running (none: calls get `not running`)
@@ -470,7 +478,7 @@ import { watchCall, type CallWatch } from "../shared/callWatch";
         return makeScriptConsole((level, source, text) => scriptLogUp(scriptId, level, scriptLogLine(name, source, text)));
     }
 
-    /** `tt.siteStore`s: they live here, for the document's life; onPage and onOverlay code mirror them */
+    /** `tweak.siteStore`s: they live here, for the document's life; onPage and onOverlay code mirror them */
     const siteStores = new SiteStoreHost({
         post: (m) => {
             try {
@@ -500,7 +508,7 @@ import { watchCall, type CallWatch } from "../shared/callWatch";
                 siteCallers.add(scriptId);
                 scriptLogUp(scriptId, "error", formatScriptError(name, e, "onSite"));
             },
-            log: (...args: any[]) => scriptLogUp(scriptId, "info", scriptLogLine(name, "tt.log", formatLogArgs(args))),
+            log: (source, ...args) => scriptLogUp(scriptId, "info", scriptLogLine(name, source, formatLogArgs(args))),
             storage: {
                 // the background answers { value } (same as the isolated-world shim unwraps)
                 get: (key: string) => viaBridge({ op: "storageGet", scriptId, key }).then((r) => r?.value),

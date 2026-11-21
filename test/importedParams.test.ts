@@ -1,8 +1,8 @@
 /**
  * Param definitions imported from a utility script:
- *   import { envParam } from "./utils"; tt.params({ intercept_environments: envParam })
+ *   import { envParam } from "./utils"; tweak.params({ intercept_environments: envParam })
  * The save-time (meta-only) compile used to stub every import, so the def
- * reached tt.params as the stub proxy and the explorer showed a bogus
+ * reached tweak.params as the stub proxy and the explorer showed a bogus
  * "needs a type" compile error while the editor's TypeScript was happy.
  */
 import { describe, it, expect, beforeEach } from "vitest";
@@ -26,6 +26,7 @@ const store: Record<string, any> = {};
 
 const { saveScript, listScripts, setParamValue } = await import("../src/background/engine/scriptStore");
 const { compileForStorage } = await import("../src/background/compileHost");
+const { seedBundle, bundleData } = await import("./bundleHelper");
 
 const UTILS = `
 export const envParam = { type: "stringList", default: ["dev", "staging"], description: "environments" } as const;
@@ -36,16 +37,16 @@ export const defs = {
 export const choices = ["x", "y"];
 `;
 
-const IMPORTER = `
+const IMPORTER = `import { tweak } from "tangitweak"; 
 import { envParam } from "./utils";
-const p = tt.params({ intercept_environments: envParam });
-tt.onRequest({ url: "*://*/*", strategy: "helper" }, () => { void p.intercept_environments; });
+const p = tweak.params({ intercept_environments: envParam });
+tweak.onRequest({ url: "*://*/*", strategy: "helper" }, () => { void p.intercept_environments; });
 `;
 
-const SPREAD = `
+const SPREAD = `import { tweak } from "tangitweak"; 
 import { defs, choices } from "./utils";
-const p = tt.params({ ...defs, pick: { type: "enum", choices, default: "y" } });
-tt.onRequest({ url: "*://*/*", strategy: "helper" }, () => { void p.mode; });
+const p = tweak.params({ ...defs, pick: { type: "enum", choices, default: "y" } });
+tweak.onRequest({ url: "*://*/*", strategy: "helper" }, () => { void p.mode; });
 `;
 
 describe("imported param definitions", () => {
@@ -53,9 +54,9 @@ describe("imported param definitions", () => {
         for (const code of [
             IMPORTER,
             SPREAD,
-            `import { envParam } from "./utils"; tt.defineParam("e", envParam); tt.onRequest({ url: "*://*/*", strategy: "helper" }, () => {});`,
-            `import { defs } from "./utils"; tt.params(defs); tt.onRequest({ url: "*://*/*", strategy: "helper" }, () => {});`,
-            `import { t } from "./utils"; tt.params({ x: { type: t, default: 1 } }); tt.onRequest({ url: "*://*/*", strategy: "helper" }, () => {});`,
+            `import { tweak } from "tangitweak"; import { envParam } from "./utils"; tweak.params({ e: envParam }); tweak.onRequest({ url: "*://*/*", strategy: "helper" }, () => {});`,
+            `import { tweak } from "tangitweak"; import { defs } from "./utils"; tweak.params(defs); tweak.onRequest({ url: "*://*/*", strategy: "helper" }, () => {});`,
+            `import { tweak } from "tangitweak"; import { t } from "./utils"; tweak.params({ x: { type: t, default: 1 } }); tweak.onRequest({ url: "*://*/*", strategy: "helper" }, () => {});`,
         ]) {
             const c = compileScript(code, { importModule: () => makeStubModule() });
             expect(c.error, code).toBeNull();
@@ -64,7 +65,7 @@ describe("imported param definitions", () => {
     });
 
     it("a genuinely invalid inline def still errors", () => {
-        const c = compileScript(`tt.params({ x: { default: 1 } }); tt.onRequest({ url: "*://*/*", strategy: "helper" }, () => {});`, { importModule: () => makeStubModule() });
+        const c = compileScript(`import { tweak } from "tangitweak"; tweak.params({ x: { default: 1 } }); tweak.onRequest({ url: "*://*/*", strategy: "helper" }, () => {});`, { importModule: () => makeStubModule() });
         expect(c.error).toMatch(/parameter "x" needs a type/);
     });
 
@@ -90,28 +91,29 @@ describe("imported param definitions", () => {
     });
 
     it("compileForStorage (MV2) captures imported defs when given the stored scripts", async () => {
-        const c = await compileForStorage(IMPORTER, "main.tangitweak", undefined, { id: "m", scripts: [{ id: "u", name: "utils", code: UTILS }] });
+        const c = await compileForStorage(IMPORTER, "t/index", undefined, { id: "m", scripts: [{ id: "u", name: "t/utils", code: UTILS }], data: bundleData("t") });
         expect(c.error).toBeNull();
         expect(c.paramDefs.intercept_environments?.type).toBe("stringList");
     });
 });
 
 describe("saveScript with imported params", () => {
-    beforeEach(() => {
+    beforeEach(async () => {
         for (const k of Object.keys(store)) delete store[k];
+        await seedBundle("t");
     });
 
     it("stores paramDefs from the imported def and no compile error", async () => {
-        await saveScript({ id: "u", name: "utils", code: UTILS });
-        const s = await saveScript({ id: "m", name: "main.tangitweak", code: IMPORTER });
+        await saveScript({ id: "u", name: "t/utils", code: UTILS });
+        const s = await saveScript({ id: "m", name: "t/index", code: IMPORTER });
         expect(s.error).toBeNull();
         expect(s.meta.active).toBe(true);
         expect(s.paramDefs?.intercept_environments).toMatchObject({ type: "stringList" });
     });
 
     it("saving the library refreshes the importers' paramDefs", async () => {
-        await saveScript({ id: "u", name: "utils", code: `export const envParam = { type: "boolean", default: true };` });
-        await saveScript({ id: "m", name: "main.tangitweak", code: IMPORTER });
+        await saveScript({ id: "u", name: "t/utils", code: `export const envParam = { type: "boolean", default: true };` });
+        await saveScript({ id: "m", name: "t/index", code: IMPORTER });
         await saveScript({ id: "u", code: UTILS });
         const main = (await listScripts()).find((x) => x.id === "m")!;
         expect(main.paramDefs?.intercept_environments).toMatchObject({ type: "stringList" });
@@ -119,16 +121,16 @@ describe("saveScript with imported params", () => {
     });
 
     it("a script saved before its library exists is fixed once the library is saved", async () => {
-        const first = await saveScript({ id: "m", name: "main.tangitweak", code: IMPORTER });
+        const first = await saveScript({ id: "m", name: "t/index", code: IMPORTER });
         expect(first.error).toBeNull();
-        await saveScript({ id: "u", name: "utils", code: UTILS });
+        await saveScript({ id: "u", name: "t/utils", code: UTILS });
         const main = (await listScripts()).find((x) => x.id === "m")!;
         expect(main.paramDefs?.intercept_environments).toMatchObject({ type: "stringList" });
     });
 
     it("param values of the importer apply to imported defs", async () => {
-        await saveScript({ id: "u", name: "utils", code: UTILS });
-        await saveScript({ id: "m", name: "main.tangitweak", code: `import { envParam } from "./utils";\nconst p = tt.params({ e: envParam });\nif (p.e.includes("prod")) tt.onRequest({ url: "*://*/*", strategy: "helper" }, () => {});` });
+        await saveScript({ id: "u", name: "t/utils", code: UTILS });
+        await saveScript({ id: "m", name: "t/index", code: `import { tweak } from "tangitweak"; import { envParam } from "./utils";\nconst p = tweak.params({ e: envParam });\nif (p.e.includes("prod")) tweak.onRequest({ url: "*://*/*", strategy: "helper" }, () => {});` });
         await setParamValue("m", "e", ["prod"]);
         const main = (await listScripts()).find((x) => x.id === "m")!;
         expect(main.meta.active).toBe(true);

@@ -25,6 +25,7 @@ import { compileDecision } from "../shared/pac";
 import { packBytes, unpackBytes } from "../shared/bytesPack";
 import type { ScriptRules } from "../shared/rulesProbe";
 import { dataFilesSig, ensureDataFiles } from "./engine/dataFiles";
+import { dataReader, gateCompiled } from "../shared/tweakBundle";
 import { ensurePackages, loadPackages, packagesSig, packagesSnapshot } from "./engine/packageImports";
 import { ensureBuiltins } from "../shared/builtins";
 import { SW_EPOCH } from "./engine/stores";
@@ -217,6 +218,8 @@ export interface StorageCompileContext {
     paramValues?: ParamValues;
     /** data files that aren't stored (yet) — a package being installed; they shadow stored ones at the same path */
     data?: DataFileSource[];
+    /** compile it even if its package.json asks for a newer TangiTweak (installing shows that apart) */
+    anyVersion?: boolean;
 }
 
 /**
@@ -238,17 +241,19 @@ export async function compileForStorage(
     const target = { id, name: label, code };
     const scripts = (ctx?.scripts ?? []).filter((s) => s.id !== id);
     const values: ParamValues = { ...(ctx?.paramValues ?? {}), [id]: paramValues ?? {} };
+    const data = withData(await ensureDataFiles(), ctx?.data);
+    const gate = (c: StorageCompiled): StorageCompiled => gateCompiled(label, c, [label, ...scripts.map((s) => s.name)], dataReader(data), ctx?.anyVersion ? null : undefined);
     // a save retries the script's own failed package downloads
-    await ensurePackages([code], { retry: true });
-    await ensurePackages(scripts.map((s) => s.code));
+    await ensurePackages([target], { retry: true, data: ctx?.data });
+    await ensurePackages(scripts, { data: ctx?.data });
     if (!__MV3__) {
         await ensureBuiltins([code, ...scripts.map((s) => s.code)], packagesSnapshot()).catch(() => {}); // unloaded: React imports stub
-        const c = compileWithLibs(target, scripts, values, withData(await ensureDataFiles(), ctx?.data), packagesSnapshot());
+        const c = compileWithLibs(target, scripts, values, data, packagesSnapshot());
         dlogLevel(
             "compile", "debug",
             `compiled "${label}" → active=${c.meta.active} match=${JSON.stringify(c.meta.match)} params=[${Object.keys(c.paramDefs || {}).join(", ")}] deps=[${c.deps.join(", ")}]${c.error ? " — compile error (in the Problems view)" : ""}`
         );
-        return { meta: c.meta, paramDefs: c.paramDefs || {}, error: c.error };
+        return gate({ meta: c.meta, paramDefs: c.paramDefs || {}, error: c.error });
     }
     await ensureOffscreen();
     const resp = await sandboxCallWithData({ op: "compileOne", target, scripts, paramValues: values, extraData: ctx?.data });
@@ -261,7 +266,7 @@ export async function compileForStorage(
         "compile", "debug",
         `compiled "${label}" → active=${r.meta.active} match=${JSON.stringify(r.meta.match)} params=[${Object.keys(r.paramDefs || {}).join(", ")}] deps=[${(r.deps || []).join(", ")}]${r.error ? " — compile error (in the Problems view)" : ""}`
     );
-    return { meta: r.meta, paramDefs: r.paramDefs, error: r.error };
+    return gate({ meta: r.meta, paramDefs: r.paramDefs, error: r.error });
 }
 
 type StorageCompiled = { meta: ResMeta; paramDefs: ParamTree; error: string | null };
@@ -280,11 +285,13 @@ export async function compileManyForStorage(
     const out = new Map<string, StorageCompiled>();
     if (!ids.length) return out;
     const t0 = performance.now();
-    await ensurePackages(scripts.map((s) => s.code));
+    await ensurePackages(scripts);
+    const read = dataReader(await ensureDataFiles());
+    const names = scripts.map((s) => s.name);
     const note = (id: string, r: { meta: ResMeta; paramDefs?: ParamTree; error: string | null; deps?: string[] }) => {
         const name = scripts.find((s) => s.id === id)?.name;
         dlogLevel("compile", "debug", `compiled "${name}" → active=${r.meta.active} match=${JSON.stringify(r.meta.match)} params=[${Object.keys(r.paramDefs || {}).join(", ")}] deps=[${(r.deps || []).join(", ")}]${r.error ? " — compile error (in the Problems view)" : ""}`);
-        out.set(id, { meta: r.meta, paramDefs: r.paramDefs || {}, error: r.error });
+        out.set(id, gateCompiled(name ?? "", { meta: r.meta, paramDefs: r.paramDefs || {}, error: r.error }, names, read));
     };
     if (!__MV3__) {
         await ensureBuiltins(scripts.map((s) => s.code), packagesSnapshot()).catch(() => {});
@@ -310,11 +317,23 @@ let mv2Analyzed: { key: string; out: Map<string, Analyzed> } | null = null;
  * values — routes may be built from params. Reload + getHookBundle path.
  */
 export async function analyzeScripts(scripts: { id: string; name: string; code: string; updatedAt: number }[], paramValues?: ParamValues): Promise<Map<string, Analyzed>> {
+    const out = await analyzeUngated(scripts, paramValues);
+    const read = dataReader(await ensureDataFiles());
+    const names = scripts.map((s) => s.name);
+    for (const s of scripts) {
+        const a = out.get(s.id);
+        if (a) out.set(s.id, gateCompiled(s.name, a, names, read));
+    }
+    return out;
+}
+
+/** analyzeScripts, every script as it compiles on its own (before bundle roles) */
+async function analyzeUngated(scripts: { id: string; name: string; code: string; updatedAt: number }[], paramValues?: ParamValues): Promise<Map<string, Analyzed>> {
     const out = new Map<string, Analyzed>();
     if (!scripts.length) return out;
     // imports resolve by name (relative paths) and into the data files
     await ensureDataFiles();
-    await ensurePackages(scripts.map((s) => s.code));
+    await ensurePackages(scripts);
     const sig = paramSig(paramValues) + "." + dataFilesSig() + "." + packagesSig();
     if (__MV3__) {
         // FAST PATH: chrome.storage.session-cached analyses, valid while no

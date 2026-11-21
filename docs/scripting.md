@@ -1,46 +1,55 @@
-# Writing scripts
+# Writing tweaks
 
 [<img src="../icons/icon.svg" width="16" height="16" align="absmiddle" alt=""> README](../README.md) · [Glossary](../GLOSSARY.md)
 
-A script registers **handlers** at top level. Each handler takes its own
-[route](#routes) first, then the function:
+A tweak is a folder with a `package.json` that has a `"tangitweak"` block
+(see [package.json](packages.md#packagejson)). **New Tweak…** in the
+Explorer creates one. Its **entry** (`main`, else `index.ts`, else
+`index.tsx`) is the tweak's code, called "the script" below; the folder's
+other files are [modules](#modules-and-recipes) the entry imports. A `.ts`
+file outside such a folder doesn't run: the Editor lists it as needing a
+rewrite.
+
+The entry imports `tweak` from `"tangitweak"` and registers **handlers** with
+it at top level. Each handler takes its own [route](#routes) first, then the
+function (the examples below leave the import line out):
 
 ```ts
-tt.metadata({ description: "Debug the user API" });
+import { tweak } from "tangitweak";
 
 const API = { url: "*://app.example.com/api/*", strategy: "helper" } as const;
 
 // Redirect / block / request headers / replaceResponse:
-tt.onRequest(API, (ctx) => {
+tweak.onRequest(API, (ctx) => {
     // return { redirect: "https://myserver/user.json" };
     // return { block: true };
     return { headers: { set: { "x-debug": "1" } } };
 });
 
 // Response headers:
-tt.onResponseHeaders(API, () => ({
+tweak.onResponseHeaders(API, () => ({
     headers: { set: { "access-control-allow-origin": "*" } },
 }));
 
 // Replace the whole body:
-// tt.replaceResponse({ ...API, url: "*://app.example.com/api/flags" }, () => ({ beta: true }));
+// tweak.replaceResponse({ ...API, url: "*://app.example.com/api/flags" }, () => ({ beta: true }));
 
 // Stream-modify the body:
-tt.onResponseBody({ url: "*://app.example.com/api/user*", strategy: "helper" }, (ctx, body) => String(body).replace('"role":"user"', '"role":"admin"'));
+tweak.onResponseBody({ url: "*://app.example.com/api/user*", strategy: "helper" }, (ctx, body) => String(body).replace('"role":"user"', '"role":"admin"'));
 
 // Change the page (its DOM, in a world the site's JavaScript can't see):
-tt.onPage("*://app.example.com/*", (ctx) => {
+tweak.onPage("*://app.example.com/*", (ctx) => {
     const title = ctx.once("title", () => document.title); // the page's own title, kept across saves
     document.title = "🎯 " + title;
 });
 
 // Run in the site's own JavaScript and return functions the other places call:
-const site = tt.onSite("*://app.example.com/*", () => ({
+const site = tweak.onSite("*://app.example.com/*", () => ({
     user: () => (window as any).myApp?.user?.name as string | undefined,
 }));
 
 // Draw the script's own GUI over the page:
-tt.onOverlay("*://app.example.com/*", async (ctx) => {
+tweak.onOverlay("*://app.example.com/*", async (ctx) => {
     const hello = document.body.appendChild(document.createElement("output"));
     hello.value = `Hello ${(await site.user()) ?? "stranger"}`;
     ctx.signal.addEventListener("abort", () => hello.remove()); // a save runs this again
@@ -48,9 +57,9 @@ tt.onOverlay("*://app.example.com/*", async (ctx) => {
 ```
 
 Register handlers synchronously at top level. A registration after an
-`await` or inside a callback logs an error and is ignored. A file that
-registers no handlers is a [library](#libraries-and-recipes). To share a
-script, publish it at a URL ending in `.tangitweak.ts`; opening that URL
+`await` or inside a callback logs an error and is ignored. Handlers a
+[module](#modules-and-recipes) registers belong to the tweak. To share a
+tweak, publish its folder; opening its URL with `#tangitweak:install`
 [installs it](packages.md).
 
 Saving a script applies it in place: network handlers change for the next
@@ -67,10 +76,10 @@ fails to load and the Problems view points at the call):
 
 | form | example |
 |---|---|
-| one URL pattern | `tt.onRequest({ url: "*://example.com/*", strategy: "helper" }, fn)` |
-| a list | `tt.onRequest({ url: ["*://a.example.com/*", "*://b.example.com/*"], strategy: "helper" }, fn)` |
-| all options | `tt.onRequest({ url, exclude, methods, resourceTypes, strategy }, fn)` |
-| page code (no strategy) | `tt.onPage("*://example.com/*", fn)` or `tt.onPage({ url, exclude, when }, fn)`; the same for `tt.onSite` and `tt.onOverlay` |
+| one URL pattern | `tweak.onRequest({ url: "*://example.com/*", strategy: "helper" }, fn)` |
+| a list | `tweak.onRequest({ url: ["*://a.example.com/*", "*://b.example.com/*"], strategy: "helper" }, fn)` |
+| all options | `tweak.onRequest({ url, exclude, methods, resourceTypes, strategy }, fn)` |
+| page code (no strategy) | `tweak.onPage("*://example.com/*", fn)` or `tweak.onPage({ url, exclude, when }, fn)`; the same for `tweak.onSite` and `tweak.onOverlay` |
 
 An empty list matches **nothing**, never everything.
 
@@ -96,7 +105,7 @@ registration throw. The error shows on the script.
 Named groups land in `ctx.groups` (`*` wildcards as `"0"`, `"1"`, …):
 
 ```ts
-tt.onRequest({ url: "https://api.example.com/users/:id", strategy: "helper" }, (ctx) => {
+tweak.onRequest({ url: "https://api.example.com/users/:id", strategy: "helper" }, (ctx) => {
     if (ctx.groups.id === "42") return { replaceResponse: { body: { id: 42, name: "Mock" } } };
 });
 ```
@@ -104,7 +113,7 @@ tt.onRequest({ url: "https://api.example.com/users/:id", strategy: "helper" }, (
 ### Route object: `exclude`, `methods`, `resourceTypes`, `strategy`
 
 ```ts
-tt.onResponseBody(
+tweak.onResponseBody(
     {
         url: "https://example.com/app/*",
         exclude: ["https://example.com/app/vendor/*"],
@@ -147,22 +156,22 @@ tt.onResponseBody(
   `"rules"`. There is no default — a route without one (or a bare URL
   pattern) makes the script fail to load. There is no fallback: when the strategy
   isn't available, the handler doesn't run and the Log view says why.
-  To pick per browser or build, use `tt.isChrome`, `tt.isFirefox`,
-  `tt.isMV2` and `tt.isMV3` (Chromium-based browsers count as Chrome;
-  MV3 is the `dist-mv3/` build); per OS, `tt.isMac`, `tt.isWindows` and
-  `tt.isLinux`:
+  To pick per browser or build, use `tweak.isChrome`, `tweak.isFirefox`,
+  `tweak.isMV2` and `tweak.isMV3` (Chromium-based browsers count as Chrome;
+  MV3 is the `dist-mv3/` build); per OS, `tweak.isMac`, `tweak.isWindows` and
+  `tweak.isLinux`:
 
   ```ts
-  tt.onResponseBody({ url: "*://example.com/app.js", strategy: tt.isFirefox ? "extension" : "helper" }, (ctx, body) => body.replace("DEBUG=false", "DEBUG=true"));
-  tt.onRequest({ url: "*://api.example.com/*", strategy: tt.isMV3 ? "debugger" : "extension" }, fn);
-  tt.onRequest({ url: "*://ads.example.com/*", strategy: tt.isMV3 ? "rules" : "extension" }, () => ({ block: true }));
+  tweak.onResponseBody({ url: "*://example.com/app.js", strategy: tweak.isFirefox ? "extension" : "helper" }, (ctx, body) => body.replace("DEBUG=false", "DEBUG=true"));
+  tweak.onRequest({ url: "*://api.example.com/*", strategy: tweak.isMV3 ? "debugger" : "extension" }, fn);
+  tweak.onRequest({ url: "*://ads.example.com/*", strategy: tweak.isMV3 ? "rules" : "extension" }, () => ({ block: true }));
   ```
 
   On `rules` the handler runs once when scripts load and its fixed result
   (block, redirect, headers) becomes a browser-native rule; `exclude`
   isn't supported there ([what `rules` can do](strategies.md#what-rules-can-do)).
   Its code never runs for a request, so the Problems view warns about
-  `console.log`, `tt.log`, `fetch`, timers and store writes in it.
+  `console.log`, `tweak.log`, `fetch`, timers and store writes in it.
 
 > **Tip:** `page` is the lightest strategy, but it only sees the page's own
 > fetch/XHR (REST/API) calls. For documents, `<script src>`, images,
@@ -190,19 +199,19 @@ fonts, wasm, PDFs, archives, as a `Uint8Array`:
 
 ```ts
 // swap a logo for another image
-tt.onResponseBody({ url: "*://example.com/img/logo*.png", binary: true, strategy: "helper" }, async (ctx, body) => {
+tweak.onResponseBody({ url: "*://example.com/img/logo*.png", binary: true, strategy: "helper" }, async (ctx, body) => {
     const res = await fetch("https://example.org/other.png");
     return new Uint8Array(await res.arrayBuffer());
 });
 
 // look into everything on a CDN without changing it: playlists and segments
-tt.onResponseBody({ url: "*://cdn.example.com/*", binary: "both", strategy: "helper" }, (ctx, body) => {
+tweak.onResponseBody({ url: "*://cdn.example.com/*", binary: "both", strategy: "helper" }, (ctx, body) => {
     if (typeof body === "string") console.log(ctx.url, "text", body.length, "chars");
     else console.log(ctx.url, body.length, "bytes, sync byte", body[0] === 0x47);
 });
 
 // text only, and no warning for the images it skips
-tt.onResponseBody({ url: "*://example.com/*", binary: false, strategy: "helper" }, (ctx, body) => console.log(ctx.url, body.length));
+tweak.onResponseBody({ url: "*://example.com/*", binary: false, strategy: "helper" }, (ctx, body) => console.log(ctx.url, body.length));
 ```
 
 A `"both"` handler gets either, so check `typeof body`. Return values
@@ -286,7 +295,7 @@ decided by the request's `Content-Type` exactly like
 parses it as JSON — the *request* body, not the response.
 
 ```ts
-tt.onRequest({ url: "*://app.example.com/api/*", methods: ["POST"], strategy: "helper" }, (ctx) => {
+tweak.onRequest({ url: "*://app.example.com/api/*", methods: ["POST"], strategy: "helper" }, (ctx) => {
     const q = ctx.json(); // undefined without a body; throws on invalid JSON
     if (q?.operationName === "GetFlags") return { replaceResponse: { body: { beta: true } } };
 });
@@ -306,20 +315,16 @@ the strategy can't get it:
 It is the same in `onRequest`, `replaceResponse`, `onResponseHeaders` and
 `onResponseBody`. Changing it has no effect on what is sent.
 
-## Description and parameters
+## Parameters
 
-`tt.metadata({ description: "…" })` sets a one-line description, shown as
-the script's tooltip in the Editor and in the popup. Its other fields —
-`name`, `version`, `minTangiTweakVersion`, `icon`, `homepage`, `author`, `license`, `updateURL` and `connect` — describe
-the script as a shared package (see [Packages](packages.md)). Call it once.
+A tweak's description, version, icon and the rest come from its
+`package.json` (see [package.json](packages.md#packagejson)).
 
-`tt.params` declares typed knobs the user changes from the popup's ⚙
-dialog, the Editor or `settings.json` without touching the script:
+`tweak.params` declares typed knobs the user changes from the popup's ⚙
+dialog, the Editor or the tweak's [`.tweak/settings.json`](editor.md#a-tweaks-data-folder) without touching the script:
 
 ```ts
-tt.metadata({ description: "Force failures on the posts API" });
-
-const cfg = tt.params({
+const cfg = tweak.params({
     enabled: { type: "boolean", default: true, description: "Master switch" },
     status:  { type: "enum", choices: ["500", "503"], default: "500" },
     note:    { type: "string", default: "forced failure" },
@@ -327,25 +332,22 @@ const cfg = tt.params({
 });
 // cfg.enabled: boolean · cfg.status: "500" | "503" · cfg.note: string · cfg.tags: string[]
 
-tt.onRequest({ url: "*://app.example.com/posts/*", strategy: "helper" }, () => {
+tweak.onRequest({ url: "*://app.example.com/posts/*", strategy: "helper" }, () => {
     if (!cfg.enabled) return;
     return { replaceResponse: { status: Number(cfg.status), body: { error: cfg.note, tags: cfg.tags } } };
 });
 ```
 
-`tt.defineParam(name, def)` declares one param and returns its value. It
-writes to the same set as `tt.params`; the UI lists params in call order,
-and defining the same name twice is an error:
-
-```ts
-const host = tt.defineParam("host", { type: "string", default: "api.example.com" });
-```
+`tweak.params` may be called more than once (a module can declare its own;
+they're all the tweak's);
+the UI lists params in call order, and defining the same name twice is an
+error.
 
 Large parameter sets can be grouped into collapsible sections by nesting
-plain objects inside `tt.params` (and nested maps in `settings.json`):
+plain objects inside `tweak.params` (and nested maps in `.tweak/settings.json`):
 
 ```ts
-const cfg = tt.params({
+const cfg = tweak.params({
     enabled: { type: "boolean", default: true },
     network: {
         host: { type: "string", default: "api.example.com" },
@@ -359,10 +361,10 @@ Routes may be built from params. A param change re-runs the script and
 re-arms its routes:
 
 ```ts
-const cfg = tt.params({
+const cfg = tweak.params({
     hosts: { type: "stringList", default: ["staging.example.com"], description: "Hosts to unlock" },
 });
-tt.onResponseHeaders({ url: cfg.hosts.map((h) => `*://${h}/*`), strategy: "helper" }, () => ({
+tweak.onResponseHeaders({ url: cfg.hosts.map((h) => `*://${h}/*`), strategy: "helper" }, () => ({
     headers: { set: { "access-control-allow-origin": "*" } },
 }));
 ```
@@ -377,17 +379,17 @@ textarea), `enum` (dropdown of `choices`), `stringList` (add/remove list),
 Every param type accepts an optional `parse` function that turns the raw
 value into something more convenient for the script. The param's type
 becomes the parser's return type; the ⚙ dialog, the Editor and
-`settings.json` keep editing (and storing) the raw value, and `parse` re-runs
+`.tweak/settings.json` keep editing (and storing) the raw value, and `parse` re-runs
 on every change:
 
 ```ts
-const cfg = tt.params({
+const cfg = tweak.params({
     origin: { type: "string", default: "https://app.example.com", parse: (s) => new URL(s) },
     delay:  { type: "number", default: 2, description: "Seconds", parse: (sec) => sec * 1000 },
 });
 // cfg.origin: URL · cfg.delay: number (ms)
 
-const hosts = tt.defineParam("hosts", { type: "stringList", default: ["a.com"], parse: (l) => new Set(l) });
+const { hosts } = tweak.params({ hosts: { type: "stringList", default: ["a.com"], parse: (l) => new Set(l) } });
 // hosts: Set<string>
 ```
 
@@ -398,17 +400,17 @@ error. For `enum`, `parse` receives the choice typed as `string`.
 
 ### Changing params from code
 
-The object `tt.params` returns can be changed, like a valtio proxy. Assign
+The object `tweak.params` returns can be changed, like a valtio proxy. Assign
 a param, or change a list in place, from a handler: onPage, onOverlay or
 network code.
 
 ```ts
-const cfg = tt.params({
+const cfg = tweak.params({
     enabled: { type: "boolean", default: true },
     hosts:   { type: "stringList", default: [] },
 });
 
-tt.onOverlay("*://app.example.com/*", (ctx) => {
+tweak.onOverlay("*://app.example.com/*", (ctx) => {
     const btn = ctx.once("btn", () => document.body.appendChild(document.createElement("button")));
     btn.textContent = cfg.enabled ? "Mock: on" : "Mock: off";
     btn.onclick = () => (cfg.enabled = !cfg.enabled);
@@ -419,7 +421,7 @@ tt.onOverlay("*://app.example.com/*", (ctx) => {
 The new value is checked against the param's type: a wrong type, an
 unknown choice or an unknown name throws. The code sees it right away, and
 it's saved like a change in the ⚙ dialog: the Log shows
-`param enabled = false (set by the script)`, `settings.json` gets it, and
+`param enabled = false (set by the script)`, `.tweak/settings.json` gets it, and
 the script hot-reloads with it (what you keep with `ctx.once` stays).
 Changes made in one go are saved once per param, with the last value.
 
@@ -428,79 +430,73 @@ Changes made in one go are saved once per param, with the last value.
 - Not from onSite code: it runs in the site's world, where the site's own
   code could reach the setter.
 - A param with `parse` can't be assigned; change it in ⚙ or
-  `settings.json`.
-- A library's params can be changed by any script that imports it.
+  `.tweak/settings.json`.
+## Modules and recipes
 
-## Libraries and recipes
-
-A file that registers no handlers is a **library**: it never runs on its
-own (the popup lists it only when it declares params) but other scripts
-import it.
+A tweak's files other than its entry are **modules**: they run only when the
+entry imports them (directly or through another module), and never on their
+own. What they register — handlers, params, stores — belongs to the tweak:
+its enable switch, badge, log, popup entry and settings.
 
 ```ts
 // utils.ts:
 export function double(n: number) { return n * 2; }
 
-// in your script:
-import { double } from "./utils";   // "./utils", "utils", "utils.ts" all resolve
+// index.ts:
+import { double } from "./utils";   // "./utils" and "./utils.ts" both resolve
 ```
 
-A library can export **recipes** — functions that register handlers. The
-handler belongs to the script that calls the recipe (its badge, log, popup
-entry and params):
+A module can export **recipes** — functions that register handlers. The
+handler belongs to the tweak, and so does a `tabStore` / `pageStore` /
+`siteStore` the recipe creates:
 
 ```ts
 // mocks.ts:
+import { tweak } from "tangitweak";
+
 export function mockJson(url: string, body: object) {
-    tt.onRequest({ url, strategy: "helper" }, () => ({ replaceResponse: { body } }));
+    tweak.onRequest({ url, strategy: "helper" }, () => ({ replaceResponse: { body } }));
 }
 
-// script:
+// index.ts:
 import { mockJson } from "./mocks";
 mockJson("*://api.example.com/me", { id: 1, role: "admin" });
 ```
 
-Recipes can register `tt.onSite`, `tt.onPage` and `tt.onOverlay` handlers
-too. Call them from your script's top level; a call made later (from a
+Recipes can register `tweak.onSite`, `tweak.onPage` and `tweak.onOverlay` handlers
+too. Call them from the top level; a call made later (from a
 handler or a timer) registers nothing. The Problems panel names them like
 "onPage #2 (mocks)".
 
-Libraries may declare params too, as shared config. They're editable in the
-popup (marked 𝑓, no enabled switch), the Editor and `settings.json`, and
-importers see the library's values. Whether a file is a library is decided
-with its current param values, so a library that registers handlers only
-for some value becomes a script when you change it (and back):
+Modules may declare params too. They're the tweak's params, edited in the
+popup, the Editor and the tweak's `.tweak/settings.json` with the entry's own. A store ID
+(`tweak.globalStore("id", …)`) can be declared once per tweak: two files of
+one tweak declaring the same ID is an error.
 
-```ts
-// gate.ts: a library until "on" is switched on
-const p = tt.params({ on: { type: "boolean", default: false } });
-if (p.on) tt.onRequest({ url: "*://api.example.com/*", strategy: "helper" }, () => ({ block: true }));
-```
-
-Param definitions can be shared too — export them from a library and pass
-them to `tt.params` (directly or spread); the importer gets its own values:
+Param definitions can be shared too — export them from a module and pass
+them to `tweak.params` (directly or spread):
 
 ```ts
 // utils.ts:
 export const envParam = { type: "stringList", default: ["dev"] } as const;
 
-// script:
+// index.ts:
 import { envParam } from "./utils";
-const cfg = tt.params({ intercept_environments: envParam });
+const cfg = tweak.params({ intercept_environments: envParam });
 ```
 
 ## Imports, folders and data files
 
-A script's name is its path in the explorer: a script `api mock` in the
-folder `mock` is named `mock/api mock` (`mock/api mock.ts` in the synced
-folder). Imports resolve like TypeScript, relative to the importing
-script's folder:
+A file's name is its path in the explorer: `index.ts` in the tweak folder
+`mock` is named `mock/index` (`mock/index.ts` in the synced folder). Imports
+resolve like TypeScript, relative to the importing file's folder, and stay
+inside the tweak's folder:
 
 ```ts
-// in "mock/api mock":
-import { double } from "./helpers";          // the script "mock/helpers"
-import { envParam } from "../utils";         // the script "utils" at the root
-import { mockJson } from "utils";            // bare: resolved from the root
+// in "mock/index":
+import { double } from "./helpers";          // the module "mock/helpers"
+import { envParam } from "./lib/utils";      // the module "mock/lib/utils"
+import dayjs from "dayjs";                   // bare: from package.json's "dependencies"
 ```
 
 The `.ts`/`.tsx`/`.js` extension is optional (with both `x.ts` and `x.tsx`,
@@ -510,11 +506,11 @@ A **data file** is a JSON, Markdown, SVG or image file in the explorer (`.json`,
 never runs, scripts import it by its path:
 
 ```ts
-// data file "mock/rate-limits.json": { "max": 5, "window": 60 }
-import limits from "./mock/rate-limits.json"; // the whole object
-import { max } from "./mock/rate-limits.json"; // one property
+// data file "mock/rate-limits.json": { "max": 5, "window": 60 }, in mock/index:
+import limits from "./rate-limits.json"; // the whole object
+import { max } from "./rate-limits.json"; // one property
 
-tt.onRequest({ url: "*://api.example.com/*", strategy: "helper" }, () => ({ headers: { set: { "x-limit": String(max) } } }));
+tweak.onRequest({ url: "*://api.example.com/*", strategy: "helper" }, () => ({ headers: { set: { "x-limit": String(max) } } }));
 ```
 
 `.md` and `.svg` files import as strings (their Markdown or SVG markup, e.g. `import logo from
@@ -522,7 +518,7 @@ tt.onRequest({ url: "*://api.example.com/*", strategy: "helper" }, () => ({ head
 
 Each JSON import gets a freshly parsed copy, so a handler changing it doesn't
 affect other scripts. Saving, renaming or deleting a data file hot-applies
-every script that imports it (directly or through a library). A missing
+every script that imports it (directly or through a module). A missing
 data file or invalid JSON is a compile error on the importing script,
 naming the data file and the JSON error's line and column. In the Code
 view the import is typed from the data file (hovers and completions show its
@@ -532,15 +528,33 @@ pointing at it.
 
 ### Packages from unpkg
 
-A **package import** pulls an npm package into a script by its
-[unpkg.com](https://unpkg.com) URL, pinned to an exact version:
+A **bare import** (`import dayjs from "dayjs"`) pulls in an npm package the
+tweak's `package.json` lists in `"dependencies"`. TangiTweak downloads it
+from [unpkg.com](https://unpkg.com) when you save, at the version unpkg
+serves for the range then, and keeps that copy:
+
+```json
+"dependencies": {
+    "tangitweak": "^0.40.0-alpha",
+    "dayjs": "^1.11.0",
+    "path": "npm:path-browserify@^1.0.1"
+}
+```
+
+npm's alias syntax (`"path": "npm:path-browserify@^1.0.1"`) imports one
+package under another name, in the tweak's dependencies and in a package's
+own. A bare import its `dependencies` don't list is a compile error, as is a
+dependency that isn't an npm range (`file:`, a git URL).
+
+A file can also import a package by its unpkg URL, pinned to an exact
+version:
 
 ```ts
 import dayjs from "https://unpkg.com/dayjs@1.11.13";
 import { addDays } from "https://unpkg.com/date-fns@4.1.0/addDays.js"; // a file inside the package
 import { chunk } from "https://unpkg.com/lodash-es@4.17.21";
 
-tt.onRequest({ url: "*://api.example.com/*", strategy: "helper" }, () => ({
+tweak.onRequest({ url: "*://api.example.com/*", strategy: "helper" }, () => ({
     headers: { set: { "x-tomorrow": dayjs(addDays(new Date(), 1)).format("YYYY-MM-DD") } },
 }));
 ```
@@ -576,11 +590,36 @@ and its types are still downloading, the Editor shows a warning on the URL
 of …`) instead of TypeScript's `Cannot find module` error. A dependency of the
 package that fails to download isn't an error until the package `require`s
 it at runtime, so optional dependencies don't break anything; saving the
-script tries it again. Node.js
-built-ins (`fs`, `path`, `crypto`, …) aren't available: `require("fs")`
-throws `"fs" is a Node.js built-in — not available in TangiTweak scripts`.
-Packages work on every strategy and in `tt.onSite`, `tt.onPage` and
-`tt.onOverlay` handlers (the downloaded code is sent to the page along
+script tries it again.
+
+**Packages written for Node.js.** A package that `require`s a Node.js
+built-in (`events`, `buffer`, `node:events`, …) without depending on it
+itself gets the tweak's own dependency of that name. Add npm's browser
+version to the tweak's `package.json`: `"events": "^3.3.0"`,
+`"buffer": "^6.0.3"`, or an alias where the name differs
+(`"path": "npm:path-browserify@^1.0.1"`). Without one, `require("events")`
+throws `"events" is a Node.js built-in — not available in tweaks — add
+"events": "latest" to the tweak's package.json "dependencies" to use npm's
+browser version`. `fs`, `child_process` and `net` have no browser version.
+Globals a package expects (`Buffer`, `process`) are set by a polyfill the
+entry imports first, since imports run in order:
+
+```ts
+// polyfills.ts
+import { Buffer } from "buffer";   // listed in "dependencies"
+(globalThis as any).Buffer ??= Buffer;
+
+// index.ts
+import "./polyfills";              // first
+import { tweak } from "tangitweak";
+```
+
+A polyfill that patches globals patches them for everything in that world:
+in `onSite` code that's the site, and for network handlers that's
+TangiTweak and other tweaks. Prefer versions that don't (`core-js-pure`
+rather than `core-js`).
+Packages work on every strategy and in `tweak.onSite`, `tweak.onPage` and
+`tweak.onOverlay` handlers (the downloaded code is sent to the page along
 with the script). `onSite` code has no React, so a package that needs it
 (a UI library like `cmdk`) doesn't load there: the script still runs its
 `onSite` handlers, and only using that package in `onSite` code throws.
@@ -596,8 +635,8 @@ VS Code and `tsc` type-check the same imports.
 
 **Limits.**
 
-- Only unpkg.com URLs can be imported. Packages that need Node.js built-ins,
-  native code, WebAssembly fetched at runtime, or a bundler (`import.meta.url`
+- Only npm packages (from unpkg.com) can be imported. Packages that need
+  Node.js built-ins with no browser version, native code, WebAssembly fetched at runtime, or a bundler (`import.meta.url`
   assets, CSS imported from inside a package's JavaScript) don't work.
 - A `.css` file (`import "https://unpkg.com/daisyui@5.0.43/daisyui.css"`)
   becomes a `<style>` in the script's [overlay](#overlays--wtonoverlay);
@@ -620,43 +659,43 @@ HTTPS, so you trust unpkg to serve npm's files unaltered. Only the extension
 background downloads them (when scripts are saved, imported or compiled);
 pages never fetch them.
 
-## Shared state and fetching — `tt.globalStore`, `tt.tabStore`, `tt.pageStore`, `tt.siteStore`, `tt.fetch`
+## Shared state and fetching — `tweak.globalStore`, `tweak.tabStore`, `tweak.pageStore`, `tweak.siteStore`, `tweak.fetch`
 
 Four reactive [valtio](https://valtio.dev) stores, ordered from widest to
 narrowest lifetime and trust boundary. **Anything the site's own JavaScript may
-read or write goes in `tt.siteStore`; everything else goes in the other three.**
+read or write goes in `tweak.siteStore`; everything else goes in the other three.**
 
 ### Lifetime & persistence
 
-| Store | Scope (one copy per) | Page reload / navigation | Tab closed | Browser restart | Saved in `stores.json` | Site JS can read/forge? |
+| Store | Scope (one copy per) | Page reload / navigation | Tab closed | Browser restart | Saved in `.tweak/stores/<id>.json` | Site JS can read/forge? |
 |---|---|---|---|---|---|---|
-| `tt.globalStore` | Entire browser (all tabs) | **Kept** | **Kept** | **Kept** (`persist: false` resets) | **Yes** (when persisted) | No |
-| `tt.tabStore` | Browser tab (`tabId`) | **Kept** | Dropped | Dropped | No | No |
-| `tt.pageStore` | Top-frame document load | **Resets** (SPA route changes kept) | Dropped | Dropped | No | No |
-| `tt.siteStore` | Page's JS world | **Resets** (SPA route changes kept) | Dropped | Dropped | No | **Yes** (untrusted page data) |
+| `tweak.globalStore` | Entire browser (all tabs) | **Kept** | **Kept** | **Kept** (`persist: false` resets) | **Yes** (when persisted) | No |
+| `tweak.tabStore` | Browser tab (`tabId`) | **Kept** | Dropped | Dropped | No | No |
+| `tweak.pageStore` | Top-frame document load | **Resets** (SPA route changes kept) | Dropped | Dropped | No | No |
+| `tweak.siteStore` | Page's JS world | **Resets** (SPA route changes kept) | Dropped | Dropped | No | **Yes** (untrusted page data) |
 
-*(All three background-owned stores — `globalStore`, `tabStore`, and `pageStore` — also survive hot script saves and MV3 service-worker restarts while their tab/page remains open. Stores declared in an imported library belong to that library and are shared across all scripts importing it; `siteStore` must be declared in the entry script itself.)*
+*(All three background-owned stores — `globalStore`, `tabStore`, and `pageStore` — also survive hot script saves and MV3 service-worker restarts while their tab/page remains open. Stores declared in a module belong to the tweak; `siteStore` must be declared in the entry itself.)*
 
 ### Which handlers can access each store
 
-| Store | `onRequest` (`strategy: "rules"`) | Network handlers (`page`, `debugger`, `extension`, `helper`) | `tt.onPage` | `tt.onOverlay` | `tt.onSite` | Top-level / timers |
+| Store | `onRequest` (`strategy: "rules"`) | Network handlers (`page`, `debugger`, `extension`, `helper`) | `tweak.onPage` | `tweak.onOverlay` | `tweak.onSite` | Top-level / timers |
 |---|---|---|---|---|---|---|
-| `tt.globalStore` | **Yes** (rebuilds session rules on change) | **Yes** (sync & after `await`) | **Yes** | **Yes** | No (throws) | **Yes** |
-| `tt.tabStore` | **Yes** (builds per-tab `tabIds` rules on change) | **Yes — before first `await`** | **Yes** | **Yes** | No (throws) | Declare only (reading throws) |
-| `tt.pageStore` | No (throws — use `tt.tabStore`) | **Yes — before first `await`** | **Yes** | **Yes** | No (throws) | Declare only (reading throws) |
-| `tt.siteStore` | No (throws) | No (throws) | **Yes** (live mirror) | **Yes** (live mirror) | **Yes** (direct sync) | Declare only |
+| `tweak.globalStore` | **Yes** (rebuilds session rules on change) | **Yes** (sync & after `await`) | **Yes** | **Yes** | No (throws) | **Yes** |
+| `tweak.tabStore` | **Yes** (builds per-tab `tabIds` rules on change) | **Yes — before first `await`** | **Yes** | **Yes** | No (throws) | Declare only (reading throws) |
+| `tweak.pageStore` | No (throws — use `tweak.tabStore`) | **Yes — before first `await`** | **Yes** | **Yes** | No (throws) | Declare only (reading throws) |
+| `tweak.siteStore` | No (throws) | No (throws) | **Yes** (live mirror) | **Yes** (live mirror) | **Yes** (direct sync) | Declare only |
 
-### `tt.globalStore`
+### `tweak.globalStore`
 
-`tt.globalStore(name, initial)` returns a live object that every copy of the
+`tweak.globalStore(id, initial)` returns a live object that every copy of the
 script shares: its handlers on every strategy see the same values, and
 changes survive a browser restart. It's a [valtio](https://valtio.dev)
 proxy — read and assign like a plain object.
 
 ```ts
-const state = tt.globalStore("state", { mocking: true, hits: 0, seen: [] as string[] });
+const state = tweak.globalStore("state", { mocking: true, hits: 0, seen: [] as string[] });
 
-tt.onRequest({ url: "*://api.example.com/*", strategy: "helper" }, (ctx) => {
+tweak.onRequest({ url: "*://api.example.com/*", strategy: "helper" }, (ctx) => {
     state.hits++;
     state.seen.push(ctx.url);
     if (state.mocking) return { replaceResponse: { body: { mocked: true } } };
@@ -665,15 +704,16 @@ tt.onRequest({ url: "*://api.example.com/*", strategy: "helper" }, (ctx) => {
 
 - **Lifetime.** Shared across every tab and page; survives reloads,
   navigations, closing tabs, script saves, and — with `{ persist: true }`
-  (default) or `{ persist: ["mocking"] }` — browser restarts (editable in
-  `stores.json`). With `{ persist: false }`, kept in memory/session until
+  (default) or `{ persist: ["mocking"] }` — browser restarts (editable in the tweak's
+  [`.tweak/stores/<id>.json`](editor.md#a-tweaks-data-folder)). With `{ persist: false }`, kept in memory/session until
   the browser quits.
 - **Handlers.** Every network handler (`rules`, `page`, `debugger`,
-  `extension`, `helper` — both before and after `await`), `tt.onPage`,
-  `tt.onOverlay`, and top-level/timer code. Throws in `tt.onSite`.
-- **Name.** The first argument is the store's key: one store per name per
-  script (shared namespace with `tabStore` and `pageStore`). Call `tt.globalStore` at top
-  level and share the result; a second call with the same name throws.
+  `extension`, `helper` — both before and after `await`), `tweak.onPage`,
+  `tweak.onOverlay`, and top-level/timer code. Throws in `tweak.onSite`.
+- **ID.** The first argument is the store's key: lowercase letters, digits,
+  `-`, `_` and `.` (not starting with `.`), unique per script. Call
+  `tweak.globalStore` at top level and share the result; a second call with
+  the same ID throws.
 - **Initial.** Used the first time. Later, the saved values win and
   `initial` only adds fields that are missing, so you can add fields
   without losing data.
@@ -683,13 +723,13 @@ tt.onRequest({ url: "*://api.example.com/*", strategy: "helper" }, (ctx) => {
 - **Watching.** `import { subscribe } from "valtio"` runs code when the
   store changes. A `rules` handler that reads a store is re-run (and its
   rules rebuilt) when the store changes.
-- The saved copy lives in `tt.storage` as `"$store:<name>"`; change the
+- The saved copy lives in `tweak.storage` as `"$store:<id>"`; change the
   store, not that key (writing it logs a warning).
 
-### `tt.tabStore`
+### `tweak.tabStore`
 
-`tt.tabStore(name, initial)` keeps one copy per browser tab: unlike
-`tt.pageStore`, it **survives refreshes and navigations** in that tab and
+`tweak.tabStore(initial)` keeps one copy per browser tab: unlike
+`tweak.pageStore`, it **survives refreshes and navigations** in that tab and
 goes away only when the tab closes. It works on **`strategy: "rules"`**
 too — TangiTweak builds per-tab browser rules (`tabIds` / `excludedTabIds`)
 and updates them whenever a tab's copy changes, so toggling a switch in an
@@ -698,13 +738,13 @@ overlay and refreshing redirects even the tab's first requests.
 ```tsx
 import { useSnapshot } from "valtio";
 
-const tab = tt.tabStore("env", { staging: false });
+const tab = tweak.tabStore({ staging: false });
 
-tt.onRequest({ url: "https://api.example.com/*", strategy: "rules" }, (ctx) =>
+tweak.onRequest({ url: "https://api.example.com/*", strategy: "rules" }, (ctx) =>
     tab.staging ? { redirect: `https://staging-api.example.com/${ctx.groups["0"]}` } : undefined,
 );
 
-tt.onOverlay("https://example.com/*", (ctx) => {
+tweak.onOverlay("https://example.com/*", (ctx) => {
     function Switch() {
         const snap = useSnapshot(tab);
         return <button onClick={() => (tab.staging = !tab.staging)}>Staging: {snap.staging ? "on" : "off"}</button>;
@@ -716,19 +756,19 @@ tt.onOverlay("https://example.com/*", (ctx) => {
 - **Lifetime.** One copy per browser tab (`tabId`); subframes share their
   top tab's copy. **Survives page reloads, cross-page navigations, and
   script saves** in that tab; dropped when the tab closes or the browser
-  quits (never saved to disk or `stores.json`).
+  quits (never saved to disk or a store file).
 - **Handlers.** Every network handler (`rules`, `page`, `debugger`,
-  `extension`, `helper`), `tt.onPage`, and `tt.onOverlay`. In network
+  `extension`, `helper`), `tweak.onPage`, and `tweak.onOverlay`. In network
   handlers, **read/write before the first `await`** (after `await` the
   handler no longer knows its tab and throws; tabless requests see a
-  throwaway copy of `initial`). Throws in `tt.onSite` and outside a
+  throwaway copy of `initial`). Throws in `tweak.onSite` and outside a
   handler at top level.
-- **Names & values.** Shares its per-script name space and 1 MB JSON rule
-  with `tt.globalStore` and `tt.pageStore`.
+- **Names & values.** It takes no name (see [Store names](#store-names));
+  1 MB JSON rule as `tweak.globalStore`.
 
-### `tt.pageStore`
+### `tweak.pageStore`
 
-`tt.pageStore(name, initial)` is a store with one copy per page. Each
+`tweak.pageStore(initial)` is a store with one copy per page. Each
 tab's page starts from `initial`; a navigation or a reload starts a new
 page, so its copy starts over (a single-page app's route change doesn't).
 A network handler sees the copy of the page its request comes from, and an
@@ -738,13 +778,13 @@ page's requests share state, and other tabs aren't affected.
 ```tsx
 import { useSnapshot } from "valtio";
 
-const page = tt.pageStore("page", { staging: false });
+const page = tweak.pageStore({ staging: false });
 
-tt.onRequest({ url: "https://api.example.com/*", strategy: "helper" }, (ctx) => {
+tweak.onRequest({ url: "https://api.example.com/*", strategy: "helper" }, (ctx) => {
     if (page.staging) return { redirect: ctx.url.replace("api.", "staging-api.") };
 });
 
-tt.onOverlay("https://example.com/*", (ctx) => {
+tweak.onOverlay("https://example.com/*", (ctx) => {
     function Switch() {
         const snap = useSnapshot(page);
         return (
@@ -760,35 +800,45 @@ tt.onOverlay("https://example.com/*", (ctx) => {
 - **Lifetime.** One copy per top-frame document load (subframes share their
   top page's copy). Survives in-page SPA route changes and script saves;
   **resets to `initial` on reload or navigation**, and drops when the page
-  unloads or the tab closes (never saved to disk or `stores.json`).
+  unloads or the tab closes (never saved to disk or a store file).
 - **Handlers.** Network handlers on `page`, `debugger`, `extension`, and
-  `helper` (**before the first `await`**), `tt.onPage`, and `tt.onOverlay`.
-  **Not available** in `strategy: "rules"` (throws — use `tt.tabStore` for
-  per-tab rules), `tt.onSite` (throws), or top-level/timer code.
+  `helper` (**before the first `await`**), `tweak.onPage`, and `tweak.onOverlay`.
+  **Not available** in `strategy: "rules"` (throws — use `tweak.tabStore` for
+  per-tab rules), `tweak.onSite` (throws), or top-level/timer code.
 - **Which page.** A navigation's own requests (the document, a redirect of
   it) still belong to the page being left. Requests that aren't from a page
   (service workers, other apps through the helper) get a throwaway copy of
   `initial` for that call.
-- **Names & values.** Shares its per-script name space and 1 MB JSON rule
-  with `tt.globalStore` and `tt.tabStore` (a `siteStore` has its own name
-  space).
+- **Names & values.** It takes no name (see [Store names](#store-names));
+  1 MB JSON rule as `tweak.globalStore`.
+
+### Store names
+
+`tweak.tabStore`, `tweak.pageStore` and `tweak.siteStore` take no name: a
+store is named after the file whose code creates it and its position among
+that file's `tabStore` / `pageStore` / `siteStore` calls (`index#0`,
+`lib/state#1`). Every place a tweak runs — the background, the page, the
+site's world, the overlay — runs the same code in the same order, so they
+all agree on which store is which. Create stores at top level (or in a
+module function called at top level) in a fixed order; they all belong to
+the tweak.
 
 ### Stores in page code
 
 `onPage` and `onOverlay` code get live copies of the script's stores:
 reads are synchronous, writes reach the background, the overlay and other
-tabs (`tt.pageStore`: this page's copy only), and their changes come back.
+tabs (`tweak.pageStore`: this page's copy only), and their changes come back.
 
 ```ts
 import { subscribe } from "valtio";
 
-const page = tt.pageStore("page", { hits: 0 });
+const page = tweak.pageStore({ hits: 0 });
 
-tt.replaceResponse({ url: "https://example.com/api/*", strategy: "page" }, () => {
+tweak.replaceResponse({ url: "https://example.com/api/*", strategy: "page" }, () => {
     page.hits++;
 });
 
-tt.onPage("https://example.com/*", (ctx) => {
+tweak.onPage("https://example.com/*", (ctx) => {
     const badge = document.body.appendChild(document.createElement("output"));
     const show = () => (badge.value = `${page.hits} API calls`);
     show();
@@ -798,31 +848,31 @@ tt.onPage("https://example.com/*", (ctx) => {
 ```
 
 `onSite` code runs among the site's own scripts, which could read the
-stores and forge writes to them. There, using `tt.globalStore`, `tt.tabStore`, or
-`tt.pageStore` throws (declaring one at top level is fine: that line runs
+stores and forge writes to them. There, using `tweak.globalStore`, `tweak.tabStore`, or
+`tweak.pageStore` throws (declaring one at top level is fine: that line runs
 there too). Either keep what the site may see in a
-[`tt.siteStore`](#ttsitestore), or keep the stores in `onPage` code, read
+[`tweak.siteStore`](#ttsitestore), or keep the stores in `onPage` code, read
 the site through an `onSite` [handle](#handles--calls-between-places), and
 pass what `onSite` code needs as arguments. An `onSite` handler that uses
 one of them is an error in the Problems view; its quick fixes move the
-handler to `tt.onPage`, or change the stores to `tt.siteStore` (their data
+handler to `tweak.onPage`, or change the stores to `tweak.siteStore` (their data
 becomes page data).
 
 ```ts
-const site = tt.onSite("*://app.example.com/*", () => ({
+const site = tweak.onSite("*://app.example.com/*", () => ({
     user: () => (window as any).myApp?.user?.name as string | undefined,
 }));
-const state = tt.globalStore("state", { user: "" });
+const state = tweak.globalStore("state", { user: "" });
 
-tt.onPage("*://app.example.com/*", async () => {
+tweak.onPage("*://app.example.com/*", async () => {
     const name = await site.user();
     if (typeof name === "string") state.user = name; // the site's data: check it
 });
 ```
 
-### `tt.siteStore`
+### `tweak.siteStore`
 
-`tt.siteStore(name, initial)` is a store that lives in the site's
+`tweak.siteStore(initial)` is a store that lives in the site's
 JavaScript world, one copy per page, for the data `onSite` code and the
 site share: `onSite` code reads and changes it synchronously, and the
 script's `onPage` and `onOverlay` code on that page get a live copy — it
@@ -831,9 +881,9 @@ changes when the site's does, and their changes go back.
 ```tsx
 import { useSnapshot } from "valtio";
 
-const site = tt.siteStore("site", { loggedIn: false, mockCart: false });
+const site = tweak.siteStore({ loggedIn: false, mockCart: false });
 
-tt.onSite("https://shop.example/*", (ctx) => {
+tweak.onSite("https://shop.example/*", (ctx) => {
     // in the site's world, ahead of its own scripts: react to the switch synchronously
     site.loggedIn = /(^|; )session=/.test(document.cookie);
     const realFetch = window.fetch;
@@ -841,7 +891,7 @@ tt.onSite("https://shop.example/*", (ctx) => {
     ctx.signal.addEventListener("abort", () => (window.fetch = realFetch)); // a save runs this again
 });
 
-tt.onOverlay("https://shop.example/*", (ctx) => {
+tweak.onOverlay("https://shop.example/*", (ctx) => {
     function Panel() {
         const snap = useSnapshot(site);
         return (
@@ -858,8 +908,8 @@ tt.onOverlay("https://shop.example/*", (ctx) => {
 - **Lifetime.** One copy per page JS world: survives SPA route changes and
   hot script saves; **resets to `initial` on full page reload or
   navigation**, and disappears when the document unloads (never persisted).
-- **Handlers.** `tt.onSite` (direct synchronous access), `tt.onPage` (live
-  mirror), and `tt.onOverlay` (live mirror of the top frame's copy).
+- **Handlers.** `tweak.onSite` (direct synchronous access), `tweak.onPage` (live
+  mirror), and `tweak.onOverlay` (live mirror of the top frame's copy).
   **Not available in any network handler** (`onRequest`, `replaceResponse`,
   `onResponseHeaders`, `onResponseBody` — throws and is flagged in
   Problems) or inside imported libraries.
@@ -868,22 +918,21 @@ tt.onOverlay("https://shop.example/*", (ctx) => {
   decides what trusted code does, and never put secrets in it.
 - **Values.** JSON only, at most 1 MB, as the other stores; functions on
   the object stay local to each copy.
-- **Names.** Its own name space: `tt.pageStore("x")` and `tt.siteStore("x")`
-  are different stores.
+- **Names.** Named like the others (see [Store names](#store-names)).
 - **Watching.** `subscribe` and `snapshot` from `"valtio"` work in `onSite`
   code (the site's world has valtio's core, not React); `useSnapshot` in
   `onPage` and `onOverlay`.
 
-### `tt.fetch`
+### `tweak.fetch`
 
-`tt.fetch(url, init)` is `fetch` for scripts. It runs in the background,
+`tweak.fetch(url, init)` is `fetch` for scripts. It runs in the background,
 with the extension's host permissions (no CORS) and the browser's cookies,
 and returns a normal `Response`.
 
 ```ts
 // the real response, even though this script mocks the same URL
-tt.replaceResponse({ url: "*://api.example.com/user", strategy: "helper" }, async () => {
-    const real = await (await tt.fetch("https://api.example.com/user", { bypass: true })).json();
+tweak.replaceResponse({ url: "*://api.example.com/user", strategy: "helper" }, async () => {
+    const real = await (await tweak.fetch("https://api.example.com/user", { bypass: true })).json();
     return { ...real, role: "admin" };
 });
 ```
@@ -896,7 +945,7 @@ tt.replaceResponse({ url: "*://api.example.com/user", strategy: "helper" }, asyn
   as the page — its origin, cookies and CORS rules — and works only in
   [overlays](#overlays--wtonoverlay), where it's the default (relative URLs
   resolve against the page); in handlers it rejects.
-- `onSite` and `onPage` code has no `tt.fetch` (it rejects): use `fetch`,
+- `onSite` and `onPage` code has no `tweak.fetch` (it rejects): use `fetch`,
   or call a function of the overlay.
 
 ### Built-in valtio and React
@@ -909,19 +958,19 @@ JSX (`<div />`) goes in a `.tsx` script — one whose name ends in `.tsx`,
 like `ui/Panel.tsx` (create or rename it with the extension; a plain
 script's `.ts` is implied). It compiles with React's automatic runtime, so
 components need no `import React`. JSX in a `.ts` script is an error with a
-**Rename to Name.tsx** quick fix. The built-ins work in `tt.onOverlay`
-and `tt.onPage` code too (in the isolated world React loads on first use,
-and handlers that import it start once it has), but not in `tt.onSite`
+**Rename to Name.tsx** quick fix. The built-ins work in `tweak.onOverlay`
+and `tweak.onPage` code too (in the isolated world React loads on first use,
+and handlers that import it start once it has), but not in `tweak.onSite`
 code, where using one throws.
 
 ```ts
 import { subscribe } from "valtio";
 
-const state = tt.globalStore("state", { mocking: false });
-subscribe(state, () => tt.log("mocking is now", state.mocking));
+const state = tweak.globalStore("state", { mocking: false });
+subscribe(state, () => tweak.log("mocking is now", state.mocking));
 ```
 
-## Page code — `tt.onSite`, `tt.onPage`, `tt.onOverlay`
+## Page code — `tweak.onSite`, `tweak.onPage`, `tweak.onOverlay`
 
 Three handlers run code in the page instead of on its requests. They
 aren't strategies: they work the same whatever the network handlers use.
@@ -929,9 +978,9 @@ Each runs in its own place:
 
 | | runs in | sees | the site | has |
 |---|---|---|---|---|
-| `tt.onSite` | the site's own JavaScript world | the DOM and the site's globals (`window.myApp`); its `fetch`/XHR go through the `page` strategy | sees it and can tamper with it: **untrusted** | `tt.siteStore` only, no handle calls, no React |
-| `tt.onPage` | an isolated world | the DOM, none of the site's globals | can't see or reach it | all stores, handle calls, React (`ctx.mount`), shortcuts |
-| `tt.onOverlay` | the script's own frame over the page (top frame) | its own DOM | can't see or reach it | all stores, handle calls, React, shortcuts, `fetch` as the page |
+| `tweak.onSite` | the site's own JavaScript world | the DOM and the site's globals (`window.myApp`); its `fetch`/XHR go through the `page` strategy | sees it and can tamper with it: **untrusted** | `tweak.siteStore` only, no handle calls, no React |
+| `tweak.onPage` | an isolated world | the DOM, none of the site's globals | can't see or reach it | all stores, handle calls, React (`ctx.mount`), shortcuts |
+| `tweak.onOverlay` | the script's own frame over the page (top frame) | its own DOM | can't see or reach it | all stores, handle calls, React, shortcuts, `fetch` as the page |
 
 Use `onPage` for DOM changes, `onSite` only for what needs the site's
 JavaScript (its globals, wrapping its functions), and `onOverlay` for a
@@ -941,12 +990,12 @@ returns, so the places work together:
 
 ```ts
 // the site's world: read its globals, hand them over as functions
-const site = tt.onSite("*://app.example.com/*", () => ({
+const site = tweak.onSite("*://app.example.com/*", () => ({
     flags: () => Object.keys((window as any).__APP_FLAGS__ ?? {}),
 }));
 
 // isolated: change the DOM, ask the site
-tt.onPage("*://app.example.com/*", async (ctx) => {
+tweak.onPage("*://app.example.com/*", async (ctx) => {
     const title = ctx.once("title", () => document.title);
     const flags = await site.flags(); // string[], typed from the onSite handler
     document.title = `${flags.length} flags · ${title}`;
@@ -958,7 +1007,7 @@ tt.onPage("*://app.example.com/*", async (ctx) => {
   page. A script may register several of each, with different routes and
   `when`s.
 - **Register at top level.** Like every handler, unconditionally and
-  synchronously: the n-th `tt.onPage` call is the same handler in every
+  synchronously: the n-th `tweak.onPage` call is the same handler in every
   place the script runs. That's how a handle finds its handler, and how a
   save matches new runs to old ones ([hot reload](#hot-reload--runs-and-ctx)).
 - Because it runs in the page, page code works however the response
@@ -973,9 +1022,9 @@ ready; `when` changes that.**
 
 | Place | Default `when` | Why |
 |---|---|---|
-| `tt.onSite` | `document_start` | it's there to get in *before* the site: `ctx.patch(window, "fetch", …)`, catching a store as the site creates it. By `document_end` most of what you'd patch has run, and site code may already hold the original functions |
-| `tt.onPage` | `document_end` | DOM work needs `<body>`; at `document_start` `querySelector` finds (almost) nothing |
-| `tt.onOverlay` | `document_end` | a GUI: nothing to gain by racing the parser |
+| `tweak.onSite` | `document_start` | it's there to get in *before* the site: `ctx.patch(window, "fetch", …)`, catching a store as the site creates it. By `document_end` most of what you'd patch has run, and site code may already hold the original functions |
+| `tweak.onPage` | `document_end` | DOM work needs `<body>`; at `document_start` `querySelector` finds (almost) nothing |
+| `tweak.onOverlay` | `document_end` | a GUI: nothing to gain by racing the parser |
 
 In every frame, TangiTweak's hook starts at `document_start`, asks the
 background for the scripts with a page route matching that frame's URL,
@@ -984,10 +1033,10 @@ Each then runs once, at its route's `when`. Handlers with the same `when`
 run in script-list order, then registration order.
 
 ```ts
-tt.onSite("*://example.com/*", () => { ... });                                       // default: document_start
-tt.onPage("*://example.com/*", () => { ... });                                       // default: document_end
-tt.onSite({ url: "*://example.com/*", when: "document_idle" }, () => { ... });       // reads globals the site sets up while loading
-tt.onPage({ url: "*://example.com/*", when: "document_start" }, () => { ... });      // sees the parser's first nodes
+tweak.onSite("*://example.com/*", () => { ... });                                       // default: document_start
+tweak.onPage("*://example.com/*", () => { ... });                                       // default: document_end
+tweak.onSite({ url: "*://example.com/*", when: "document_idle" }, () => { ... });       // reads globals the site sets up while loading
+tweak.onPage({ url: "*://example.com/*", when: "document_start" }, () => { ... });      // sees the parser's first nodes
 ```
 
 | `when` | Runs | DOM state | Use for |
@@ -1027,7 +1076,7 @@ so one handler can add an early listener and a late mount.
   page's in an overlay); `method`, `resourceType` and `groups` are
   placeholders (`"GET"`, `"main_frame"`, `{}`).
 
-### `tt.onSite` — the site's world
+### `tweak.onSite` — the site's world
 
 `onSite` code runs among the site's own scripts: it reads `window.myApp`
 or a Redux store directly, wraps the site's functions with
@@ -1036,7 +1085,7 @@ the `page` strategy (a `fetch` in `onPage` code doesn't).
 
 ```ts
 // by default before the site's own scripts: they get the patched fetch
-tt.onSite("*://app.example.com/*", (ctx) => {
+tweak.onSite("*://app.example.com/*", (ctx) => {
     ctx.patch(window, "fetch", (orig) => (input, init) => {
         console.log("fetch", String(input));
         return orig(input, init);
@@ -1047,19 +1096,19 @@ tt.onSite("*://app.example.com/*", (ctx) => {
 The site can see that code, call the functions it returns and fake their
 answers, so `onSite` code is untrusted:
 
-- **Only site stores, no handle calls.** `tt.globalStore`, `tt.tabStore`, and
-  `tt.pageStore` throw there ([stores in page code](#stores-in-page-code));
-  [`tt.siteStore`](#ttsitestore) is the store for it. Calling a handle
+- **Only site stores, no handle calls.** `tweak.globalStore`, `tweak.tabStore`, and
+  `tweak.pageStore` throw there ([stores in page code](#stores-in-page-code));
+  [`tweak.siteStore`](#ttsitestore) is the store for it. Calling a handle
   throws `SiteCannotCallError` — the site could make the same call.
   Problems shows both, with a quick fix (**Ctrl+.** / **⌘.**) that moves
-  the handler to `tt.onPage`. Call your own functions directly.
+  the handler to `tweak.onPage`. Call your own functions directly.
 - **No built-in React** (using it throws), so no `ctx.mount`
-  or `ctx.each`. A library script that uses React at its top level
+  or `ctx.each`. A module that uses React at its top level
   (`const Item = memo(…)`) fails the `onSite` side of every script that
   imports it; the error names the line and the import chain, so keep what
   `onSite` code needs in a module without React. Of valtio only its core (`subscribe`, `snapshot`); no
-  `tt.fetch` (use `fetch`). `tt.log`, `tt.params`,
-  `tt.storage` and `console` work; logs go to the Log tagged `page › host`.
+  `tweak.fetch` (use `fetch`). `tweak.log`, `tweak.params`,
+  `tweak.storage` and `console` work; logs go to the Log tagged `page › host`.
 - **Its results are page data.** The site can replace `Object.keys`, patch
   your functions or answer in their place. Fine to show; check them before
   they decide what your network handlers do (which URLs to redirect, which
@@ -1068,18 +1117,18 @@ answers, so `onSite` code is untrusted:
   in the isolated world instead: same DOM and timing, but the site's
   globals aren't visible. They're still treated as site code.
 
-### `tt.onPage` — the isolated world
+### `tweak.onPage` — the isolated world
 
 `onPage` code runs where the site's JavaScript can't see or imitate it:
 the same DOM, none of the site's globals (read those through an
 [`onSite` handle](#handles--calls-between-places)). It's trusted: it gets
-`tt.storage`, `tt.log`, `tt.params` and `console` (lines go to the Log
+`tweak.storage`, `tweak.log`, `tweak.params` and `console` (lines go to the Log
 tagged `isolated › host`), live [stores](#stores-in-page-code) (site stores too), the
 built-in React and valtio, and calls the script's handles. It has no
-`tt.fetch`; its `fetch` isn't seen by the `page` strategy.
+`tweak.fetch`; its `fetch` isn't seen by the `page` strategy.
 
 ```tsx
-tt.onPage("*://app.example.com/*", (ctx) => {
+tweak.onPage("*://app.example.com/*", (ctx) => {
     ctx.style(`.ad-banner { display: none !important }`);
     ctx.mount("#header", <button onClick={() => alert("hi")}>Hi</button>); // in a closed shadow root
 });
@@ -1102,7 +1151,7 @@ turn it on:
    `chrome://extensions` instead.
 
 Until then the handler doesn't run, Problems shows an error on its
-`tt.onPage` or `tt.onSite` line saying how to turn user scripts on, and
+`tweak.onPage` or `tweak.onSite` line saying how to turn user scripts on, and
 the overlay's calls into it reject with `not running on this page (user
 scripts are off)`. Once they're on, pages loaded from then on run it
 (reload open ones); after that, saving the script updates open pages in
@@ -1116,12 +1165,12 @@ own scope, apart from the site's JavaScript).
 
 ## Handles — calls between places
 
-`tt.onSite`, `tt.onPage` and `tt.onOverlay` return a **handle** to the
+`tweak.onSite`, `tweak.onPage` and `tweak.onOverlay` return a **handle** to the
 functions their handler returns. Call them from another place with
 `await`:
 
 ```ts
-const page = tt.onPage("*://app.example.com/*", () => ({
+const page = tweak.onPage("*://app.example.com/*", () => ({
     highlight(sel: string) {
         const els = [...document.querySelectorAll<HTMLElement>(sel)];
         els.forEach((el) => (el.style.outline = "2px solid red"));
@@ -1129,7 +1178,7 @@ const page = tt.onPage("*://app.example.com/*", () => ({
     },
 }));
 
-tt.onOverlay("*://app.example.com/*", (ctx) => {
+tweak.onOverlay("*://app.example.com/*", (ctx) => {
     const input = ctx.once("input", () => document.body.appendChild(document.createElement("input")));
     input.onchange = async () => (input.title = `${await page.highlight(input.value)} matches`);
 });
@@ -1189,7 +1238,7 @@ code, return a `next()` that waits for the next item, and loop over it with
 `ctx.each(fn, ...args)` in `onPage` or `onOverlay` code:
 
 ```ts
-const site = tt.onSite("*://app.example.com/*", (ctx) => {
+const site = tweak.onSite("*://app.example.com/*", (ctx) => {
     const logins: string[] = [];
     const waiting: ((user: string) => void)[] = [];
     window.addEventListener("app:login", (e) => {
@@ -1203,9 +1252,9 @@ const site = tt.onSite("*://app.example.com/*", (ctx) => {
     };
 });
 
-const state = tt.globalStore("state", { lastLogin: "" });
+const state = tweak.globalStore("state", { lastLogin: "" });
 
-tt.onPage("*://app.example.com/*", async (ctx) => {
+tweak.onPage("*://app.example.com/*", async (ctx) => {
     for await (const user of ctx.each(site.nextLogin)) state.lastLogin = user;
 });
 ```
@@ -1244,7 +1293,7 @@ starting timers — isn't undone, and the new run does it again: an
 | `shortcut(keys, fn, opts)` | — | ✓ | ✓ | [keyboard shortcuts](#keyboard-shortcuts) |
 
 ```ts
-tt.onPage("*://app.example.com/*", (ctx) => {
+tweak.onPage("*://app.example.com/*", (ctx) => {
     document.addEventListener("click", (e) => console.log("clicked", e.target), { signal: ctx.signal });
     const t = setInterval(() => console.log("tick"), 1000);
     ctx.signal.addEventListener("abort", () => clearInterval(t));
@@ -1269,7 +1318,7 @@ tt.onPage("*://app.example.com/*", (ctx) => {
   each add a layer.
 
   ```ts
-  tt.onSite("*://app.example.com/*", (ctx) => {
+  tweak.onSite("*://app.example.com/*", (ctx) => {
       ctx.patch(history, "pushState", (orig) => function (this: History, ...args: any[]) {
           console.log("navigating to", args[2]);
           return orig.apply(this, args as Parameters<History["pushState"]>);
@@ -1302,7 +1351,7 @@ tt.onPage("*://app.example.com/*", (ctx) => {
   - Your own `ctx.mount` UI never matches.
 
   ```ts
-  tt.onPage("*://video.example.com/*", (ctx) => {
+  tweak.onPage("*://video.example.com/*", (ctx) => {
       ctx.elements("video", (video, signal) => {
           video.playbackRate = 2;
           video.addEventListener("ratechange", () => (video.playbackRate = 2), { signal });
@@ -1350,7 +1399,7 @@ tt.onPage("*://app.example.com/*", (ctx) => {
     a shortcut). Use `key` for two mounts at the same place.
 
   ```tsx
-  tt.onPage("*://app.example.com/*", (ctx) => {
+  tweak.onPage("*://app.example.com/*", (ctx) => {
       // a label after every version tag, also ones the app adds later
       ctx.mount('[data-testid="version"]', <Label />, { position: "after" });
       // a badge over the avatar, put back when the app re-renders the header
@@ -1384,7 +1433,7 @@ tt.onPage("*://app.example.com/*", (ctx) => {
   - In `onPage`, `f.shortcut` listens for keys pressed in that iframe.
 
   ```ts
-  tt.onPage("*://mail.example.com/*", (ctx) => {
+  tweak.onPage("*://mail.example.com/*", (ctx) => {
       ctx.iframes("iframe.editor", (f) => {
           f.style("body { font-size: 16px }");
           f.document.addEventListener("keydown", (e) => console.log(e.key), { signal: f.signal });
@@ -1455,14 +1504,14 @@ by the new run, a function still running in the old run rejects with
 `ReloadedError`, and the old runs' own pending calls reject with
 `AbortError`.
 
-Handlers are told apart by position: the n-th `tt.onPage` (or `onSite`,
+Handlers are told apart by position: the n-th `tweak.onPage` (or `onSite`,
 `onOverlay`) call in the script. Moving one before another of the same
 kind swaps their keys, so their mounts start over and their `once` values
 are made again.
 
-## Overlays — `tt.onOverlay`
+## Overlays — `tweak.onOverlay`
 
-`tt.onOverlay(route, fn)` gives a script its own GUI on a page: `fn` runs
+`tweak.onOverlay(route, fn)` gives a script its own GUI on a page: `fn` runs
 in a transparent frame laid over the tab, and whatever it draws in that
 frame's `document` shows on top of the page. Clicks on empty areas go
 through to the page.
@@ -1470,12 +1519,12 @@ through to the page.
 ```tsx
 import { useSnapshot } from "valtio";
 
-const mock = tt.globalStore("mock", { enabled: false });
+const mock = tweak.globalStore("mock", { enabled: false });
 
-tt.replaceResponse({ url: "*://app.example.com/api/me", strategy: "helper" }, () =>
+tweak.replaceResponse({ url: "*://app.example.com/api/me", strategy: "helper" }, () =>
     mock.enabled ? { name: "Test user", plan: "pro" } : undefined);
 
-tt.onOverlay("*://app.example.com/*", (ctx) => {
+tweak.onOverlay("*://app.example.com/*", (ctx) => {
     function Panel() {
         const snap = useSnapshot(mock);
         return (
@@ -1502,8 +1551,8 @@ it right away, and the value survives restarts.
   its `onOverlay` handlers run: network, `onSite` and `onPage` handlers
   register nothing there (their handles work). Stores are live copies of
   the background's, so the GUI and the handlers see the same values; a
-  `tt.pageStore` is the copy of the overlay's page, and a `tt.siteStore`
-  the copy of its page's site. `tt.log`, `console.*`,
+  `tweak.pageStore` is the copy of the overlay's page, and a `tweak.siteStore`
+  the copy of its page's site. `tweak.log`, `console.*`,
   errors and unhandled rejections go to the script's Log, tagged
   `overlay › host`.
 - **Isolation.** The page's CSS can't reach the GUI and the GUI's CSS
@@ -1529,7 +1578,7 @@ it right away, and the value survives restarts.
   sites whose CSP blocks scripts and `eval`, and why the site can't reach
   them. An `about:blank` frame wouldn't be removed, but it would inherit
   the page's CSP and be open to the page. For a GUI that must survive
-  these tools, use `tt.onPage` with `ctx.mount` and `ctx.shortcut`: it
+  these tools, use `tweak.onPage` with `ctx.mount` and `ctx.shortcut`: it
   renders into the page (in a closed shadow root) with no extension
   frame.
 - **Preview in the Editor.** The Editor's **Preview** tab (⌥⇧V) runs the
@@ -1541,7 +1590,7 @@ it right away, and the value survives restarts.
   function that stops listening; it also stops when the run ends.
 
   ```ts
-  tt.onOverlay("*://app.example.com/*", (ctx) => {
+  tweak.onOverlay("*://app.example.com/*", (ctx) => {
       const badge = ctx.once("badge", () => document.body.appendChild(document.createElement("div")));
       badge.textContent = "In the cart";
       const show = (url: string) => (badge.hidden = !url.includes("/cart"));
@@ -1556,7 +1605,7 @@ it right away, and the value survives restarts.
 in `onPage` and `onOverlay` handlers:
 
 ```ts
-tt.onOverlay("*://app.example.com/*", (ctx) => {
+tweak.onOverlay("*://app.example.com/*", (ctx) => {
     const box = ctx.once("box", () => document.body.appendChild(document.createElement("div")));
     box.textContent = "Hello";
     box.hidden = true;
@@ -1570,8 +1619,8 @@ tt.onOverlay("*://app.example.com/*", (ctx) => {
   order) then one key: a character (`K`, `1`, `/`) or a name (`Esc`,
   `Enter`, `Space`, `Up`, `F2`, `Plus`). `Mod` is ⌘ on macOS and Ctrl
   elsewhere. Modifiers must match exactly; `Alt+L` works with Option on
-  macOS too. For other per-OS choices, use `tt.isMac`, `tt.isWindows`
-  and `tt.isLinux` (desktop only: none of them on Android or ChromeOS).
+  macOS too. For other per-OS choices, use `tweak.isMac`, `tweak.isWindows`
+  and `tweak.isLinux` (desktop only: none of them on Android or ChromeOS).
 - **Before or after the page.** By default the shortcut wins: the page
   never sees the key. With `{ priority: "after-page" }` it runs only if
   the page didn't handle the key (didn't call `preventDefault` or stop it).
@@ -1580,7 +1629,7 @@ tt.onOverlay("*://app.example.com/*", (ctx) => {
   Anything else (`undefined`, `false`, a promise, a throw) consumes it.
   In an overlay this works for keys pressed while the overlay has focus.
   A key pressed in the page reaches the overlay's code only after the
-  page's turn, so it's always consumed there; use `tt.onPage` when that
+  page's turn, so it's always consumed there; use `tweak.onPage` when that
   matters.
 - **Where.** An overlay's: on the page (its top frame) and while the
   overlay has focus. An `onPage` handler's: in the frame it runs in, so
@@ -1605,7 +1654,7 @@ tt.onOverlay("*://app.example.com/*", (ctx) => {
   page they wipe with `document.open()` isn't followed either.
 
   ```ts
-  tt.onPage("*://docs.google.com/*", (ctx) => {
+  tweak.onPage("*://docs.google.com/*", (ctx) => {
       if (window.top !== window) return;
       ctx.shortcut("Alt+Shift+R", renameTab, { iframes: true });
   });
@@ -1623,10 +1672,10 @@ tt.onOverlay("*://app.example.com/*", (ctx) => {
 To let the user pick the keys, make them a `shortcut` param:
 
 ```ts
-const cfg = tt.params({
+const cfg = tweak.params({
     toggle: { type: "shortcut", default: "Alt+Shift+H", description: "Show or hide the box" },
 });
-tt.onOverlay("*://app.example.com/*", (ctx) => {
+tweak.onOverlay("*://app.example.com/*", (ctx) => {
     ctx.shortcut(cfg.toggle, () => { box.hidden = !box.hidden; });
 });
 ```
@@ -1636,7 +1685,7 @@ Click it and press the new keys to change them (Esc cancels). **×**
 removes the shortcut and **↺** puts the default back. A recorded `Mod`
 means ⌘ on macOS and Ctrl elsewhere, so the setting works on both. The
 value is the keys as a string, or `""` once removed, and
-`ctx.shortcut("")` adds nothing. In `settings.json` you can type the
+`ctx.shortcut("")` adds nothing. In `.tweak/settings.json` you can type the
 keys yourself; keys that aren't a shortcut are flagged and ignored. A
 `default` that isn't a shortcut is a script error.
 
@@ -1647,16 +1696,16 @@ the request, with the page's origin, cookies and CORS rules, and relative
 URLs resolve against the page. Your scripts' handlers see it like any
 request — on every strategy except `page`, which only sees the page's own
 JavaScript (to go through `page`, fetch from an [`onSite`
-handle](#handles--calls-between-places)). `tt.fetch` defaults to the same
+handle](#handles--calls-between-places)). `tweak.fetch` defaults to the same
 in an overlay; `bypass: true` keeps every script's handlers off the
 request, and `from: "background"` fetches from the extension instead (host
 permissions, no CORS).
 
 ```ts
-tt.onOverlay("*://app.example.com/*", async () => {
+tweak.onOverlay("*://app.example.com/*", async () => {
     const me = await (await fetch("/api/me")).json();                            // as the page, through your handlers
-    const real = await (await tt.fetch("/api/me", { bypass: true })).json();     // as the page, skipping all handlers
-    const other = await tt.fetch("https://other.site/x", { from: "background" }); // from the extension, no CORS
+    const real = await (await tweak.fetch("/api/me", { bypass: true })).json();     // as the page, skipping all handlers
+    const other = await tweak.fetch("https://other.site/x", { from: "background" }); // from the extension, no CORS
 });
 ```
 
@@ -1684,7 +1733,7 @@ tt.onOverlay("*://app.example.com/*", async () => {
   import "https://unpkg.com/daisyui@5.0.43/daisyui.css";
   import { useState } from "react";
 
-  tt.onOverlay("*://app.example.com/*", async (ctx) => {
+  tweak.onOverlay("*://app.example.com/*", async (ctx) => {
       await import("https://unpkg.com/@tailwindcss/browser@4.1.11");
       function Modal() {
           const [open, setOpen] = useState(true);
@@ -1707,12 +1756,12 @@ tt.onOverlay("*://app.example.com/*", async () => {
   to it.
 
   ```ts
-  const redirect = tt.globalStore("redirect", { target: "" });
+  const redirect = tweak.globalStore("redirect", { target: "" });
 
-  tt.onRequest({ url: "*://cdn.example.com/app.js", strategy: "helper" }, () =>
+  tweak.onRequest({ url: "*://cdn.example.com/app.js", strategy: "helper" }, () =>
       redirect.target ? { redirect: redirect.target } : undefined);
 
-  tt.onOverlay("*://app.example.com/*", (ctx) => {
+  tweak.onOverlay("*://app.example.com/*", (ctx) => {
       const input = ctx.once("input", () => document.body.appendChild(document.createElement("input")));
       input.value = redirect.target;
       input.onchange = () => (redirect.target = input.value);   // the next app.js load is redirected
@@ -1724,8 +1773,8 @@ tt.onOverlay("*://app.example.com/*", async () => {
 - **Toast:** a fixed element plus `setTimeout` to remove it.
 - **Remember open/closed:** a store field (`ui.open`), so it survives
   reloads and is the same in every tab.
-- **Per-tab switch (kept across reloads):** a `tt.tabStore` field — works with `strategy: "rules"` too.
-- **Per-page switch (resets on reload):** a `tt.pageStore` field, so turning it on affects only this document load.
+- **Per-tab switch (kept across reloads):** a `tweak.tabStore` field — works with `strategy: "rules"` too.
+- **Per-page switch (resets on reload):** a `tweak.pageStore` field, so turning it on affects only this document load.
 
 ## Multiple handlers — how they stack
 
@@ -1744,20 +1793,20 @@ its handlers from every script in list order before the next stage starts:
 onRequest → replaceResponse → (network) → onResponseHeaders → onResponseBody
 ```
 
-So a `tt.onRequest` block in the last script still wins over a
-`tt.replaceResponse` in the first one.
+So a `tweak.onRequest` block in the last script still wins over a
+`tweak.replaceResponse` in the first one.
 
 ### Final results end the request
 
 A **final result** is an `onRequest` `block`, `redirect` or
-`replaceResponse`, or a body returned by `tt.replaceResponse`. The first
+`replaceResponse`, or a body returned by `tweak.replaceResponse`. The first
 one wins. Nothing runs on that request after it: no later handler of the
 same stage, and no later stage. A replaced response never reaches the
 network, `onResponseHeaders` or `onResponseBody`. A redirect starts a new
 request to the target, and the handlers matching the target run on it.
 
 ```ts
-tt.onRequest({ url: "*://api.example.com/me", strategy: "helper" }, () => ({
+tweak.onRequest({ url: "*://api.example.com/me", strategy: "helper" }, () => ({
     replaceResponse: {
         body: { id: 1, name: "Mocked User" },  // object → JSON; strings/bytes pass through
         status: 200,                            // default 200
@@ -1777,12 +1826,12 @@ loads), so the URL changes. See
 
 ### Results that stack
 
-- **Header edits** (`onRequest` `headers`, `tt.onResponseHeaders`): every
+- **Header edits** (`onRequest` `headers`, `tweak.onResponseHeaders`): every
   handler runs. For each header (case-insensitive) the **later handler in
   the list wins**, whether it sets or removes it. A later `remove` deletes an
   earlier `set`, and a later `set` undoes an earlier `remove`. Request
   header edits still apply when a later `onRequest` handler redirects.
-- **`tt.onResponseBody`**: transforms **compose** like a pipeline. Handler
+- **`tweak.onResponseBody`**: transforms **compose** like a pipeline. Handler
   A's output becomes handler B's input, in list order.
 
 ```text
@@ -1831,7 +1880,7 @@ Each warning is logged at most once a minute per handler and URL.
 
 ## Async handlers
 
-All `tt.*` handlers may be `async` (return a Promise). What happens with the
+All `tweak.*` handlers may be `async` (return a Promise). What happens with the
 result depends on the handler's strategy:
 
 | handler | `page` (page fetch/XHR) | `extension`, Chromium MV2 | `extension`, Firefox | `debugger` | `helper` |
@@ -1846,7 +1895,7 @@ result depends on the handler's strategy:
 Practical rules of thumb:
 
 - **Mocking/transforming APIs (fetch/XHR)?** Async just works — write
-  `tt.onResponseBody(API, async (ctx, body) => { const j = await translate(body); return …; })`.
+  `tweak.onResponseBody(API, async (ctx, body) => { const j = await translate(body); return …; })`.
 - **Redirect/block or header changes decided asynchronously** on Chromium?
   Use `helper` or `debugger` (both await). Only
   the `extension` strategy on Chromium can't: there an async result logs an error and the

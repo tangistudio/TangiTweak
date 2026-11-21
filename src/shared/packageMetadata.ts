@@ -1,24 +1,26 @@
 /**
- * A package's metadata. A single script declares it in its code, read when
- * it compiles:
+ * A tweak bundle's metadata: a folder whose package.json has a
+ * `"tangitweak"` block (a package.json without one isn't a bundle):
  *
- *     tt.metadata({ name: "GitHub dark mode", version: "1.2.0", connect: ["api.github.com"] });
+ *     { "name": "github-compact", "version": "1.0.0",
+ *       "description": "…", "main": "index.ts",
+ *       "tangitweak": { "displayName": "GitHub Compact", "icon": "./icon.svg",
+ *                       "connect": ["api.github.com"], "updateURL": "…" },
+ *       "dependencies": { "tangitweak": "^0.40.0-alpha", "dayjs": "^1.11.0" } }
  *
- * A bundle — scripts that install and update together — is a folder with a
- * metadata.json at its root, which lists them:
- *
- *     { "name": "GitHub tweaks", "version": "2.0.0",
- *       "scripts": ["dark.ts", "pr-tools.ts"] }
- *
- * `connect` names the hosts the scripts' tt.fetch calls reach; the install
- * page shows them and an update that adds one asks for approval.
- * `updateURL` is where updates come from instead of where it was installed
- * from (any source parseSource reads); a package from local files with
- * one updates too.
+ * The entry is `main`, else `index.ts`, else `index.tsx`; the other files
+ * are its modules. `name`, `version`, `description`, `author`, `license`
+ * and `homepage` are the standard fields. `connect` names the hosts the
+ * tweak's tweak.fetch calls reach; the install page shows them and an
+ * update that adds one asks for approval. `updateURL` is where updates
+ * come from instead of where it was installed from (any source parseSource
+ * reads). The minimum TangiTweak version is the lowest version of
+ * `dependencies.tangitweak` (or the block's `minTangiTweakVersion`).
  */
 import { parseSource } from "./packageSource";
 
 export interface PackageMetadata {
+    /** the display name (`tangitweak.displayName`, else the npm `name`) */
     name?: string;
     version?: string;
     /** minimum TangiTweak version required ("0.35.0") */
@@ -29,52 +31,72 @@ export interface PackageMetadata {
     homepage?: string;
     author?: string;
     license?: string;
-    /** where updates come from (a script, metadata.json or .zip URL, a GitHub file or folder, a gist) */
+    /** where updates come from (a package.json or .zip URL, a GitHub folder, a gist) */
     updateURL?: string;
     connect: string[];
 }
 
-/** a bundle's metadata.json */
+/** a bundle's package.json */
 export interface Manifest extends PackageMetadata {
-    /** its entry files, relative to the manifest's folder */
+    /** its entry file, relative to the folder: `[main]`, else `["index.ts"]` (index.tsx when there's no index.ts) */
     scripts: string[];
+    /** the npm `name` */
+    packageName?: string;
+    /** the declared `main` (normalized), if any */
+    main?: string;
+    /** `dependencies` (npm ranges, `npm:` aliases) */
+    dependencies: Record<string, string>;
 }
 
-export const MANIFEST_FILE = "metadata.json";
+export const MANIFEST_FILE = "package.json";
+/** the pre-0.40 bundle manifest: such bundles no longer load */
+export const LEGACY_MANIFEST_FILE = "metadata.json";
 
-/** a bundle's manifest (at any folder depth) */
+/** a bundle's package.json path (at any folder depth) */
 export const isManifestPath = (path: string): boolean => path === MANIFEST_FILE || path.endsWith("/" + MANIFEST_FILE);
 
-const TEXT_KEYS = ["name", "version", "minTangiTweakVersion", "description", "icon", "homepage", "author", "license", "updateURL"] as const;
 const VERSION_RE = /^v?\d+(\.\d+){0,2}([-+][0-9A-Za-z.-]+)?$/;
 
-/** validate tt.metadata's argument or a manifest's fields (unknown keys are ignored: a newer script may add some) */
-export function readMetadata(raw: unknown, where: string): PackageMetadata {
-    if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error(`${where}: expected an object`);
-    const r = raw as Record<string, unknown>;
-    const out: PackageMetadata = { connect: [] };
-    for (const k of TEXT_KEYS) {
-        const v = r[k];
-        if (v === undefined) continue;
-        if (typeof v !== "string") throw new Error(`${where}: "${k}" must be a string`);
-        if (v.trim()) out[k] = v.trim();
+/** a package.json's text, parsed; undefined when it isn't valid JSON or isn't an object */
+function parseJsonObject(text: string): Record<string, any> | undefined {
+    try {
+        const raw = JSON.parse(text);
+        return raw && typeof raw === "object" && !Array.isArray(raw) ? raw : undefined;
+    } catch {
+        return undefined;
     }
-    if (out.minTangiTweakVersion) {
-        if (!VERSION_RE.test(out.minTangiTweakVersion)) throw new Error(`${where}: "minTangiTweakVersion" must be a version like "0.35.0"`);
-        out.minTangiTweakVersion = out.minTangiTweakVersion.replace(/^v/i, "");
-    }
-    if (out.updateURL) {
-        const src = parseSource(out.updateURL);
-        if (typeof src === "string") throw new Error(`${where}: "updateURL" — ${src}`);
-    }
-    if (r.connect !== undefined) {
-        if (!Array.isArray(r.connect) || r.connect.some((h) => typeof h !== "string")) throw new Error(`${where}: "connect" must be a list of host names`);
-        out.connect = [...new Set((r.connect as string[]).map((h) => h.trim().toLowerCase()).filter(Boolean))];
-    }
-    return out;
 }
 
-/** a bundle's metadata.json, or why it isn't one */
+/** does this package.json text declare a tweak bundle (has a `"tangitweak"` object)? */
+export function isBundlePackageJson(text: string | undefined): boolean {
+    const raw = text === undefined ? undefined : parseJsonObject(text);
+    return !!raw && !!raw.tangitweak && typeof raw.tangitweak === "object" && !Array.isArray(raw.tangitweak);
+}
+
+/** `main` as a bundle-relative file path ("./src/index.ts" → "src/index.ts"); undefined when unset */
+export function normalizeMain(main: unknown): string | undefined {
+    if (typeof main !== "string" || !main.trim()) return undefined;
+    return main.trim().replace(/^\.\//, "");
+}
+
+/** the lowest version a dependency range allows ("^0.40.0-alpha" → "0.40.0-alpha"); undefined for non-registry ranges */
+export function rangeMinimum(range: string | undefined): string | undefined {
+    const r = range?.trim();
+    if (!r || /[:/]/.test(r)) return undefined;
+    const m = /\d+(?:\.\d+){0,2}(?:-[0-9A-Za-z.-]+)?/.exec(r);
+    return m?.[0];
+}
+
+/** the minimum TangiTweak version a bundle's package.json asks for: `dependencies.tangitweak`'s lowest, else (a `file:` or git dependency) the block's `minTangiTweakVersion` */
+export function minTangiTweakOf(pkg: any): string | undefined {
+    const dep = pkg?.dependencies?.tangitweak;
+    const fromDep = typeof dep === "string" ? rangeMinimum(dep) : undefined;
+    if (fromDep) return fromDep;
+    const own = pkg?.tangitweak?.minTangiTweakVersion;
+    return typeof own === "string" && own.trim() ? own.trim().replace(/^v/i, "") : undefined;
+}
+
+/** a bundle's package.json, or why it isn't one (unknown keys are ignored) */
 export function parseManifest(text: string, where = MANIFEST_FILE): Manifest {
     let raw: any;
     try {
@@ -82,45 +104,87 @@ export function parseManifest(text: string, where = MANIFEST_FILE): Manifest {
     } catch (e: any) {
         throw new Error(`${where} isn't valid JSON: ${e?.message || e}`);
     }
-    const m = readMetadata(raw, where);
-    const list = raw.scripts;
-    if (!Array.isArray(list) || !list.length || list.some((x: unknown) => typeof x !== "string"))
-        throw new Error(`${where}: "scripts" must list the bundle's scripts`);
-    const scripts = (list as string[]).map((p) => p.trim().replace(/^\.\//, ""));
-    for (const p of scripts)
-        if (!/\.tsx?$/i.test(p) || p.startsWith("/") || p.split("/").includes(".."))
-            throw new Error(`${where}: "${p}" in "scripts" isn't a .ts or .tsx file in the bundle's folder`);
-    return { ...m, scripts: [...new Set(scripts)] };
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error(`${where}: expected an object`);
+    const block = raw.tangitweak;
+    if (!block || typeof block !== "object" || Array.isArray(block)) throw new Error(`${where} has no "tangitweak" block — a tweak bundle's package.json needs one`);
+    const str = (obj: any, k: string, label = k): string | undefined => {
+        const v = obj[k];
+        if (v === undefined) return undefined;
+        if (typeof v !== "string") throw new Error(`${where}: "${label}" must be a string`);
+        return v.trim() || undefined;
+    };
+    const author = typeof raw.author === "object" && raw.author && typeof raw.author.name === "string" ? raw.author.name.trim() || undefined : str(raw, "author");
+    const out: Manifest = { connect: [], scripts: [], dependencies: {} };
+    const set = <K extends keyof Manifest>(k: K, v: Manifest[K] | undefined) => {
+        if (v !== undefined) out[k] = v;
+    };
+    set("name", str(block, "displayName", "tangitweak.displayName") ?? str(raw, "name"));
+    set("packageName", str(raw, "name"));
+    set("version", str(raw, "version"));
+    set("description", str(raw, "description"));
+    set("author", author);
+    set("license", str(raw, "license"));
+    set("homepage", str(raw, "homepage"));
+    set("icon", str(block, "icon", "tangitweak.icon"));
+    set("updateURL", str(block, "updateURL", "tangitweak.updateURL"));
+    const min = str(block, "minTangiTweakVersion", "tangitweak.minTangiTweakVersion");
+    if (min !== undefined && !VERSION_RE.test(min)) throw new Error(`${where}: "tangitweak.minTangiTweakVersion" must be a version like "0.40.0"`);
+    if (raw.dependencies !== undefined) {
+        if (!raw.dependencies || typeof raw.dependencies !== "object" || Array.isArray(raw.dependencies)) throw new Error(`${where}: "dependencies" must be an object`);
+        for (const [k, v] of Object.entries(raw.dependencies)) if (typeof v === "string") out.dependencies[k] = v;
+    }
+    set("minTangiTweakVersion", minTangiTweakOf({ tangitweak: { minTangiTweakVersion: min }, dependencies: out.dependencies }));
+    if (out.updateURL) {
+        const src = parseSource(out.updateURL);
+        if (typeof src === "string") throw new Error(`${where}: "tangitweak.updateURL" — ${src}`);
+    }
+    if (block.connect !== undefined) {
+        if (!Array.isArray(block.connect) || block.connect.some((h: unknown) => typeof h !== "string")) throw new Error(`${where}: "tangitweak.connect" must be a list of host names`);
+        out.connect = [...new Set((block.connect as string[]).map((h) => h.trim().toLowerCase()).filter(Boolean))];
+    }
+    const main = normalizeMain(raw.main);
+    if (raw.main !== undefined && main === undefined) throw new Error(`${where}: "main" must be a file path`);
+    if (main !== undefined) {
+        if (!/\.(tsx?|js)$/i.test(main) || main.startsWith("/") || main.split("/").includes("..")) throw new Error(`${where}: "main" ("${main}") must be a .ts or .tsx file in the bundle's folder`);
+        out.main = main.replace(/\.js$/i, ".ts");
+    }
+    out.scripts = [out.main ?? "index.ts"];
+    return out;
 }
 
-/** metadata.json's JSON schema: the Editor's completions and checks */
+/** package.json's JSON schema for the `"tangitweak"` block and the fields TangiTweak reads: the Editor's completions and checks */
 export const MANIFEST_SCHEMA = {
     type: "object",
-    required: ["scripts"],
     properties: {
-        name: { type: "string", description: "The bundle's name, shown when installing and in the Explorer" },
+        name: { type: "string", description: "The npm package name (the bundle's name when there's no tangitweak.displayName)" },
         version: { type: "string", description: 'Dotted version ("1.2.0"); an update to a lower one waits for review' },
-        minTangiTweakVersion: {
-            type: "string",
-            pattern: "^v?\\d+(\\.\\d+){0,2}([-+][0-9A-Za-z.-]+)?$",
-            description: 'Minimum TangiTweak version required ("0.35.0"); warns on import/install and holds auto-updates if this browser has an older TangiTweak',
-        },
-        description: { type: "string", description: "One line about what it does" },
-        icon: { type: "string", description: "Icon shown in the Explorer and popup: a relative .svg/.png/… file path in this folder, a data: or https:// URL, or inline <svg>" },
+        description: { type: "string", description: "One line about what the tweak does" },
+        main: { type: "string", pattern: "\\.(tsx?|js)$", description: "The entry file (default index.ts, then index.tsx); the other files run only when imported" },
         homepage: { type: "string", description: "A link shown when installing" },
-        author: { type: "string" },
+        author: { anyOf: [{ type: "string" }, { type: "object", properties: { name: { type: "string" } } }] },
         license: { type: "string" },
-        updateURL: {
-            type: "string",
-            description: "Where updates come from instead of where it was installed from: a metadata.json, script or .zip URL, a GitHub folder or file, a gist (an update that changes it waits for review)",
+        tangitweak: {
+            type: "object",
+            description: "Makes this folder a tweak bundle",
+            properties: {
+                displayName: { type: "string", description: "The name shown in the Explorer, the popup and when installing" },
+                icon: { type: "string", description: "Icon shown in the Explorer and popup: a relative .svg/.png/… file path in this folder, a data: or https:// URL, or inline <svg>" },
+                connect: { type: "array", items: { type: "string" }, uniqueItems: true, description: "Hosts the tweak's tweak.fetch calls reach; an update that adds one waits for review" },
+                updateURL: {
+                    type: "string",
+                    description: "Where updates come from instead of where it was installed from: a package.json or .zip URL, a GitHub folder, a gist (an update that changes it waits for review)",
+                },
+                minTangiTweakVersion: {
+                    type: "string",
+                    pattern: "^v?\\d+(\\.\\d+){0,2}([-+][0-9A-Za-z.-]+)?$",
+                    description: 'Minimum TangiTweak version, when dependencies.tangitweak isn\'t a plain range (a file: or git dependency)',
+                },
+            },
         },
-        connect: { type: "array", items: { type: "string" }, uniqueItems: true, description: "Hosts the scripts' tt.fetch calls reach; an update that adds one waits for review" },
-        scripts: {
-            type: "array",
-            minItems: 1,
-            uniqueItems: true,
-            items: { type: "string", pattern: "\\.tsx?$" },
-            description: "The bundle's scripts (.ts / .tsx), relative to this folder — they install and update together, with what they import",
+        dependencies: {
+            type: "object",
+            additionalProperties: { type: "string" },
+            description: 'npm packages the tweak imports by name (downloaded from unpkg), "tangitweak": "^<version>" (the minimum TangiTweak version), and Node.js built-ins for packages that need them ("events": "npm:events@^3")',
         },
     },
 };
@@ -171,11 +235,4 @@ export function minTangiTweakProblem(required: string | undefined, current = cur
         return `Requires TangiTweak ${req} or newer (you have ${current}).`;
     }
     return null;
-}
-
-/** literal `minTangiTweakVersion: "..."` inside a `tt.metadata({ ... })` call (for pre-compile zip import checks) */
-export function scriptMinTangiTweakVersion(code: string): string | undefined {
-    const m = /\btt\s*\.\s*metadata\s*\(\s*\{[\s\S]*?\bminTangiTweakVersion\s*:\s*(["'`])([^"'`\n]+)\1/.exec(code);
-    const v = m?.[2]?.trim().replace(/^v/i, "");
-    return v && VERSION_RE.test(v) ? v : undefined;
 }

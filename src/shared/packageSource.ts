@@ -2,26 +2,27 @@
  * Where a package comes from, and reading its files: the install page
  * (first install, local files) and the background (updates) share this.
  *
- * A package is a script, or a bundle — a metadata.json listing scripts
- * (see packageMetadata) — plus every file they import by a relative path,
- * followed transitively. Sources:
- *   - GitHub: a file (`github.com/o/r/blob/ref/x.ts`, `…/metadata.json`,
+ * A package is a tweak bundle — a folder whose package.json has a
+ * "tangitweak" block (see packageMetadata) — its entry and every file it
+ * imports by a relative path, followed transitively. Sources:
+ *   - GitHub: a file (`github.com/o/r/blob/ref/x/package.json`, `…/index.ts`,
  *     `raw.githubusercontent.com/o/r/ref/…`) or a folder (`github.com/o/r/tree/ref/dir`,
  *     `github.com/o/r`; see pickStart); pinned to the commit the ref points at
  *   - gist: `gist.github.com/user/id` (see pickStart), pinned to the
  *     gist's revision
- *   - any other http(s) or file:// URL of the script or metadata.json; the
- *     files are fetched next to it
+ *   - any other http(s) or file:// URL of the package.json (or a .ts file
+ *     next to it); the files are fetched next to it
  *   - a .zip URL (a release asset, `github.com/o/r/archive/…zip`): its
  *     root's package (see pickStart; a zip of one folder is that folder)
  *
- * A `*.tangitweak.ts` URL opened in a tab installs (a share link, like
- * GreaseMonkey's `.user.js`).
+ * A `*.tangitweak.ts` URL opened in a tab installs the tweak it's in (a
+ * share link, like GreaseMonkey's `.user.js`).
  */
 import { builtinSpec } from "./builtinSpecs";
-import { isManifestPath, MANIFEST_FILE, parseManifest, type Manifest } from "./packageMetadata";
-import { isUrlSpec } from "./packageImports";
-import { bytesToImageDataUrl, importPath, importSpecs, isDataSpec, isImageDataPath, isRelativeIconSpec, metadataIconSpec } from "./scriptImports";
+import { isBundlePackageJson, isManifestPath, MANIFEST_FILE, parseManifest, type Manifest } from "./packageMetadata";
+import { isUrlSpec, splitBare } from "./packageImports";
+import { bytesToImageDataUrl, importPath, importSpecs, isDataSpec, isImageDataPath, isRelativeIconSpec } from "./scriptImports";
+import { isScriptFilePath, isTestOrToolingTsPath } from "./scriptName";
 import { readZipEntries } from "./zip";
 
 export type PackageSource =
@@ -114,7 +115,7 @@ export function parseSource(input: string): PackageSource | string {
         return "open a file (…/-/blob/…) or folder (…/-/tree/…) of the repository";
     }
     if (u.protocol === "http:" || u.protocol === "https:" || u.protocol === "file:") {
-        if (!SCRIPT_FILE_RE.test(u.pathname) && !isManifestPath(u.pathname)) return "the URL must end in .ts (a script), metadata.json (a bundle) or .zip";
+        if (!SCRIPT_FILE_RE.test(u.pathname) && !isManifestPath(u.pathname)) return "the URL must end in package.json (a tweak's), .ts (a file of a tweak) or .zip";
         u.hash = "";
         return { kind: "url", url: u.href };
     }
@@ -178,7 +179,7 @@ export interface Net {
 }
 
 /** the files a package can use */
-export const isPackageFile = (path: string): boolean => /\.(tsx?|json|svg|md|png|jpe?g|gif|webp|ico|avif)$/i.test(path) && !/(^|\/)(node_modules|\.git)\//.test(path);
+export const isPackageFile = (path: string): boolean => /\.(tsx?|json|svg|md|png|jpe?g|gif|webp|ico|avif)$/i.test(path) && !/(^|\/)(node_modules|__tests__|\.[^/]*)\//.test(path) && !isTestOrToolingTsPath(path);
 
 /** read a browser `File` as package content (raster images become `data:image/...;base64,...`) */
 export async function readPackageBrowserFile(path: string, file: File): Promise<string> {
@@ -215,9 +216,9 @@ export async function unzipPackage(buf: ArrayBuffer): Promise<Record<string, str
     return (await unzipPackageArchive(buf)).files;
 }
 
-/** a source, opened: where its entry or metadata.json is, how to read a path, and the revision it's pinned to */
+/** a source, opened: where its package.json is, how to read a path, and the revision it's pinned to */
 export interface OpenedSource {
-    /** the entry's or the bundle's metadata.json's path, relative to the source's root */
+    /** the bundle's package.json's path (or a file next to it), relative to the source's root */
     start: string;
     read(path: string): Promise<string | null>;
     /** commit / gist revision; undefined: the files' hash (crawl result) */
@@ -304,7 +305,7 @@ async function openGitHubArchive(
     if (src.tree) {
         const dir = relPath.replace(/\/$/, "");
         const here = Object.keys(files).filter((p) => p.slice(0, p.lastIndexOf("/") + 1) === (dir ? dir + "/" : ""));
-        start = pickStart(here, dir || "the repository", "open the one to install, or list them in a metadata.json");
+        start = pickStart(here, dir || "the repository");
     }
     return { start, revision: sha, archived: true, read: async (p) => files[p] ?? null };
 }
@@ -380,7 +381,7 @@ async function openGitLabArchive(
     if (src.tree) {
         const dir = relPath.replace(/\/$/, "");
         const here = Object.keys(files).filter((p) => p.slice(0, p.lastIndexOf("/") + 1) === (dir ? dir + "/" : ""));
-        start = pickStart(here, dir || "the repository", "open the one to install, or list them in a metadata.json");
+        start = pickStart(here, dir || "the repository");
     }
     return { start, revision: sha, archived: true, read: async (p) => files[p] ?? null };
 }
@@ -411,7 +412,7 @@ export async function openSource(src: PackageSource, net: Net, onProgress?: (p: 
             const here = ((tree?.tree ?? []) as { path: string; type: string }[])
                 .filter((t) => t.type === "blob" && t.path.slice(0, t.path.lastIndexOf("/") + 1) === (dir ? dir + "/" : ""))
                 .map((t) => t.path);
-            start = pickStart(here, dir || "the repository", "open the one to install, or list them in a metadata.json");
+            start = pickStart(here, dir || "the repository");
         }
         const raw = `https://raw.githubusercontent.com/${src.owner}/${src.repo}/${sha}/`;
         const readRemote = async (p: string) => {
@@ -427,7 +428,7 @@ export async function openSource(src: PackageSource, net: Net, onProgress?: (p: 
         const g = await net.json(`${GITHUB_API}/gists/${src.id}`);
         const files: Record<string, { content?: string; truncated?: boolean; raw_url?: string }> = g?.files ?? {};
         const names = Object.keys(files);
-        const start = src.file && files[src.file] && (SCRIPT_FILE_RE.test(src.file) || isManifestPath(src.file)) ? src.file : pickStart(names, "the gist", "open the raw URL of the one to install, or list them in a metadata.json");
+        const start = src.file && files[src.file] && (SCRIPT_FILE_RE.test(src.file) || isManifestPath(src.file)) ? src.file : pickStart(names, "the gist");
         const revision: string | undefined = g?.history?.[0]?.version;
         return {
             start,
@@ -449,7 +450,7 @@ export async function openSource(src: PackageSource, net: Net, onProgress?: (p: 
         if (!buf) throw new Error(`can't read ${src.url}`);
         if (buf.byteLength > 4 * MAX_BYTES) throw new Error(`the zip is over ${(4 * MAX_BYTES) / 1024 / 1024} MB`);
         const files = await unzipPackage(buf);
-        const start = pickStart(Object.keys(files).filter((p) => !p.includes("/")), "the zip", "list them in a metadata.json at its root");
+        const start = pickStart(Object.keys(files).filter((p) => !p.includes("/")), "the zip");
         return { start, archived: true, read: async (p) => files[p] ?? null };
     }
     // a plain URL: paths are from its origin's root, so `../` imports work
@@ -466,33 +467,32 @@ export async function openSource(src: PackageSource, net: Net, onProgress?: (p: 
     };
 }
 
-/** what a folder's files install as: its metadata.json, else its one *.tangitweak.ts file, else its one script */
-export function pickStart(paths: string[], where: string, hint: string): string {
+/** what a folder's files install as: its package.json (a tweak is a folder with one) */
+export function pickStart(paths: string[], where: string): string {
     const manifest = paths.find(isManifestPath);
     if (manifest) return manifest;
-    const marked = paths.filter((p) => ENTRY_FILE_RE.test(p));
-    if (marked.length === 1) return marked[0];
-    const scripts = marked.length ? marked : paths.filter((p) => SCRIPT_FILE_RE.test(p) && !/\.d\.ts$/i.test(p));
-    if (scripts.length === 1) return scripts[0];
-    throw new Error(scripts.length ? `${where} holds ${scripts.length} scripts (${scripts.join(", ")}) — ${hint}` : `no script or metadata.json in ${where}`);
+    const legacy = paths.some((p) => /(^|\/)metadata\.json$/i.test(p)) ? " (metadata.json bundles no longer install)" : paths.some(isScriptFilePath) ? " (single-file scripts no longer install)" : "";
+    throw new Error(`no package.json in ${where} — a tweak is a folder with a package.json that has a "tangitweak" block${legacy}`);
 }
 
 /** a package's files as read, before they're laid out in the Explorer */
 export interface CrawledPackage {
     /** its entries' paths in `files` */
     entries: string[];
-    /** a bundle's metadata.json (at `files["metadata.json"]`) */
-    manifest?: Manifest;
+    /** the bundle's package.json (at `files["package.json"]`) */
+    manifest: Manifest;
     /** path (relative to the package's root folder) → text */
     files: Record<string, string>;
     /** relative imports that point at no file */
     missing: { from: string; spec: string }[];
-    /** imports by bare name: they resolve from the root of the user's scripts, not the package */
+    /** imports by bare name that aren't the bundle's dependencies (or a built-in) */
     bare: { from: string; spec: string }[];
 }
 
 export const MAX_FILES = 200;
 export const MAX_BYTES = 5 * 1024 * 1024;
+const TSCONFIG = "tsconfig.json";
+const GITIGNORE = ".gitignore";
 
 /** the paths a relative import may name, in TypeScript's order */
 export function candidates(path: string): string[] {
@@ -502,16 +502,17 @@ export function candidates(path: string): string[] {
 }
 
 /**
- * Read an entry, or a bundle's metadata.json and its entries, and
- * everything they import by relative path; paths come out relative to the
- * files' common folder — a bundle's own folder (importing from outside it
- * is an error).
+ * Read a bundle's package.json (`start`, or the one next to a `start`
+ * file), its entry, and everything it imports by relative path; paths
+ * come out relative to the bundle's folder (importing from outside it is
+ * an error).
  */
 export async function crawl(start: string, read: (path: string) => Promise<string | null>, onProgress?: (p: DownloadProgress) => void): Promise<CrawledPackage> {
     const files: Record<string, string> = {};
     const cache = new Map<string, Promise<string | null>>();
+    // never a dot folder's file (a tweak's data folder, .git…): it's not code or data the tweak ships
     const get = (p: string) => {
-        if (!cache.has(p)) cache.set(p, read(p).catch(() => null));
+        if (!cache.has(p)) cache.set(p, /(^|\/)\.[^/]*\//.test(p) ? Promise.resolve(null) : read(p).catch(() => null));
         return cache.get(p)!;
     };
     const missing: CrawledPackage["missing"] = [];
@@ -537,13 +538,22 @@ export async function crawl(start: string, read: (path: string) => Promise<strin
         files[p] = t;
         return t;
     };
-    let manifest: Manifest | undefined;
-    let entries = [start];
     const dir = start.slice(0, start.lastIndexOf("/") + 1);
-    if (isManifestPath(start)) {
-        manifest = parseManifest(await first(start, start), start);
+    if (!isManifestPath(start)) {
+        // a file of the tweak: its folder's package.json
+        const pj = dir + MANIFEST_FILE;
+        const t = await read(pj).catch(() => null);
+        if (t === null || !isBundlePackageJson(t)) throw new Error(`${start} isn't in a tweak — a tweak is a folder with a package.json that has a "tangitweak" block (single-file scripts no longer install)`);
+        start = pj;
+    }
+    const manifest: Manifest = parseManifest(await first(start, start), start);
+    let entries: string[];
+    {
         filesDone = 1;
-        entries = manifest.scripts.map((s) => dir + s);
+        // no "main": index.ts, else index.tsx
+        const main = manifest.main ? dir + manifest.main : (await get(dir + "index.ts")) !== null || (await get(dir + "index.tsx")) === null ? dir + "index.ts" : dir + "index.tsx";
+        entries = [main];
+        manifest.scripts = [main.slice(dir.length)];
         for (const e of entries) known.add(knownKey(e));
         const iconPath = isRelativeIconSpec(manifest.icon) ? importPath(start, /^\.\.?(\/|$)/.test(manifest.icon) ? manifest.icon : `./${manifest.icon}`) : null;
         if (iconPath) known.add(knownKey(iconPath));
@@ -560,17 +570,18 @@ export async function crawl(start: string, read: (path: string) => Promise<strin
             filesDone++;
             report(entries.length > 0);
         }
-    } else {
-        await first(start, start);
-        filesDone = 1;
+        // the tweak's own tooling files travel with it when it has them
+        for (const own of [TSCONFIG, GITIGNORE]) {
+            const t = files[dir + own] === undefined ? await get(dir + own) : null;
+            if (t !== null) files[dir + own] = t;
+        }
     }
     const queue = [...entries];
     let bytes = Object.values(files).reduce((n, t) => n + t.length, 0);
     while (queue.length) {
         const from = queue.shift()!;
         if (isDataSpec(from)) continue;
-        const iconSpec = metadataIconSpec(files[from]);
-        const specs = [...importSpecs(files[from]), ...(iconSpec ? [/^\.\.?(\/|$)/.test(iconSpec) ? iconSpec : `./${iconSpec}`] : [])];
+        const specs = importSpecs(files[from]);
         const freshTargets = new Set<string>();
         for (const spec of specs) {
             if (isUrlSpec(spec) || builtinSpec(spec) || !/^\.\.?(\/|$)/.test(spec)) continue;
@@ -586,7 +597,7 @@ export async function crawl(start: string, read: (path: string) => Promise<strin
         for (const spec of specs) {
             if (isUrlSpec(spec) || builtinSpec(spec)) continue;
             if (!/^\.\.?(\/|$)/.test(spec)) {
-                bare.push({ from, spec });
+                if (manifest.dependencies[splitBare(spec).name] === undefined) bare.push({ from, spec });
                 continue;
             }
             const path = importPath(from, spec);
@@ -625,13 +636,13 @@ export async function crawl(start: string, read: (path: string) => Promise<strin
     }
     const cut = common.length ? common.join("/").length + 1 : 0;
     const rel = (p: string) => p.slice(cut);
-    if (manifest && cut !== dir.length) {
+    if (cut !== dir.length) {
         const outside = Object.keys(files).filter((p) => !p.startsWith(dir));
         throw new Error(`${start}: the bundle's files must be in its folder — ${outside.join(", ")} ${outside.length > 1 ? "are" : "is"} outside it`);
     }
     return {
         entries: entries.map(rel),
-        ...(manifest ? { manifest } : {}),
+        manifest,
         files: Object.fromEntries(Object.entries(files).map(([p, t]) => [rel(p), t])),
         missing: missing.map((m) => ({ ...m, from: rel(m.from) })),
         bare: bare.map((b) => ({ ...b, from: rel(b.from) })),

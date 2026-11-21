@@ -1,8 +1,8 @@
 /**
- * The `tt` object a script sees when its page handlers compile in the
- * site's JavaScript world (hook.ts: `tt.onSite` handlers; bridge.ts: the
- * same when the page CSP forbids eval there) or the isolated world
- * (bridge.ts in MV2, isolated.ts in MV3: `tt.onPage` handlers). Network
+ * The `tweak` a script sees when its page handlers compile in the site's
+ * JavaScript world (hook.ts: `tweak.onSite` handlers; bridge.ts: the same
+ * when the page CSP forbids eval there) or the isolated world (bridge.ts in
+ * MV2, isolated.ts in MV3: `tweak.onPage` handlers). Network
  * registrations and overlay handlers are inert here (they run in the
  * background / the overlay); this world's handlers are collected with
  * their routes (the other world's are skipped), and params resolve to the
@@ -16,15 +16,16 @@
  * the site's world no handle can be called (siteRemote), and the stores
  * aren't there.
  */
-import { normalizeRoute, placeApi, placeKeyer, placeKind, routeMatches, type DocumentWhen, type PageWorld, type PlaceApi, type RouteMeta } from "./route";
+import { normalizeRoute, placeKeyer, placeKind, routeMatches, type DocumentWhen, type PageWorld, type PlaceApi, type RouteMeta } from "./route";
 import { inertRemote, LIB_SITE_STORE, siteRemote, SITE_NO_STORES, unusableStore, type SiteCannotCallError } from "./remote";
 import type { Exposer } from "./rpc";
 import type { Generation, ScriptLife } from "./runLifecycle";
-import { isParamDef, isParamGroup, parseParamValue, type ParamDef, type ParamTree } from "./scriptDef";
+import { isParamDef, isParamGroup, type ParamTree } from "./scriptDef";
 import { libBodyRunning } from "./scriptImports";
 import { paramsProxy, PARAM_AT_TOP, PARAM_NOT_HERE, PARAM_ON_SITE } from "./paramsProxy";
 import { scriptEnv } from "./scriptEnv";
 import { claimStoreName, storePersist } from "./storeOps";
+import { storeRun, tweakHost, tweakStores, type NamedStores, type StoreRun, type TweakHost } from "./tweakApi";
 
 export interface PageDocumentHandler {
     /** its RPC handle id: the route's key (`"onPage:0"`) */
@@ -37,9 +38,10 @@ export interface PageDocumentHandler {
 export interface PageShimOptions {
     /** resolved RAW param values (from the bundle) */
     params: Record<string, any>;
-    log: (...args: any[]) => void;
+    /** `tweak.log` (`source`) */
+    log: (source: string, ...args: any[]) => void;
     storage: { get(key: string): any; set(key: string, value: any): any };
-    /** which handlers this shim collects: "page" (tt.onSite, the default) or "isolated" (tt.onPage) */
+    /** which handlers this shim collects: "page" (tweak.onSite, the default) or "isolated" (tweak.onPage) */
     world?: PageWorld;
     /** answers calls into this world's handles */
     exposer?: Exposer;
@@ -50,9 +52,9 @@ export interface PageShimOptions {
     call?: (api: PlaceApi, key: string, route: RouteMeta) => any;
     /** site's world: a handle's function was called (it throws SiteCannotCallError; its stack is the caller's) */
     onSiteCall?: (e: SiteCannotCallError) => void;
-    /** the script's store replicas (`tt.pageStore`: this page's copy): the isolated world only */
+    /** the script's store replicas (`tweak.pageStore`: this page's copy): the isolated world only */
     stores?: PageStores;
-    /** `tt.siteStore`: the site's world's store (onSite code) or a mirror of it (absent: a library's, which throws when used) */
+    /** `tweak.siteStore`: the site's world's store (onSite code) or a mirror of it (absent: a library's, which throws when used) */
     siteStore?: (name: string, initial: object) => object;
     /**
      * a library's shim (its name): what its code registers while a
@@ -68,9 +70,9 @@ export interface PageShimOptions {
     setParam?: (key: string, value: any, lib?: string) => Promise<void>;
 }
 
-type Register = (api: PlaceApi) => (route: unknown, fn: unknown, n?: number, lib?: string) => any;
-/** the script whose top level is running (PageShim.top): where libraries' registrations go */
-let running: Register | null = null;
+type Register = (api: PlaceApi) => (route: unknown, fn: unknown, lib?: string) => any;
+/** the script whose top level is running (PageShim.top): where libraries' registrations and unnamed stores go */
+let running: { register: Register; run: StoreRun } | null = null;
 
 export interface PageStores {
     store(name: string, initial: object, persist: boolean | string[]): object;
@@ -80,12 +82,13 @@ export interface PageStores {
 
 const noStore = unusableStore(SITE_NO_STORES);
 const libSiteStore = unusableStore(LIB_SITE_STORE);
-const NO_FETCH = "tt.fetch isn't available in page code — use the page's own fetch";
+const NO_FETCH = "tweak.fetch isn't available in page code — use the page's own fetch";
 /** a library's handles: its handlers don't run */
 const LIB_HANDLE = "handles from an imported library don't connect; register the handler in the script itself";
 
 export interface PageShim {
-    tt: any;
+    /** what the script's code runs with (scriptFunction) */
+    host: TweakHost;
     dom: PageDocumentHandler[];
     /** run the script's top level (`run`): libraries' functions it calls register into it, like the background's */
     top<T>(run: () => T): T;
@@ -96,15 +99,16 @@ export function makePageShim(o: PageShimOptions): PageShim {
     const world = o.world || "page";
     const mine: PlaceApi = world === "page" ? "onSite" : "onPage";
     const inert = () => {};
+    // handlers: numbered by registration order, like the background's
     const keyOf = placeKeyer();
     // registrations always count, so indexes match the background's
     let pageIndex = 0;
     let overlayIndex = 0;
-    const own: Register = (api) => (route, fn, n, lib) => {
-        if (typeof fn !== "function") throw new Error(`tt.${api}: second argument must be the handler function`);
+    const own: Register = (api) => (route, fn, lib) => {
+        if (typeof fn !== "function") throw new Error(`tweak.${api}: second argument must be the handler function`);
         const kind = placeKind(api);
         const r = normalizeRoute(kind, route, kind === "onOverlay" ? overlayIndex++ : pageIndex++, api);
-        const k = keyOf(api, n, lib);
+        const k = keyOf(api, lib);
         r.key = k.key;
         if (lib !== undefined) {
             r.lib = lib;
@@ -117,47 +121,52 @@ export function makePageShim(o: PageShimOptions): PageShim {
         if (world === "page") return siteRemote(o.onSiteCall);
         return o.call ? o.call(api, k.key, r) : inertHandle();
     };
-    const register = (api: PlaceApi) => (route: unknown, fn: unknown, n?: number) =>
-        o.lib !== undefined && running && !libBodyRunning() ? running(api)(route, fn, n, o.lib) : own(api)(route, fn, n);
+    // a library's code run by a script's top level: the script's (not the library's own top level)
+    const callerRun = () => (o.lib !== undefined && running && !libBodyRunning() ? running : undefined);
+    const register = (api: PlaceApi) => (route: unknown, fn: unknown) => {
+        const c = callerRun();
+        return c ? c.register(api)(route, fn, o.lib) : own(api)(route, fn);
+    };
     const stores = world === "isolated" ? o.stores : undefined;
     const names = new Map<string, string>();
     const siteNames = new Map<string, string>();
-    const parsed = (key: string, def: ParamDef | undefined) => (def && typeof def === "object" ? parseParamValue(key, def, o.params[key]) : o.params[key]);
-    const tt = {
+    // without stores, declaring one at top level is fine (that code runs here too); using it isn't
+    const named: NamedStores = {
+        globalStore: (name, initial, opts) => {
+            if (!stores) return noStore;
+            claimStoreName(names, `tweak.globalStore`, name, initial);
+            names.set(name, `tweak.globalStore`);
+            return stores.store(name, initial, storePersist(name, opts, `tweak.globalStore`));
+        },
+        tabStore: (name, initial) => {
+            if (!stores) return noStore;
+            claimStoreName(names, `tweak.tabStore`, name, initial);
+            names.set(name, `tweak.tabStore`);
+            return stores.tabStore(name, initial);
+        },
+        pageStore: (name, initial) => {
+            if (!stores) return noStore;
+            claimStoreName(names, `tweak.pageStore`, name, initial);
+            names.set(name, `tweak.pageStore`);
+            return stores.pageStore(name, initial);
+        },
+        siteStore: (name, initial) => {
+            if (!o.siteStore) return libSiteStore;
+            claimStoreName(siteNames, `tweak.siteStore`, name, initial);
+            siteNames.set(name, `tweak.siteStore`);
+            return o.siteStore(name, initial);
+        },
+    };
+    const self = { register: own, run: storeRun(named) };
+    const host = tweakHost((file) => ({
         onRequest: inert,
         onResponseHeaders: inert,
         replaceResponse: inert,
         onResponseBody: inert,
-        onSite: placeApi(register("onSite")),
-        onPage: placeApi(register("onPage")),
-        onOverlay: placeApi(register("onOverlay")),
-        // without stores, declaring one at top level is fine (that code runs here too); using it isn't
-        globalStore: (name: string, initial: object, opts?: unknown) => {
-            if (!stores) return noStore;
-            claimStoreName(names, "tt.globalStore", name, initial);
-            names.set(name, "tt.globalStore");
-            return stores.store(name, initial, storePersist(name, opts));
-        },
-        tabStore: (name: string, initial: object) => {
-            if (!stores) return noStore;
-            claimStoreName(names, "tt.tabStore", name, initial);
-            names.set(name, "tt.tabStore");
-            return stores.tabStore(name, initial);
-        },
-        pageStore: (name: string, initial: object) => {
-            if (!stores) return noStore;
-            claimStoreName(names, "tt.pageStore", name, initial);
-            names.set(name, "tt.pageStore");
-            return stores.pageStore(name, initial);
-        },
-        siteStore: (name: string, initial: object) => {
-            if (!o.siteStore) return libSiteStore;
-            claimStoreName(siteNames, "tt.siteStore", name, initial);
-            siteNames.set(name, "tt.siteStore");
-            return o.siteStore(name, initial);
-        },
         fetch: () => Promise.reject(new Error(NO_FETCH)),
-        metadata: inert,
+        onSite: register("onSite"),
+        onPage: register("onPage"),
+        onOverlay: register("onOverlay"),
         params: (defs: ParamTree) => {
             const split = (obj: Record<string, any>): { known: ParamTree; unknown: Record<string, any> } => {
                 const known: ParamTree = {};
@@ -178,21 +187,21 @@ export function makePageShim(o: PageShimOptions): PageShim {
                 send: (k, v) => void o.setParam!(k, v, o.lib).catch(() => {}),
             });
         },
-        defineParam: (name: string, def: ParamDef) => parsed(name, def),
-        log: o.log,
+        log: (...args: any[]) => o.log("tweak.log", ...args),
         storage: o.storage,
         ...scriptEnv(),
-    };
+        ...tweakStores(file, self.run, () => callerRun()?.run),
+    }));
     const top = <T>(run: () => T): T => {
         const prev = running;
-        running = own;
+        running = self;
         try {
             return run();
         } finally {
             running = prev;
         }
     };
-    return { tt, dom, top };
+    return { host, dom, top };
 }
 
 function inertHandle(): any {

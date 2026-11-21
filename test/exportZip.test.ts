@@ -1,23 +1,11 @@
 /**
  * Export…/Import… zip: laid out like the synced scripts folder (scripts and
  * data files by path, empty folders as folder entries, settings.json with
- * the globals and the exported scripts' enabled state and params).
+ * the globals; each tweak's data folder only when asked for).
  */
 import { describe, it, expect } from "vitest";
-import {
-    buildExportZip,
-    emptyFolders,
-    filesGoneFrom,
-    importedSettingsDoc,
-    packageRoots,
-    parseExportedStores,
-    readExportZip,
-    settingsForScripts,
-    STORES_FILE,
-    storesForScripts,
-} from "../src/shared/exportZip";
+import { buildExportZip, emptyFolders, filesGoneFrom, packageRoots, readExportZip } from "../src/shared/exportZip";
 import { readZipEntries, writeZip } from "../src/shared/zip";
-import { parseSettings, renderSettings, type GlobalSettings, type ScriptSettingsState } from "../src/shared/settingsJson";
 
 // in-memory chrome.storage — must exist before scriptStore/settingsFile load
 const store: Record<string, any> = {};
@@ -36,15 +24,7 @@ const store: Record<string, any> = {};
 };
 
 const buf = (z: Uint8Array): ArrayBuffer => z.slice().buffer;
-const G: GlobalSettings = { logLevel: "warn", logCap: 500 };
-const script = (name: string, enabled: boolean, values: Record<string, any> = {}): ScriptSettingsState => ({
-    name,
-    declared: true,
-    enabled,
-    defs: { level: { type: "string", default: "warn" } } as any,
-    values,
-});
-const SETTINGS = renderSettings(G, [script("Debug header.ts", false, { level: "debug" }), script("mock/helpers.ts", true), script("Other.ts", true, { level: "trace" })]);
+const PKG = JSON.stringify({ name: "dbg", tangitweak: {} });
 
 describe("export zip layout", () => {
     it("lays files out as the scripts folder: settings.json, folders, scripts (.ts/.tsx) and data files by path", async () => {
@@ -76,29 +56,40 @@ describe("export zip layout", () => {
     it("without settings.json there's no settings entry", async () => {
         const z = await readExportZip(buf(buildExportZip({ scripts: [{ name: "a", code: "" }], dataFiles: [] })));
         expect(z.settings).toBeNull();
-        expect(z.stores).toBeNull();
+        expect(z.tweakData).toEqual([]);
         expect(z.scripts.map((s) => s.name)).toEqual(["a"]);
     });
 
-    it("round-trips optional stores.json and filters stores by picked scripts", async () => {
-        const allStores = {
-            "bonsai/index.tsx": { flags: { beta: true } },
-            "other/script": { cache: { hits: 3 } },
-        };
-        const storesJson = storesForScripts(allStores, ["Bonsai/Index.tsx"]);
-        expect(storesJson).not.toBeNull();
-        expect(parseExportedStores(storesJson!)).toEqual({ "bonsai/index.tsx": { flags: { beta: true } } });
-
+    it("a tweak's data folder goes in only when given; reading sorts it out by bundle", async () => {
+        const base = { scripts: [{ name: "dbg/index", code: "// ok" }], dataFiles: [{ path: "dbg/package.json", text: PKG }] };
+        const without = await readZipEntries(buf(buildExportZip(base)));
+        expect(Object.keys(without.files)).toEqual(["dbg/index.ts", "dbg/package.json"]);
         const zip = buildExportZip({
-            settings: "{}\n",
-            stores: storesJson,
-            scripts: [{ name: "bonsai/index.tsx", code: "// ok" }],
-            dataFiles: [],
+            ...base,
+            tweakData: [
+                { path: "dbg/.tweak/settings.json", text: '{"enabled":false}' },
+                { path: "dbg/.tweak/stores/cart.json", text: '{"n":1}' },
+                { path: "dbg/.tweak/notes.md", text: "?" },
+            ],
         });
         const z = await readExportZip(buf(zip));
-        expect(z.stores).toBe(storesJson);
-        expect(z.dataFiles).toEqual([]); // STORES_FILE is not misclassified as a user data file
-        expect(() => parseExportedStores("[]")).toThrow(new RegExp(STORES_FILE));
+        expect(z.tweakData).toEqual([
+            { root: "dbg/", file: "settings.json", text: '{"enabled":false}' },
+            { root: "dbg/", file: "stores/cart.json", text: '{"n":1}' },
+        ]);
+        expect(z.ignored).toEqual(["dbg/.tweak/notes.md"]);
+        expect(z.dataFiles.map((d) => d.path)).toEqual(["dbg/package.json"]); // never data files
+        expect(z.scripts.map((s) => s.name)).toEqual(["dbg/index"]);
+    });
+
+    it("the data folder is the one the zip's settings.json names, else the importer's", async () => {
+        const files = { "dbg/index.ts": "", "dbg/package.json": PKG, "dbg/.data/settings.json": "{}", "dbg/.tweak/settings.json": "{}" };
+        expect((await readExportZip(buf(writeZip(files)))).tweakData.map((d) => d.file)).toEqual(["settings.json"]);
+        expect((await readExportZip(buf(writeZip(files)), ".data")).tweakData).toHaveLength(1);
+        const named = await readExportZip(buf(writeZip({ ...files, "settings.json": '{"dataFolder":".data"}' })));
+        expect(named.tweakData).toEqual([{ root: "dbg/", file: "settings.json", text: "{}" }]);
+        // outside a tweak a dot folder is skipped
+        expect((await readExportZip(buf(writeZip({ "a.ts": "", ".tweak/settings.json": "{}" })))).tweakData).toEqual([]);
     });
 
     it("takes a zipped scripts folder: unwraps its top folder, skips the support files, dot entries and node_modules", async () => {
@@ -145,50 +136,37 @@ describe("export zip layout", () => {
     });
 });
 
-describe("settings.json in the zip", () => {
-    it("keeps the globals and only the exported scripts' overrides", () => {
-        const out = settingsForScripts(SETTINGS, ["Debug header", "Other"]);
-        expect(Object.keys(parseSettings(out).scripts)).toEqual(["Debug header.ts", "Other.ts"]);
-        expect(parseSettings(out).globals).toEqual(parseSettings(SETTINGS).globals);
-    });
-
-    it("no exported script: no scripts section, just the globals", () => {
-        const out = settingsForScripts(SETTINGS, []);
-        expect(JSON.parse(out)).toEqual({ logLevel: "warn" });
-    });
-
-    it("leaves malformed JSON unchanged and scopes importedSettingsDoc to picked scripts", () => {
-        expect(settingsForScripts("{oops", ["a"])).toBe("{oops");
-        expect(importedSettingsDoc(SETTINGS, ["Debug header"])).toEqual({
-            globals: parseSettings(SETTINGS).globals,
-            scripts: { "Debug header.ts": parseSettings(SETTINGS).scripts["Debug header.ts"] },
-            onlyScripts: ["Debug header"],
-        });
-        expect(() => importedSettingsDoc("{oops", [])).toThrow();
-    });
-
-    it("lands enabled state, params and globals through the real apply path without touching unpicked scripts", async () => {
+describe("Import… of a tweak's saved data", () => {
+    it("lands through the real apply path, keyed by the tweak, without touching others", async () => {
         const ss = await import("../src/background/engine/scriptStore");
-        const sf = await import("../src/background/settingsFile");
-        const code = `tt.params({ level: { type: "string", default: "warn" } });\ntt.onRequest({ url: "*", strategy: "extension" }, () => {});\n`;
+        const { applyTweakDataFile } = await import("../src/background/tweakDataFiles");
+        const code = `import { tweak } from "tangitweak"; tweak.params({ level: { type: "string", default: "warn" } });\ntweak.onRequest({ url: "*", strategy: "extension" }, () => {});\n`;
+        const { seedBundle } = await import("./bundleHelper");
+        await seedBundle("untouched");
+        await seedBundle("dbg");
         const untouchedId = ss.newId();
-        await ss.saveScript({ id: untouchedId, name: "Untouched", code });
+        await ss.saveScript({ id: untouchedId, name: "untouched/index", code });
         await ss.setEnabled(untouchedId, false);
 
         const zip = buildExportZip({
-            settings: settingsForScripts(SETTINGS, ["Debug header"]),
-            scripts: [{ name: "Debug header", code }],
-            dataFiles: [],
+            settings: '{"logLevel":"warn"}\n',
+            scripts: [{ name: "dbg/index", code }],
+            dataFiles: [{ path: "dbg/package.json", text: PKG }],
+            tweakData: [{ path: "dbg/.tweak/settings.json", text: JSON.stringify({ enabled: false, params: { level: "debug" } }) }],
         });
         const z = await readExportZip(buf(zip));
         const id = ss.newId();
-        await ss.saveScript({ id, name: "Debug header", code: z.scripts[0].code });
+        await ss.saveScript({ id, name: "dbg/index", code: z.scripts[0].code });
         expect((await ss.getScript(id))!.enabled).toBe(true);
-        expect(await sf.applySettingsDoc(importedSettingsDoc(z.settings!, ["Debug header"]))).toEqual({});
+        expect(z.tweakData).toHaveLength(1);
+        for (const d of z.tweakData) expect(await applyTweakDataFile(`${d.root}.tweak/${d.file}`, d.text)).toEqual({});
         expect((await ss.getScript(id))!.enabled).toBe(false);
         expect((await ss.getParamValues(id)).level).toBe("debug");
-        expect((await ss.getScript(untouchedId))!.enabled).toBe(false); // unpicked script untouched!
-        expect(store.resLogLevel).toBe("warn");
+        expect((await ss.getScript(untouchedId))!.enabled).toBe(false);
+        expect((await ss.getParamValues(untouchedId)).level).toBeUndefined();
+        // an invalid file applies nothing
+        expect((await applyTweakDataFile("dbg/.tweak/settings.json", JSON.stringify({ enabled: true, params: { nope: 1 } }))).error).toMatch(/nope/);
+        expect((await ss.getScript(id))!.enabled).toBe(false);
     });
 });
 
@@ -200,13 +178,13 @@ describe("Import… of a package's new version", () => {
         folders: paths.filter((p) => p.endsWith("/")).map((p) => p.slice(0, -1)),
     });
 
-    it("its packages: the one folder everything is in (Export Package…), and folders with a metadata.json", () => {
+    it("its packages: the one folder everything is in (Export Package…), and folders with a package.json", () => {
         expect(packageRoots(zip(["kit/a.ts", "kit/lib/b.ts"]))).toEqual(["kit"]);
         expect(packageRoots(zip(["kit/a.ts", "x.ts"]))).toEqual([]);
         expect(packageRoots(zip(["kit/a.ts"], "globals: {}"))).toEqual([]);
-        expect(packageRoots(zip(["a/metadata.json", "a/x.ts", "b/y.ts", "metadata.json"]))).toEqual(["a"]);
+        expect(packageRoots(zip(["a/package.json", "a/x.ts", "b/y.ts", "package.json"]))).toEqual(["a"]);
         // one inside another counts as the outer one
-        expect(packageRoots(zip(["kit/metadata.json", "kit/sub/metadata.json", "kit/sub/x.ts"]))).toEqual(["kit"]);
+        expect(packageRoots(zip(["kit/package.json", "kit/sub/package.json", "kit/sub/x.ts"]))).toEqual(["kit"]);
     });
 
     it("existing files in those packages that the zip doesn't have (any case), and nothing outside them", () => {

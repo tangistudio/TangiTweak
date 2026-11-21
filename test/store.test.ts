@@ -69,7 +69,7 @@ describe("store ops", () => {
     });
 });
 
-describe("tt.globalStore replica + owner", () => {
+describe("tweak.globalStore replica + owner", () => {
     it("syncs a set, a nested set and a delete to another context", async () => {
         const t = setup();
         const A = t.hub("a");
@@ -339,11 +339,11 @@ describe("tt.globalStore replica + owner", () => {
     });
 });
 
-describe("tt.globalStore across compiled instances", () => {
+describe("tweak.globalStore across compiled instances", () => {
     it("two compiles of a script (MV2 strategy tiers) share one store object", async () => {
         const t = setup();
         const A = t.hub("bg");
-        const code = `export const s = tt.globalStore("ui", { hits: 0 }); export const hit = () => s.hits++;`;
+        const code = `import { tweak } from "tangitweak"; export const s = tweak.globalStore("ui", { hits: 0 }); export const hit = () => s.hits++;`;
         const compile = () => compileScript(code, { store: (name, initial, persist) => A.hub.store("s1", name, initial, persist) });
         const one = compile();
         const two = compile();
@@ -357,7 +357,7 @@ describe("tt.globalStore across compiled instances", () => {
     });
 });
 
-describe("tt.globalStore convergence", () => {
+describe("tweak.globalStore convergence", () => {
     it("converges with concurrent nested edits on both sides", async () => {
         const t = setup();
         const A = t.hub("a");
@@ -435,7 +435,7 @@ describe("tt.globalStore convergence", () => {
     });
 });
 
-describe("tt.pageStore", () => {
+describe("tweak.pageStore", () => {
     it("keeps one copy per page and syncs a page's copy to an overlay of that page", async () => {
         const t = setup();
         const A = t.hub("bg");
@@ -501,9 +501,10 @@ describe("tt.pageStore", () => {
         expect(t.owner.get("s1", "ps", "p1")).toBeUndefined();
     });
 
-    it("one name can't be both a global and a page store", () => {
-        const d = compileScript(`tt.globalStore("x", { n: 1 }); tt.pageStore("x", { n: 1 });`);
-        expect(String(d.error)).toMatch(/already has a store named/);
+    it("a global store's ID is used once per tweak; unnamed stores never clash with one", () => {
+        const d = compileScript(`import { tweak } from "tangitweak"; tweak.globalStore("x", { n: 1 }); tweak.globalStore("x", { n: 1 });`);
+        expect(String(d.error)).toMatch(/a store ID is used once per tweak/);
+        expect(compileScript(`import { tweak } from "tangitweak"; tweak.globalStore("x", { n: 1 }); tweak.pageStore({ n: 1 }); tweak.pageStore({ n: 1 });`).error).toBeNull();
     });
 
     it("inspects, replaces, resets, deletes, and exports persisted globalStore state with live replica sync", async () => {
@@ -555,7 +556,7 @@ describe("tt.pageStore", () => {
     });
 });
 
-describe("tt.tabStore", () => {
+describe("tweak.tabStore", () => {
     it("survives page reloads in the same tab, isolates tabs, primes overlays after reload, and drops on tab close", async () => {
         const alivePages = new Set(["42.1.a", "42.2.b", "99.1.a"]);
         const aliveTabs = new Set(["tab:42", "tab:99"]);
@@ -601,10 +602,9 @@ describe("tt.tabStore", () => {
         expect(withPage("42.3.c", () => ts.staging)).toBe(false);
     });
 
-    it("throws at top level (Scenario 2) and shares the store name space", () => {
-        const topErr = compileScript(`const tab = tt.tabStore("env", { staging: false }); if (tab.staging) { tt.onRequest({ url: "*://a/*", strategy: "rules" }, () => ({ block: true })); }`);
-        expect(String(topErr.error)).toMatch(/tt\.tabStore\("env"\): no tab here/);
-        const dupErr = compileScript(`tt.tabStore("x", { a: 1 }); tt.pageStore("x", { a: 1 });`);
-        expect(String(dupErr.error)).toMatch(/already has a store named "x"/);
+    it("throws at top level (Scenario 2); each unnamed store is its own", () => {
+        const topErr = compileScript(`import { tweak } from "tangitweak"; const tab = tweak.tabStore({ staging: false }); if (tab.staging) { tweak.onRequest({ url: "*://a/*", strategy: "rules" }, () => ({ block: true })); }`);
+        expect(String(topErr.error)).toMatch(/tweak\.tabStore\(\): no tab here/);
+        expect(compileScript(`import { tweak } from "tangitweak"; tweak.tabStore({ a: 1 }); tweak.pageStore({ a: 1 });`).error).toBeNull();
     });
 });

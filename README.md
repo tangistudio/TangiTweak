@@ -31,10 +31,10 @@ React + `valtio` GUI overlay on the page.
   only sees fetch/XHR (REST) calls; use `helper`, `extension` or `debugger` for
   robust interception; `rules` turns fixed blocks, redirects and header
   changes into browser-native rules.
-- **Your own GUI on the page** — `tt.onOverlay(url, …)` draws a script's panel in an
+- **Your own GUI on the page** — `tweak.onOverlay(url, …)` draws a script's panel in an
   overlay the page can't see or restyle (React and valtio built in);
-  `tt.globalStore` (or per page, `tt.pageStore`) shares live state between it and the handlers, and `tt.onPage`
-  and `tt.onSite` code answers its calls ([overlays](docs/scripting.md#overlays--wtonoverlay)).
+  `tweak.globalStore` (or per page, `tweak.pageStore`) shares live state between it and the handlers, and `tweak.onPage`
+  and `tweak.onSite` code answers its calls ([overlays](docs/scripting.md#overlays--wtonoverlay)).
   Saving a script updates open pages and overlays in place.
 - **No debugger banner needed** — the optional [local helper](docs/local-helper.md)
   intercepts at network level on Chrome without the "being debugged" bar.
@@ -46,8 +46,9 @@ React + `valtio` GUI overlay on the page.
   report to an LLM with "why isn't this working?". It carries your scripts,
   settings, the recent log and the requests the Network view recorded, with what each script did to them,
   so the model can pinpoint the cause. Cookies and authorization headers are redacted.
-- **Install and share scripts** — open any URL ending in `.tangitweak.ts` or `#tangitweak:install` (a gist, a GitHub repo, file or folder, any site, a local file) to install it with the files it imports; the install page shows what it can do first. Installed scripts [update themselves](docs/packages.md#updates) unless an update can do more, which waits for your review.
+- **Install and share tweaks** — a tweak is a folder with a `package.json`; open its URL with `#tangitweak:install` (a gist, a GitHub repo or folder, any site, a local file) to install it with the files it imports and the npm packages its `dependencies` list; the install page shows what it can do first. Installed tweaks [update themselves](docs/packages.md#updates) unless an update can do more, which waits for your review.
 - **Folder sync** — keep scripts, data files (`.json`, `.md`, `.svg`, images) and their folders as plain files in a synced folder of your choice.
+- **Type-check and test tweaks** with the `tangitweak` npm package (`npm install -D tangitweak vitest react react-dom valtio`): Vitest tests that run a tweak the way the browser does ([docs](docs/testing.md)). Folder Sync also writes it to a synced folder, so it works without npm's copy.
 - **Chrome (MV3), MV2 Chromium and Firefox.**
 
 ## Install
@@ -74,8 +75,10 @@ see [docs/install.md](docs/install.md).
 Open the Editor (popup → **Open Editor**), click **+ New** and paste:
 
 ```ts
+import { tweak } from "tangitweak";
+
 // Try it: open https://dummyjson.com/todos/1
-tt.onResponseBody({ url: "*://dummyjson.com/todos/*", strategy: "helper" }, (ctx, body) => {
+tweak.onResponseBody({ url: "*://dummyjson.com/todos/*", strategy: "helper" }, (ctx, body) => {
     const text = typeof body === "string" ? body : new TextDecoder().decode(body);
     const json = JSON.parse(text);
     json.todo = "Transformed by TangiTweak";
@@ -94,7 +97,8 @@ running (later: **?** → **Welcome** or **?** → **Samples**).
 | | |
 |---|---|
 | [Installing](docs/install.md) | release zips, signed crx, building from source |
-| [Writing scripts](docs/scripting.md) | the `tt` API, routes, parameters, libraries, imports and data files, `tt.globalStore`/`tt.pageStore`/`tt.siteStore`/`tt.fetch`, page code (`tt.onSite`, `tt.onPage`, `tt.onOverlay`), handles, hot reload, overlays, stacking, async handlers |
+| [Writing scripts](docs/scripting.md) | the `tweak` API, routes, parameters, libraries, imports and data files, `tweak.globalStore`/`tweak.pageStore`/`tweak.siteStore`/`tweak.fetch`, page code (`tweak.onSite`, `tweak.onPage`, `tweak.onOverlay`), handles, hot reload, overlays, stacking, async handlers |
+| [Testing tweaks](docs/testing.md) | Vitest tests with `"tangitweak/test"`: fixtures for pages, tabs and requests, one-component tests, and the browser's limits |
 | [Installing and sharing scripts](docs/packages.md) | install from a URL, GitHub, a gist, a folder or a zip; the header; where files go; updates and rollback |
 | [Interception strategies](docs/strategies.md) | `page` / `debugger` / `extension` / `helper` / `rules`, the default and per-handler choice, [which strategies keep the URL when replacing a response](docs/strategies.md#how-each-strategy-serves-a-replacement), the Missed warning, browser compatibility |
 | [Local helper](docs/local-helper.md) | the `helper` strategy: install, how it works, security notes |

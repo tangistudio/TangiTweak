@@ -1,7 +1,7 @@
 /**
- * `tt.isChrome` / `tt.isFirefox` / `tt.isMV2` / `tt.isMV3`: which browser
- * and extension build a script runs in; `tt.isMac` / `tt.isWindows` /
- * `tt.isLinux`: which desktop OS (none of them on Android or ChromeOS). MV2/MV3 is the build (dist vs
+ * `tweak.isChrome` / `tweak.isFirefox` / `tweak.isMV2` / `tweak.isMV3`: which browser
+ * and extension build a script runs in; `tweak.isMac` / `tweak.isWindows` /
+ * `tweak.isLinux`: which desktop OS (none of them on Android or ChromeOS). MV2/MV3 is the build (dist vs
  * dist-mv3). The browser comes from the extension API where one is visible
  * (background); sandboxed and page contexts fall back to the user agent.
  * MV3 builds are Chromium-only.

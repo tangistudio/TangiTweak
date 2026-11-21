@@ -34,7 +34,7 @@ debug. It's cleared when the browser closes.
 
 - **Extension storage** (`chrome.storage.local` and `chrome.storage.session`):
   scripts, data files, parameter values, settings, installed packages and the
-  state scripts save with `tt.globalStore`, `tt.pageStore` and `tt.siteStore`.
+  state scripts save with `tweak.globalStore`, `tweak.pageStore` and `tweak.siteStore`.
   It stays on your device and is removed when you uninstall TangiTweak.
 - **Folder sync** (optional): if you connect a folder, scripts and settings are
   written there.
@@ -59,7 +59,7 @@ TangiTweak itself only contacts other servers when you ask it to:
 These requests send no cookies or personal data from TangiTweak. The servers
 see your IP address and the request, as with any download.
 
-Scripts you write or install can make their own requests (`tt.fetch`, or code
+Scripts you write or install can make their own requests (`tweak.fetch`, or code
 they add to pages), and can change what pages send. Only run scripts you trust,
 and review an installed script's code and permissions on the install page.
 
@@ -84,7 +84,7 @@ data is used only to clear cached copies of the pages the helper routes.
 | `tabs` | open the Editor and link requests to tabs |
 | `storage`, `unlimitedStorage` | save your scripts, settings and script data |
 | `offscreen`, `alarms` | run script code in the background, and keep folder sync running |
-| `userScripts` (optional) | run your `tt.onPage` code in an isolated world, and your `tt.onSite` code in the site's |
+| `userScripts` (optional) | run your `tweak.onPage` code in an isolated world, and your `tweak.onSite` code in the site's |
 | `nativeMessaging`, `browsingData` (optional) | the local helper, see above |
 | `management` (optional) | list your other extensions in a diagnostics report |
 

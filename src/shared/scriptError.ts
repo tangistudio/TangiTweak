@@ -2,7 +2,7 @@
  * Script error formatting for the log: the stored script name + the error,
  * with stack frames rewritten back to the user's source.
  *
- * Scripts compile via `new Function("tt", …, "\"use strict\";\n" + js +
+ * Scripts compile via `new Function("console", …, "\"use strict\";\n" + js +
  * "\n//# sourceURL=tangitweak-script:///<name>")` (scriptFn.ts). The sourceURL
  * names each script's frames — `at fn (tangitweak-script:///lib/a.ts:8:14)` —
  * so a library script's frames carry its own name, and the page hook's own
@@ -40,6 +40,23 @@ export function scriptFrame(line: string): { name: string; line: number; column:
     return { name, line: userLine, column: Number(m[3]), fn: fn && fn[1] !== "eval" ? fn[1] : null };
 }
 
+/** what replaced the `tt` global (removed in 0.40), for code that still uses it */
+export const TT_REMOVED = 'the `tt` global was removed in TangiTweak 0.40 — add `import { tweak } from "tangitweak";` and call `tweak.onPage(…)`, `tweak.params(…)`, … instead';
+
+/** `e`, when it's code reaching for the removed `tt` global (`tt is not defined`), with TT_REMOVED in its message */
+export function explainRemovedTt<E>(e: E): E {
+    const err = e as any;
+    if (!err || typeof err !== "object" || err.name !== "ReferenceError" || typeof err.message !== "string") return e;
+    const msg: string = err.message;
+    if (!/^(?:tt is not defined|Can't find variable: tt)$/.test(msg)) return e;
+    const next = `${msg} — ${TT_REMOVED}`;
+    try {
+        err.message = next;
+        if (typeof err.stack === "string") err.stack = err.stack.replace(msg, next);
+    } catch {}
+    return e;
+}
+
 /**
  * `[name] TypeError: msg` + the user-code stack frames mapped to source
  * positions, then each `cause` the same way (`Caused by: …`). `context`
@@ -47,7 +64,7 @@ export function scriptFrame(line: string): { name: string; line: number; column:
  */
 export function formatScriptError(name: string, e: any, context?: string): string {
     const lines: string[] = [];
-    for (let err = e, depth = 0; err != null && depth < 4; err = err instanceof Error ? (err as any).cause : undefined, depth++) {
+    for (let err = explainRemovedTt(e), depth = 0; err != null && depth < 4; err = err instanceof Error ? (err as any).cause : undefined, depth++) {
         const stack = err.stack ? String(err.stack) : String(err);
         const nl = stack.indexOf("\n");
         const head = nl < 0 ? stack : stack.slice(0, nl);
@@ -60,7 +77,7 @@ export function formatScriptError(name: string, e: any, context?: string): strin
 /**
  * The user-source line of the outermost script frame on the current stack:
  * the line in the script's top level that made the current call (for
- * `tt.onRequest(…)`, its registration — also when a recipe from an imported
+ * `tweak.onRequest(…)`, its registration — also when a recipe from an imported
  * utility registered it). Firefox may not name `new Function` frames by
  * their sourceURL: there they read `… > Function:L:C`.
  */

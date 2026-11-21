@@ -36,11 +36,7 @@ export const actions = {
     select(_id: string): void {},
     /** asks, then deletes */
     deleteRows(_rows: TreeRow[]): void {},
-    /** Make Package… on a script: name it with tt.metadata, or bundle it with what it imports */
-    makePackage(_id: string): void {},
-    /** Make Package… on a folder: a metadata.json listing its scripts */
-    makeFolderPackage(_folder: string): void {},
-    /** Export Package…: download a script or metadata.json (path) and what it brings (one file as is, more as a .zip) */
+    /** Export Package…: download a tweak's package.json (path) and what it brings, as a .zip */
     exportPackage(_start: string): void {},
     /** rename / move rows */
     moveRows(_plan: { item: TreeRow; to: string }[]): Promise<void> {
@@ -54,8 +50,10 @@ export const actions = {
     /** shows the explorer, then the inline name input */
     startCreate(_kind: NewKind, _folder?: string): void {},
     setScriptEnabled(_id: string, _enabled: boolean): void {},
+    /** delete a tweak's data folder file (asks): its setting or store goes back to the defaults */
+    resetTweakData(_path: string): void {},
     // ---- dialogs ----
-    /** ⌘P's list: settings.json, the scripts, the data files */
+    /** ⌘P's list: settings.json, the scripts, the data files, the tweaks' data folder files */
     quickOpenItems(): QuickOpenItem[] {
         return [];
     },
@@ -80,6 +78,10 @@ export const actions = {
     setLaunchMode(_mode: LaunchMode): void {},
     setEditorUrl(_url: string): void {},
     setMonacoVerbose(_on: boolean): void {},
+    /** rename every tweak's data folder; resolves with why it can't, else "" */
+    setDataFolder(_name: string): Promise<string> {
+        return Promise.resolve("");
+    },
     /** pick what to export, then download the zip */
     exportBundle(): void {},
     /** pick a zip / script file, then what of it to import */

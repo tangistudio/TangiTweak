@@ -22,10 +22,12 @@ import {
     setSel,
     setSubtreeExpanded,
     SETTINGS_ID,
-    STORES_ID,
     startRename,
     toggleSel,
     treeRow,
+    isTweakDataId,
+    tweakDataIn,
+    tweakDataPathOf,
     visibleRows,
     type MenuItem,
     type NewKind,
@@ -36,7 +38,8 @@ import { FileIcon, indent } from "./icons";
 import { isMacPlatform, keyHint } from "../shortcuts";
 import { badgeRowOf, packageOf, packages, packageTitle } from "../state/packages";
 import { openInstall } from "../state/dialogs";
-import { packageFolders } from "../../shared/makePackage";
+import { tweakFolders } from "../../shared/newTweak";
+import { NEEDS_REWRITE } from "../../shared/tweakBundle";
 import { sourcePageUrl } from "../../shared/packageSource";
 import { packagesApi } from "../install/api";
 import { packageName, resolveWorkspaceIcons, updateSource, type InstalledPackage } from "../../shared/packageModel";
@@ -98,8 +101,10 @@ const expandAllMenuItems = (folders: string[]): MenuItem[] => {
 };
 
 function newItemsMenu(folder: string): MenuItem[] {
+    const inTweak = [...localPackageFolders(explorer.dataFiles).keys()].some((f) => folder === f || folder.startsWith(f + "/"));
     return [
-        { label: "New Script…", run: () => actions.startCreate("script", folder) },
+        { label: "New Tweak…", run: () => actions.startCreate("tweak", folder) },
+        ...(inTweak ? [{ label: "New Module…", run: () => actions.startCreate("script", folder) }] : []),
         { label: "New JSON File…", run: () => actions.startCreate("data", folder) },
         { label: "New Folder…", run: () => actions.startCreate("folder", folder) },
     ];
@@ -107,26 +112,22 @@ function newItemsMenu(folder: string): MenuItem[] {
 
 function installMenu(): MenuItem[] {
     return [
-        { label: "Install Script…", run: () => openInstall() },
-        ...(Object.values(packages.byId).some((p) => updateSource(p) && p.autoUpdate) ? [{ label: "Check for Script Updates", run: () => pkgAction(() => checkUpdates()) }] : []),
+        { label: "Install Tweak…", run: () => openInstall() },
+        ...(Object.values(packages.byId).some((p) => updateSource(p) && p.autoUpdate) ? [{ label: "Check for Tweak Updates", run: () => pkgAction(() => checkUpdates()) }] : []),
     ];
 }
 
 /** open `id` unless it's already the open file */
-/** folders holding a metadata.json: bundles (shared/makePackage) */
-const localPackageFolders = (dataFiles: readonly { path: string }[]): Map<string, string> => packageFolders(dataFiles.map((d) => d.path));
+/** folders holding a package.json with a "tangitweak" block: tweaks (shared/newTweak) */
+const localPackageFolders = (dataFiles: readonly { path: string; text: string }[]): Map<string, string> => tweakFolders(dataFiles);
 
-/** what Export Package… on a folder starts from: its metadata.json, or an installed package's script; else undefined */
+/** what Export Package… on a folder starts from: its package.json (or an installed package's); else undefined */
 function packageStartOf(folder: string): string | undefined {
     const manifest = localPackageFolders(explorer.dataFiles).get(folder);
     if (manifest) return manifest;
     const p = Object.values(packages.byId).find((x) => x.folder === folder);
     return p ? `${folder}/${p.files[MANIFEST_FILE] ? MANIFEST_FILE : p.entries[0]}` : undefined;
 }
-
-/** `path` is in a package's folder (a bundle's, or an installed package's) */
-const inPackageFolder = (path: string): boolean =>
-    [...localPackageFolders(explorer.dataFiles).keys(), ...Object.values(packages.byId).flatMap((p) => (p.folder ? [p.folder] : []))].some((f) => path.startsWith(f + "/"));
 
 const open = (id: string): void => {
     if (id !== explorer.selectedId || explorer.typingsShown) actions.select(id);
@@ -145,7 +146,7 @@ export function ExplorerSection() {
                 <span className="chevron" aria-hidden="true" />
                 <span className="section-title">TangiTweak</span>
                 <div className="section-actions">
-                    <button id="btn-new" title="New Script…" aria-label="New Script" onClick={button(() => actions.startCreate("script"))}>
+                    <button id="btn-new" title="New Tweak… (a folder with a package.json and an index.ts)" aria-label="New Tweak" onClick={button(() => actions.startCreate("tweak"))}>
                         <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="none" stroke="currentColor" strokeWidth="1.1" d="M9.5 1.5h-6v13h5M9.5 1.5l3 3v4M9.5 1.5v3h3M12.5 10.5v5M10 13h5" /></svg>
                     </button>
                     {" "}
@@ -157,7 +158,7 @@ export function ExplorerSection() {
                         <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="none" stroke="currentColor" strokeWidth="1.1" strokeLinejoin="round" d="M8.5 13.5h-7v-10h4.3l1.5 1.5h7.2v3.5M12 9.5v5M9.5 12h5" /></svg>
                     </button>
                     {" "}
-                    <button id="btn-install" title="Install Script… (from a URL, GitHub, a gist, a folder or a zip; or drop one on the Explorer)" aria-label="Install Script" onClick={button(() => openInstall())}>
+                    <button id="btn-install" title="Install Tweak… (from a URL, GitHub, a gist, a folder or a zip; or drop one on the Explorer)" aria-label="Install Tweak" onClick={button(() => openInstall())}>
                         <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="none" stroke="currentColor" strokeWidth="1.1" strokeLinejoin="round" strokeLinecap="round" d="M3 1.5h6.5l3.5 3.5v9.5H3zM9.5 1.5V5H13M6.5 6v5.5M4.5 9.5l2 2 2-2" /><circle cx="10.5" cy="11.2" r="1.2" fill="none" stroke="currentColor" strokeWidth="1.1" /></svg>
                     </button>
                     {" "}
@@ -260,8 +261,20 @@ function onContextMenu(e: MouseEvent<HTMLUListElement>): void {
         ]);
         return;
     }
+    if (id && isTweakDataId(id)) {
+        moveFocus(id);
+        const path = tweakDataPathOf(id);
+        showContextMenu(e.clientX, e.clientY, [
+            { label: "Open", key: "Enter", run: () => open(id) },
+            null,
+            { label: "Copy Path", run: () => copy(path, `copied ${path}`) },
+            null,
+            { label: "Delete (Back to Defaults)", run: () => actions.resetTweakData(path) },
+        ]);
+        return;
+    }
     if (!id || isVirtualRootId(id)) {
-        // settings.json, stores.json and the empty space below the tree: the root
+        // settings.json and the empty space below the tree: the root
         if (id) moveFocus(id);
         const hasDirs = !id && everyFolder().length > 0;
         showContextMenu(e.clientX, e.clientY, [
@@ -279,16 +292,12 @@ function onContextMenu(e: MouseEvent<HTMLUListElement>): void {
     const script = row.kind === "script" ? explorer.scripts.find((s) => s.id === id) : undefined;
     const isLib = script?.meta.active === false;
     const pkg = packageOf(row);
-    const inPkg = !!pkg || inPackageFolder(row.path);
-    const exportStart = row.kind === "folder" ? packageStartOf(row.path) : script && !inPkg ? scriptFileName(script.meta.name) : undefined;
-    const make = inPkg || exportStart?.endsWith(MANIFEST_FILE) ? undefined : script ? () => actions.makePackage(script.id) : row.kind === "folder" ? () => actions.makeFolderPackage(row.path) : undefined;
+    const exportStart = row.kind === "folder" ? packageStartOf(row.path) : undefined;
     showContextMenu(e.clientX, e.clientY, [
         ...(row.kind === "folder" ? expandAllMenuItems([row.path]) : [{ label: "Open", key: "Enter", run: () => open(id) }, null]),
         ...(pkg ? packageMenu(pkg) : []),
         ...(script && !isLib ? [{ label: script.enabled ? "Disable" : "Enable", run: () => actions.setScriptEnabled(script.id, !script.enabled) }, null] : []),
-        ...(make ? [{ label: "Make Package…", run: make }] : []),
-        ...(exportStart ? [{ label: "Export Package…", run: () => actions.exportPackage(exportStart) }] : []),
-        ...(make || exportStart ? [null] : []),
+        ...(exportStart ? [{ label: "Export Package…", run: () => actions.exportPackage(exportStart) }, null] : []),
         ...newItemsMenu(targetFolder(row)),
         null,
         { label: "Copy Path", run: () => copy(rowFilePath(row), `copied ${rowFilePath(row)}`) },
@@ -399,6 +408,7 @@ export function ExplorerTree() {
         pkgByRow.set("folder" in at ? folderRowId(at.folder) : at.id, p);
     }
     const localPkgs = localPackageFolders(snap.dataFiles);
+    void snap.tweakData; // tweakDataIn reads the store: re-render when the data folder files change
     const { scriptIcons, folderIcons } = resolveWorkspaceIcons(snap.scripts, snap.dataFiles, pkgSnap.byId as Record<string, InstalledPackage>);
     const pkgBadge = (id: string) => {
         const p = pkgByRow.get(id);
@@ -429,7 +439,7 @@ export function ExplorerTree() {
     const cursor = snap.focusedId ?? selectedId;
     // while tt-api.d.ts is shown no row is the open file (● still marks unsaved edits)
     const shown = snap.typingsShown ? null : selectedId;
-    const shownIds = new Set([SETTINGS_ID, STORES_ID, ...rows.map((r) => r.id)]);
+    const shownIds = new Set(explorerIds());
 
     useLayoutEffect(() => {
         if (!snap.cursorMoves) return;
@@ -485,7 +495,29 @@ export function ExplorerTree() {
         },
     });
 
-    const storesBad = snap.jsonErrorIds.has(STORES_ID);
+    /** a tweak's data folder files, right inside its folder (`root`: "atlas/") */
+    const tweakDataRows = (root: string, depth: number): ReactNode[] =>
+        tweakDataIn(root).map(({ id, path }) => {
+            const bad = snap.jsonErrorIds.has(id);
+            const store = path.slice(root.length).split("/").length > 2;
+            return li(
+                id,
+                " tweak-data" + (bad ? " has-error" : ""),
+                depth,
+                <>
+                    <FileIcon kind={store ? "stores" : "settings"} />
+                    <span className={bad ? "script-name error" : "script-name"}>{path.slice(root.length)}</span>
+                </>,
+                {
+                    title: [
+                        path,
+                        store ? "Saved data of a tweak.globalStore — edit and save to update open pages" : "This tweak's enable switch and the params you changed from their defaults",
+                        "Your data, not the tweak's code: left out of exports and builds. Delete it to go back to the defaults",
+                    ].join("\n"),
+                    ...click(id, () => open(id)),
+                }
+            );
+        });
     const items: ReactNode[] = [
         li(
             SETTINGS_ID,
@@ -495,18 +527,9 @@ export function ExplorerTree() {
                 <FileIcon kind="settings" />
                 <span className="script-name">settings.json</span>
             </>,
-            { title: "Settings file — global settings and per-script params & enabled state", ...click(SETTINGS_ID, () => actions.select(SETTINGS_ID)) }
+            { title: "Settings file — TangiTweak's own settings (each tweak's are in its data folder)", ...click(SETTINGS_ID, () => actions.select(SETTINGS_ID)) }
         ),
-        li(
-            STORES_ID,
-            storesBad ? " has-error" : "",
-            0,
-            <>
-                <FileIcon kind="stores" />
-                <span className={storesBad ? "script-name error" : "script-name"}>stores.json</span>
-            </>,
-            { title: "Persisted stores — tt.globalStore data for your scripts (synced with stores.json; edit and save to update open pages live)", ...click(STORES_ID, () => actions.select(STORES_ID)) }
-        ),
+        ...tweakDataRows("", 0),
     ];
     for (const r of rows) {
         if (r.kind === "folder") {
@@ -517,7 +540,7 @@ export function ExplorerTree() {
                     r.depth,
                     <>
                         <FileIcon kind={pkgByRow.get(r.id) || localPkgs.has(r.path) ? "package" : r.expanded ? "folder-open" : "folder"} src={folderIcons.get(r.path)} />
-                        {name(r, r.name, [r.path, pkgByRow.get(r.id) ? packageTitle(pkgByRow.get(r.id)!) : localPkgs.has(r.path) ? `A package (${MANIFEST_FILE}) — right-click → Export Package… to share it` : "", "F2 to rename · drag to move"].filter(Boolean).join("\n"))}
+                        {name(r, r.name, [r.path, pkgByRow.get(r.id) ? packageTitle(pkgByRow.get(r.id)!) : localPkgs.has(r.path) ? `A tweak (${MANIFEST_FILE}) — right-click → Export Package… to share it` : "", "F2 to rename · drag to move"].filter(Boolean).join("\n"))}
                         {pkgBadge(r.id)}
                     </>,
                     {
@@ -528,6 +551,7 @@ export function ExplorerTree() {
                     r.expanded
                 )
             );
+            if (r.expanded) items.push(...tweakDataRows(r.path + "/", r.depth + 1));
         } else if (r.kind === "data") {
             const bad = snap.jsonErrorIds.has(r.id);
             const svg = isSvgPath(r.path);
@@ -564,8 +588,11 @@ export function ExplorerTree() {
             const health = scriptHealth(script);
             const title = [
                 r.depth ? scriptFileName(script.meta.name) : "",
-                script.meta.description ?? "",
-                isLib ? "Library — registers no handlers with its current params, importable by other scripts. Register a handler (e.g. tt.onRequest({ url, strategy }, fn)) to make it a script" : script.meta.match.join(", "),
+                script.error?.startsWith(NEEDS_REWRITE)
+                    ? script.error
+                    : isLib
+                      ? "Module of a tweak — it runs when the tweak's entry (its package.json's \"main\", else index.ts) imports it; its handlers, params and stores are the tweak's"
+                      : script.meta.match.join(", "),
                 off ? "Disabled — enable it from the toolbar or the right-click menu" : "",
                 "Double-click or F2 to rename",
             ]
@@ -609,7 +636,7 @@ export function ExplorerTree() {
         }
     }
     if (editing?.mode === "create") {
-        const at = items.findIndex((it) => (it as { key: string }).key === (editing.folder ? folderRowId(editing.folder) : STORES_ID));
+        const at = items.findIndex((it) => (it as { key: string }).key === (editing.folder ? folderRowId(editing.folder) : SETTINGS_ID));
         items.splice(at + 1, 0, <CreateRow key="creating" kind={editing.kind} folder={editing.folder} list={list} />);
     }
 
@@ -681,7 +708,7 @@ function CreateRow({ kind, folder, list }: { kind: NewKind; folder: string; list
             <NameInput
                 kind={kind}
                 value=""
-                placeholder={kind === "script" ? "script name" : kind === "data" ? "name.json, .md or .svg" : "folder name"}
+                placeholder={kind === "script" ? "module name" : kind === "data" ? "name.json, .md or .svg" : kind === "tweak" ? "tweak name" : "folder name"}
                 onDone={(commit, value) => {
                     explorer.editing = null;
                     let name = cleanScriptName(value).trim();

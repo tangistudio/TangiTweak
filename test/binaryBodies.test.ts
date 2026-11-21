@@ -5,7 +5,7 @@ import { packBytes, unpackBytes } from "../src/shared/bytesPack";
 import { normalizeRoute, NET_KINDS } from "../src/shared/route";
 import { runOp } from "../src/shared/bodyOps";
 import { parseSettings, planSettings, renderSettings, type GlobalSettings } from "../src/shared/settingsJson";
-import { buildSettingsSchema } from "../src/shared/settingsSchema";
+import { SETTINGS_SCHEMA } from "../src/shared/settingsSchema";
 
 describe("bodyKind / isTextType", () => {
     afterEach(() => setTextTypes(null));
@@ -182,14 +182,14 @@ describe("settings.textTypes", () => {
     const G: GlobalSettings = { logLevel: "info", logCap: 500 };
 
     it("omits defaults and writes a custom list cleanly", () => {
-        expect(renderSettings(G, [])).toBe("{}\n");
-        const custom = renderSettings({ ...G, textTypes: ["text/*", "image/svg+xml"] }, []);
+        expect(renderSettings(G)).toBe("{}\n");
+        const custom = renderSettings({ ...G, textTypes: ["text/*", "image/svg+xml"] });
         expect(JSON.parse(custom)).toEqual({ textTypes: ["text/*", "image/svg+xml"] });
         expect(parseSettings(custom).globals.textTypes).toEqual(["text/*", "image/svg+xml"]);
     });
 
     it("plans: missing = defaults; invalid lists are skipped", () => {
-        const plan = (t: string, cur: GlobalSettings = G) => planSettings(parseSettings(t), cur, []).globals.textTypes;
+        const plan = (t: string, cur: GlobalSettings = G) => planSettings(parseSettings(t), cur).textTypes;
         expect(plan(JSON.stringify({ textTypes: ["text/*", "*json"] }))).toEqual(["text/*", "*json"]);
         expect(plan(JSON.stringify({ logLevel: "info" }))).toBeUndefined();
         expect(plan(JSON.stringify({ logLevel: "info" }), { ...G, textTypes: ["text/*"] })).toEqual([...DEFAULT_TEXT_TYPES]);
@@ -198,7 +198,7 @@ describe("settings.textTypes", () => {
     });
 
     it("schema defines textTypes with minItems and default", () => {
-        const schema: any = buildSettingsSchema([]);
+        const schema: any = SETTINGS_SCHEMA;
         expect(schema.properties.textTypes).toMatchObject({ type: "array", minItems: 1, items: { type: "string", minLength: 1 }, default: [...DEFAULT_TEXT_TYPES] });
     });
 });

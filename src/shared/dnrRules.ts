@@ -605,7 +605,7 @@ export interface RuleProbe {
     urlRead: boolean;
     /** read dynamic state (`params` / `globalStore` / `tabStore`), so returning nothing means "currently off" */
     conditional?: boolean;
-    /** `tt.tabStore` names read during the probe */
+    /** `tweak.tabStore` names read during the probe */
     tabStores?: string[];
     /** optional captures whose fallback differs from "" (what a rule substitutes for a missing one) */
     optionalMismatch?: string[];
@@ -753,6 +753,24 @@ export function substitute(regex: string, substitution: string, url: string): st
 /** "onRequest #2: reason" */
 export function ruleErrorLine(route: RouteMeta, reason: string): string {
     return `${routeLabel(route)}: ${reason}`;
+}
+
+/**
+ * Why a url pattern's regex can't be a rule, from the browser's answer
+ * (isRegexSupported's `reason`). `capturesOnly`: it fits without the
+ * redirect's captures.
+ */
+export function regexProblemText(regex: string, pattern: string, reason: string, requireCapturing: boolean, capturesOnly = false): string {
+    if (reason === "memoryLimitExceeded") {
+        const { classes, groups, captures } = regexCost(regex);
+        const fix = capturesOnly
+            ? `it fits without captures, so the redirect's ${captures} captures push it over — use fewer ctx.groups in the redirect`
+            : `use fewer groups or wildcards, e.g. one * for a run of segments`;
+        return `url pattern "${pattern}" is too complex for a rule: its regex exceeds the browser's regex memory limit ` +
+            `(2 KB of compiled RE2 program in Chrome; the size grows with character classes and groups, not text length — roughly 10 :name groups or wildcards fit). ` +
+            `Regex: ${regex} (${regex.length} chars, ${classes} character classes, ${groups} groups${requireCapturing ? `, ${captures} captured for the redirect` : ""}) — ${fix}`;
+    }
+    return `url pattern "${pattern}" can't be a rule: the browser's regex engine (RE2) rejects its regex ${regex} (${reason}) — no lookahead, lookbehind or backreferences in custom groups`;
 }
 
 /** what drives a regex's compiled size: character classes (incl. `.`) and groups */

@@ -280,7 +280,7 @@ describe("Popup", () => {
         expect(container.querySelectorAll("img.script-icon")).toHaveLength(1);
     });
 
-    it("renders nested tt.params objects as collapsible sections and updates dotted paths", async () => {
+    it("renders nested tweak.params objects as collapsible sections and updates dotted paths", async () => {
         const params: ScriptParams = {
             defs: {
                 enabled: { type: "boolean", default: true },

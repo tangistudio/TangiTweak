@@ -20,7 +20,7 @@ const host: InstallHost = {
     },
 };
 
-/** Install Script…: the install flow (install/InstallPage) as a dialog; a drop anywhere on it starts over with what was dropped. */
+/** Install Tweak…: the install flow (install/InstallPage) as a dialog; a drop anywhere on it starts over with what was dropped. */
 export function InstallDialog() {
     const { install } = useSnapshot(dialogs);
     const { over, handlers } = useInstallDrop((drop) => openInstall({ drop }));
@@ -29,7 +29,7 @@ export function InstallDialog() {
         <Overlay id="install-dialog" open onClose={close} extra={handlers}>
             <div className={"dialog wide install-dialog" + (over ? " dropping" : "")} role="dialog" aria-modal="true" aria-labelledby="install-dialog-title">
                 <div className="dialog-head">
-                    <h2 id="install-dialog-title">{install.req.update ? "Review Update" : "Install Script"}</h2>
+                    <h2 id="install-dialog-title">{install.req.update ? "Review Update" : "Install Tweak"}</h2>
                     <button className="btn-close" data-close="" title="Close (Esc)">
                         ✕
                     </button>

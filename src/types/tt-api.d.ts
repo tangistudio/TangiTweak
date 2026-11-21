@@ -1,6 +1,7 @@
 /**
- * Public `tt` API typings — shipped into the editor as an extra lib and
- * written into the VS Code folder so scripts get full IntelliSense.
+ * Public `tweak` API typings (`import { tweak } from "tangitweak"`) —
+ * shipped into the editor as an extra lib and written into the VS Code
+ * folder so scripts get full IntelliSense.
  */
 
 declare namespace TangiTweak {
@@ -35,7 +36,7 @@ declare namespace TangiTweak {
          * `"0"`, `"1"`… for `*` wildcards). `{}` when nothing was captured.
          *
          * @example
-         * tt.onRequest({ url: "https://api.example.com/users/:id", strategy: "helper" }, (ctx) => {
+         * tweak.onRequest({ url: "https://api.example.com/users/:id", strategy: "helper" }, (ctx) => {
          *     if (ctx.groups.id === "42") return { replaceResponse: { body: { id: 42 } } };
          * });
          */
@@ -59,7 +60,7 @@ declare namespace TangiTweak {
          * - `rules`: no request — reading it is an error.
          *
          * @example
-         * tt.onRequest({ url: "https://api.example.com/*", methods: ["POST"], strategy: "helper" }, (ctx) => {
+         * tweak.onRequest({ url: "https://api.example.com/*", methods: ["POST"], strategy: "helper" }, (ctx) => {
          *     if (typeof ctx.requestBody === "string" && ctx.requestBody.includes("debug=1")) return { block: true };
          * });
          */
@@ -71,7 +72,7 @@ declare namespace TangiTweak {
          * its second argument.
          *
          * @example
-         * tt.replaceResponse({ url: "https://api.example.com/graphql", strategy: "helper" }, (ctx) => {
+         * tweak.replaceResponse({ url: "https://api.example.com/graphql", strategy: "helper" }, (ctx) => {
          *     const q = ctx.json<{ operationName?: string }>();
          *     if (q?.operationName === "GetFlags") return { flags: { beta: true } };
          * });
@@ -190,12 +191,12 @@ declare namespace TangiTweak {
          * default. A single value, no fallback. See {@link Strategy}.
          *
          * @example { url: "*://example.com/app/*.js", resourceTypes: ["script"], strategy: "debugger" }
-         * @example { url: "*://ads.example.com/*", strategy: tt.isMV3 ? "rules" : "extension" }
+         * @example { url: "*://ads.example.com/*", strategy: tweak.isMV3 ? "rules" : "extension" }
          */
         strategy: Strategy;
     }
 
-    /** Full route form for `tt.onResponseBody`. */
+    /** Full route form for `tweak.onResponseBody`. */
     interface BodyRouteOptions extends RouteOptions {
         /**
          * Which bodies the handler gets. Which Content-Types are text is set
@@ -215,7 +216,7 @@ declare namespace TangiTweak {
         binary?: boolean | "both";
     }
 
-    /** Route fields shared by `tt.onSite`, `tt.onPage` and `tt.onOverlay`. */
+    /** Route fields shared by `tweak.onSite`, `tweak.onPage` and `tweak.onOverlay`. */
     interface DocumentRouteOptions extends DocumentOptions {
         /** Frame URLs (top page and iframes) to run in. See {@link UrlPatterns}. */
         url: UrlPatterns;
@@ -229,9 +230,9 @@ declare namespace TangiTweak {
      *
      * | | runs in | sees | trusted |
      * |---|---|---|---|
-     * | `tt.onSite` | the site's JavaScript world | the site's DOM and globals (`window.myApp`) | no — the site can see and tamper with it |
-     * | `tt.onPage` | an isolated world | the site's DOM, none of its globals | yes |
-     * | `tt.onOverlay` | the script's own frame over the page (top frame) | its own DOM | yes |
+     * | `tweak.onSite` | the site's JavaScript world | the site's DOM and globals (`window.myApp`) | no — the site can see and tamper with it |
+     * | `tweak.onPage` | an isolated world | the site's DOM, none of its globals | yes |
+     * | `tweak.onOverlay` | the script's own frame over the page (top frame) | its own DOM | yes |
      */
     type PageRoute = UrlPatterns | DocumentRouteOptions;
 
@@ -239,8 +240,8 @@ declare namespace TangiTweak {
     type Fn = (...args: any[]) => unknown;
 
     /**
-     * A **handle**: the handler's functions, made async — what `tt.onSite`,
-     * `tt.onPage` and `tt.onOverlay` return. A handler that returns a
+     * A **handle**: the handler's functions, made async — what `tweak.onSite`,
+     * `tweak.onPage` and `tweak.onOverlay` return. A handler that returns a
      * plain object of functions exposes them; any other return value
      * (nothing, a string, an element) exposes nothing.
      *
@@ -257,8 +258,8 @@ declare namespace TangiTweak {
      * Results from an `onSite` handle are the site's data: treat them as untrusted input.
      *
      * @example
-     * const site = tt.onSite("*://example.com/*", () => ({ user: () => (window as any).myApp?.user?.name as string | undefined }));
-     * tt.onPage("*://example.com/*", async () => {
+     * const site = tweak.onSite("*://example.com/*", () => ({ user: () => (window as any).myApp?.user?.name as string | undefined }));
+     * tweak.onPage("*://example.com/*", async () => {
      *     const name = await site.user(); // string | undefined
      * });
      */
@@ -281,7 +282,7 @@ declare namespace TangiTweak {
          * `fetch` and the like so they stop with the run.
          *
          * @example
-         * tt.onPage("*://example.com/*", (ctx) => {
+         * tweak.onPage("*://example.com/*", (ctx) => {
          *     document.addEventListener("click", onClick, { signal: ctx.signal });
          *     const t = setInterval(poll, 1000);
          *     ctx.signal.addEventListener("abort", () => clearInterval(t));
@@ -304,7 +305,7 @@ declare namespace TangiTweak {
          * more it calls the original.
          *
          * @example
-         * tt.onSite("*://example.com/*", (ctx) => {
+         * tweak.onSite("*://example.com/*", (ctx) => {
          *     ctx.patch(history, "pushState", (orig) => function (this: History, ...args: any[]) {
          *         console.log("navigating to", args[2]);
          *         return orig.apply(this, args);
@@ -347,7 +348,7 @@ declare namespace TangiTweak {
          * ctx.elements("video", (video, signal) => {
          *     video.playbackRate = 2;
          *     video.addEventListener("ratechange", () => (video.playbackRate = 2), { signal });
-         *     return () => tt.log("a video left");
+         *     return () => tweak.log("a video left");
          * }, { shadow: true });
          */
         elements<K extends keyof HTMLElementTagNameMap>(selector: K, fn: (el: HTMLElementTagNameMap[K], signal: AbortSignal) => (() => void) | void, opts?: ObserveOptions): () => void;
@@ -428,11 +429,11 @@ declare namespace TangiTweak {
          * Returns a function that removes this mount early.
          *
          * @example
-         * tt.onPage("*://example.com/*", (ctx) => {
+         * tweak.onPage("*://example.com/*", (ctx) => {
          *     ctx.mount("#header", <button onClick={() => alert("hi")}>Hi</button>);
          *     ctx.mount(".card", (card) => <Badge id={card.id} />, { position: "overlay" });
          * });
-         * tt.onOverlay("*://example.com/*", (ctx) => ctx.mount(<Panel />));
+         * tweak.onOverlay("*://example.com/*", (ctx) => ctx.mount(<Panel />));
          */
         mount(ui: unknown): () => void;
         mount(target: string | Element, ui: unknown | ((anchor: Element) => unknown), opts?: MountOptions): () => void;
@@ -443,14 +444,14 @@ declare namespace TangiTweak {
          * run does.
          *
          * @example
-         * const site = tt.onSite("*://example.com/*", (ctx) => {
+         * const site = tweak.onSite("*://example.com/*", (ctx) => {
          *     const logins: string[] = [], waiting: ((u: string) => void)[] = [];
          *     // answer every waiting call: one may be from a run that ended since
          *     window.addEventListener("app:login", (e: any) => (waiting.length ? waiting.splice(0).forEach((w) => w(e.detail)) : logins.push(e.detail)), { signal: ctx.signal });
          *     return { nextLogin: () => (logins.length ? Promise.resolve(logins.shift()!) : new Promise<string>((r) => waiting.push(r))) };
          * });
-         * tt.onPage("*://example.com/*", async (ctx) => {
-         *     for await (const user of ctx.each(site.nextLogin)) tt.log("login:", user);
+         * tweak.onPage("*://example.com/*", async (ctx) => {
+         *     for await (const user of ctx.each(site.nextLogin)) tweak.log("login:", user);
          * });
          */
         each<A extends any[], T>(fn: (...args: A) => Promise<T>, ...args: A): AsyncIterableIterator<T>;
@@ -501,7 +502,7 @@ declare namespace TangiTweak {
          * Returns a function that stops it early.
          *
          * @example
-         * tt.onPage("*://mail.example.com/*", (ctx) => {
+         * tweak.onPage("*://mail.example.com/*", (ctx) => {
          *     ctx.iframes("iframe.editor", (f) => {
          *         f.style("body { font-size: 16px }");
          *         f.document.addEventListener("keydown", onKey, { signal: f.signal });
@@ -566,7 +567,7 @@ declare namespace TangiTweak {
          * after the page's turn, so it stays consumed.
          *
          * @example
-         * tt.onPage("*://example.com/*", (ctx) => {
+         * tweak.onPage("*://example.com/*", (ctx) => {
          *     ctx.shortcut("Alt+Shift+H", () => { box.hidden = !box.hidden; });
          *     ctx.shortcut("Mod+K", openSearch, { priority: "after-page" });
          *     // Esc closes the box when it's open; otherwise the page gets Esc
@@ -585,7 +586,7 @@ declare namespace TangiTweak {
          * (it also stops when the run ends).
          *
          * @example
-         * tt.onOverlay("*://example.com/*", (ctx) => {
+         * tweak.onOverlay("*://example.com/*", (ctx) => {
          *     const show = (url: string) => (badge.hidden = !url.includes("/cart"));
          *     show(ctx.url);
          *     ctx.onNavigate(show);
@@ -692,22 +693,22 @@ declare namespace TangiTweak {
          * Read a value; resolves to `undefined` when the key was never set.
          *
          * @example
-         * const hits = (await tt.storage.get("hits")) ?? 0;
+         * const hits = (await tweak.storage.get("hits")) ?? 0;
          */
         get(key: string): Promise<any>;
         /**
          * Store a value (persists across reloads and browser restarts).
          *
          * @example
-         * await tt.storage.set("hits", hits + 1);
+         * await tweak.storage.set("hits", hits + 1);
          */
         set(key: string, value: any): Promise<void>;
     }
 
-    /** A JSON value: what a {@link tt.globalStore} may hold. */
+    /** A JSON value: what a {@link Tweak.globalStore} may hold. */
     type Json = null | boolean | number | string | Json[] | { [k: string]: Json };
 
-    /** Options for {@link tt.globalStore}. */
+    /** Options for {@link Tweak.globalStore}. */
     interface StoreOptions<T> {
         /**
          * What survives a browser restart: `true` (default) the whole store,
@@ -717,7 +718,7 @@ declare namespace TangiTweak {
         persist?: boolean | (keyof T & string)[];
     }
 
-    /** `tt.fetch` options: `RequestInit` plus where the request comes from. */
+    /** `tweak.fetch` options: `RequestInit` plus where the request comes from. */
     interface FetchInit extends RequestInit {
         /**
          * `"background"`: the extension fetches, with its host permissions
@@ -731,15 +732,15 @@ declare namespace TangiTweak {
         bypass?: boolean;
     }
 
-    /** Timing for `tt.onSite`, `tt.onPage` and `tt.onOverlay` (part of the route object). */
+    /** Timing for `tweak.onSite`, `tweak.onPage` and `tweak.onOverlay` (part of the route object). */
     interface DocumentOptions {
         /**
          * **When** the handler runs, relative to the page's own loading.
          * `onSite` runs before the site, `onPage`/`onOverlay` when the DOM
          * is ready; `when` changes that. Default: `"document_start"` for
-         * `tt.onSite` (to get in ahead of the site's scripts: patch
+         * `tweak.onSite` (to get in ahead of the site's scripts: patch
          * `fetch`, catch a store as it's created), `"document_end"` for
-         * `tt.onPage` and `tt.onOverlay` (DOM work needs `<body>`).
+         * `tweak.onPage` and `tweak.onOverlay` (DOM work needs `<body>`).
          *
          * **How it gets there:** in every frame (top page *and* iframes) the
          * extension injects a small hook at `document_start`. The hook asks
@@ -802,13 +803,13 @@ declare namespace TangiTweak {
          *
          * @example
          * // onPage default: document_end (DOMContentLoaded)
-         * tt.onPage("*://example.com/*", () => {
+         * tweak.onPage("*://example.com/*", () => {
          *     document.title = "🎯 " + document.title;
          * });
          *
          * @example
          * // before page scripts (best effort, see race caveat)
-         * tt.onPage({ url: "*://example.com/*", when: "document_start" }, () => {
+         * tweak.onPage({ url: "*://example.com/*", when: "document_start" }, () => {
          *     Object.defineProperty(navigator, "webdriver", {
          *         get: () => false,
          *     });
@@ -816,7 +817,7 @@ declare namespace TangiTweak {
          *
          * @example
          * // after everything loaded, then keep it applied across re-renders
-         * tt.onPage({ url: "*://example.com/*", when: "document_idle" }, () => {
+         * tweak.onPage({ url: "*://example.com/*", when: "document_idle" }, () => {
          *     const apply = () => {
          *         for (const ad of document.querySelectorAll(".ad")) ad.remove();
          *     };
@@ -830,10 +831,10 @@ declare namespace TangiTweak {
         when?: "document_start" | "document_end" | "document_idle";
     }
 
-    // ---- tt.params / tt.defineParam: typed, user-adjustable parameters ----
+    // ---- tweak.params: typed, user-adjustable parameters ----
 
     /** An on/off switch — a checkbox in the ⚙ dialog. */
-    /** {@link tt.metadata}'s argument (a bundle's metadata.json has the same fields, plus `scripts`) */
+    /** a tweak's package.json fields as TangiTweak reads them (`name` is `tangitweak.displayName`, else the npm name) */
     interface Metadata {
         /** shown when installing and in the Explorer (default: the file name) */
         name?: string;
@@ -851,13 +852,13 @@ declare namespace TangiTweak {
         license?: string;
         /**
          * Where updates come from, instead of where it was installed from: a
-         * script, metadata.json or .zip URL, a GitHub file or folder
+         * package.json or .zip URL, a GitHub file or folder
          * (`github.com/o/r/tree/main/dir`), a gist (`gist.github.com/u/id`) or a
          * gist's raw file URL. A copy installed from a folder or zip updates
          * from it too. An update that changes it waits for review.
          */
         updateURL?: string;
-        /** hosts this script's tt.fetch calls reach — an update that adds one waits for review */
+        /** hosts the bundle's tweak.fetch calls reach — an update that adds one waits for review */
         connect?: string[];
     }
 
@@ -971,8 +972,8 @@ declare namespace TangiTweak {
      * macOS and Ctrl elsewhere), or `""` once removed.
      *
      * @example
-     * const cfg = tt.params({ toggle: { type: "shortcut", default: "Alt+Shift+H" } });
-     * tt.onOverlay("*://example.com/*", (ctx) => {
+     * const cfg = tweak.params({ toggle: { type: "shortcut", default: "Alt+Shift+H" } });
+     * tweak.onOverlay("*://example.com/*", (ctx) => {
      *     ctx.shortcut(cfg.toggle, () => { box.hidden = !box.hidden; });
      * });
      */
@@ -1039,514 +1040,498 @@ declare namespace TangiTweak {
 
 }
 
+declare namespace TangiTweak {
+    /**
+     * The script API: `import { tweak } from "tangitweak"`.
+     *
+     * A script is a file that registers handlers at top level. Each handler
+     * takes its own **route** first — a URL pattern, a list, or a route object
+     * (`url`, `exclude`, `methods`, `resourceTypes`, `strategy`) — then the handler:
+     *
+     * ```ts
+     * tweak.onRequest({ url: "*://api.example.com/*", strategy: "helper" }, (ctx) => ({ headers: { set: { "x-debug": "1" } } }));
+     * ```
+     *
+     * A file that registers **no** handlers is a *library*: other scripts
+     * import it, and it never runs on its own.
+     *
+     * **Stacking** — when several handlers match one request they run in list
+     * order (scripts top to bottom in the Editor, then registration order):
+     * - `onRequest`: the first *final* result (`replaceResponse`/`redirect`/
+     *   `block`) wins and stops the chain; headers-only or `void` results
+     *   don't stop it.
+     * - `onResponseHeaders`: **all** matching handlers run; `set` is applied in
+     *   order (later overwrites), `remove` accumulates.
+     * - `onResponseBody`: transforms **compose** — each output is the next input.
+     * - `replaceResponse`: the first handler returning a body wins.
+     *
+     * Handlers on different strategies run independently, each on its own
+     * strategy (see {@link TangiTweak.Strategy}).
+     *
+     * **Async** — every handler may return a Promise. On Chromium's
+     * `"extension"` strategy `onRequest`/`onResponseHeaders` must be
+     * synchronous (an async result is ignored with a warning); every other
+     * strategy awaits it.
+     */
+    interface Tweak {
+        /**
+         * Intercept a request before it is sent. Return **one** of
+         * `{ replaceResponse }`, `{ redirect }`, `{ block }` or `{ headers }`
+         * (a combination is a type error; at runtime only the first, in that
+         * order, applies and a warning is logged).
+         *
+         * **Final** results — the first one wins and stops the chain:
+         * - `replaceResponse` — synthesize the response; the network is never contacted.
+         *   On Chromium's `"extension"` strategy it is served as a data-URL
+         *   redirect, so only status 200 is possible there.
+         * - `redirect` — continue at another URL.
+         * - `block` — fail the request.
+         *
+         * **Not final:** `{ headers }` — applied, and later handlers still run.
+         *
+         * @param route Where it applies — see {@link TangiTweak.RouteOptions}.
+         * @param handler Called once per matching request with its context.
+         *
+         * @example
+         * // answer an endpoint without the network
+         * tweak.onRequest({ url: "https://api.example.com/users/:id", strategy: "helper" }, (ctx) => ({
+         *     replaceResponse: { body: { id: Number(ctx.groups.id), name: "Mock" } },
+         * }));
+         *
+         * @example
+         * // add a header to every POST, on the debugger
+         * tweak.onRequest({ url: "*://example.com/*", methods: ["POST"], strategy: "debugger" }, () => ({
+         *     headers: { set: { "x-debug": "1" } },
+         * }));
+         */
+        onRequest(route: TangiTweak.RouteOptions, handler: (ctx: TangiTweak.RequestCtx) => TangiTweak.Awaitable<TangiTweak.RequestResult | void>): void;
+
+        /**
+         * Inspect / modify response headers. **All** matching handlers run.
+         * Not available on the `"page"` strategy (the page can't change headers
+         * before the browser enforces them).
+         *
+         * @param route Where it applies — see {@link TangiTweak.RouteOptions}.
+         * @param handler Called when the response headers arrive.
+         *
+         * @example
+         * tweak.onResponseHeaders({ url: "*://api.example.com/*", strategy: "helper" }, () => ({
+         *     headers: {
+         *         set: { "access-control-allow-origin": "*" },
+         *         remove: ["content-security-policy"],
+         *     },
+         * }));
+         */
+        onResponseHeaders(
+            route: TangiTweak.RouteOptions,
+            handler: (ctx: TangiTweak.ResponseHeaderCtx) => TangiTweak.Awaitable<TangiTweak.ResponseHeaderResult | void>
+        ): void;
+
+        /**
+         * Replace the response body completely. Return a string, `Uint8Array`,
+         * an object (sent as JSON), or `{ file: "<path or data url>" }`; return
+         * nothing to leave the response alone.
+         *
+         * @param route Where it applies — see {@link TangiTweak.RouteOptions}.
+         * @param handler Called per matching response; its result becomes the body.
+         *
+         * @example
+         * tweak.replaceResponse({ url: "*://api.example.com/flags", strategy: "helper" }, () => ({ beta: true }));
+         *
+         * @example
+         * // serve a fixture fetched elsewhere
+         * tweak.replaceResponse({ url: "*://api.example.com/user", strategy: "helper" }, async () => {
+         *     const res = await fetch("https://fixtures.local/user.json");
+         *     return await res.text();
+         * });
+         */
+        replaceResponse(
+            route: TangiTweak.RouteOptions,
+            handler: (ctx: TangiTweak.ReplaceCtx) => TangiTweak.Awaitable<string | Uint8Array | object | { file: string } | null | void>
+        ): void;
+
+        /**
+         * Transform the response body: receives the original body and returns
+         * the new one. Matching transforms compose in order.
+         *
+         * The handler gets text bodies (a string) only, unless its route sets
+         * `binary: true` — binary bodies (images, video, …) only, as a
+         * `Uint8Array` — or `binary: "both"`. `binary: false` keeps text only
+         * and silences the "body is binary" warning. Which Content-Types are
+         * text: `settings.textTypes`.
+         *
+         * Needs a strategy that reads bodies: `"helper"`, `"debugger"`, `"page"`
+         * (page fetch/XHR only) or `"extension"` on Firefox. Chromium's
+         * `"extension"` strategy can't read bodies — the handler doesn't run there and
+         * the Log view says so.
+         *
+         * @param route Where it applies — see {@link TangiTweak.RouteOptions}.
+         * @param transform Receives the context and the original body; returns
+         * the new body, or nothing (`undefined` / `null`) to leave it as it is.
+         * Any body returned counts as a change — even the same one: it's
+         * re-encoded and served in place of the original.
+         *
+         * @example
+         * tweak.onResponseBody({ url: "*://example.com/app/*.js", resourceTypes: ["script"], strategy: "helper" }, (ctx, body) => {
+         *     return body.replace("DEBUG=false", "DEBUG=true");
+         * });
+         * @example
+         * // binary: true — swap an image
+         * tweak.onResponseBody({ url: "*://example.com/logo.png", binary: true, strategy: "helper" }, async (ctx, body) => {
+         *     const res = await fetch("https://example.org/other.png");
+         *     return new Uint8Array(await res.arrayBuffer());
+         * });
+         */
+        onResponseBody(
+            route: TangiTweak.BodyRouteOptions & { binary?: false },
+            transform: (ctx: TangiTweak.BodyCtx, body: string) => TangiTweak.Awaitable<string | Uint8Array | void>
+        ): void;
+        onResponseBody(
+            route: TangiTweak.BodyRouteOptions & { binary: true },
+            transform: (ctx: TangiTweak.BodyCtx, body: Uint8Array) => TangiTweak.Awaitable<string | Uint8Array | void>
+        ): void;
+        onResponseBody(
+            route: TangiTweak.BodyRouteOptions,
+            transform: (ctx: TangiTweak.BodyCtx, body: string | Uint8Array) => TangiTweak.Awaitable<string | Uint8Array | void>
+        ): void;
+
+        /**
+         * Run a handler in the **site's own JavaScript world**: it reads the
+         * site's globals (`window.myApp`, its Redux store) directly. The site
+         * can see and tamper with it, so it's untrusted: no stores, and it
+         * can't call handles. Return functions for the script's `onPage` and
+         * `onOverlay` code to call ({@link TangiTweak.Remote}).
+         *
+         * Runs once per document load in every frame whose URL matches the
+         * route, by default before the site's own scripts (`when:
+         * "document_start"`; `document.body` is usually `null` then). See
+         * {@link TangiTweak.DocumentOptions.when} for timing and
+         * {@link TangiTweak.PageRoute} for the three places. On Chrome (MV3) it
+         * runs through user scripts, which must be turned on (the Editor shows
+         * how).
+         *
+         * @example
+         * const site = tweak.onSite("*://example.com/*", () => ({
+         *     user: () => (window as any).myApp?.user?.name as string | undefined,
+         *     dispatch: (action: { type: string }) => (window as any).__store.dispatch(action),
+         * }));
+         */
+        onSite<T = void>(route: TangiTweak.PageRoute, handler: (ctx: TangiTweak.SiteCtx) => TangiTweak.Awaitable<T>): TangiTweak.Remote<T>;
+
+        /**
+         * Run a handler in the page — the resilient way to change titles, text
+         * and DOM content. Works no matter how the response arrived
+         * (service-worker-served HTML, cached pages, hydration). Strategies
+         * don't apply.
+         *
+         * Runs once per document load in every frame whose URL matches the
+         * route — by default at `DOMContentLoaded` (`when: "document_end"`), in
+         * an isolated world that shares the page's DOM but not its JavaScript.
+         * It's trusted: it has the script's stores and calls its handles —
+         * read the site's globals through a {@link onSite} handle, draw on the
+         * overlay through an {@link onOverlay} one (top frame). On Chrome
+         * (MV3) it runs through user scripts, which must be turned on (the
+         * Editor shows how).
+         *
+         * The handler may return an object of functions, for the script's
+         * other `onPage` and `onOverlay` code to call ({@link TangiTweak.Remote}).
+         *
+         * @param route Frame URL pattern(s), or `{ url, exclude, when }`. See
+         * {@link TangiTweak.DocumentOptions.when} for exact timing, the MV3
+         * `document_start` race, SPA/re-render behavior and live-update re-runs.
+         * @param handler Receives the same `ctx` shape as `onRequest` (`url` is
+         * the frame's URL). May be async (not awaited).
+         *
+         * @example
+         * tweak.onPage("*://example.com/*", () => {
+         *     document.title = "🎯 " + document.title;
+         * });
+         *
+         * @example
+         * // read the site's state through an onSite handle
+         * const site = tweak.onSite("*://example.com/*", () => ({ user: () => (window as any).myApp?.user?.name }));
+         * const state = tweak.pageStore({ user: "" });
+         * tweak.onPage("*://example.com/*", async () => {
+         *     const u = await site.user();
+         *     if (typeof u === "string") state.user = u;
+         * });
+         */
+        onPage<T = void>(route: TangiTweak.PageRoute, handler: (ctx: TangiTweak.PageCtx) => TangiTweak.Awaitable<T>): TangiTweak.Remote<T>;
+
+        /**
+         * Draw this script's **overlay**: a transparent frame over the page
+         * (top frame only) with its own `window` and `document`, which the
+         * site can't see or reach. What it draws is visible and clickable;
+         * everywhere else, clicks go through to the page. It has the script's
+         * stores, `fetch`es as the page, calls the script's `onSite` and
+         * `onPage` handles, and the Editor's Preview shows it. All of the
+         * script's matching overlay handlers run in it, sharing top-level
+         * variables.
+         *
+         * Warning: the frame is a TangiTweak extension page (that's what lets
+         * the script run on sites whose CSP blocks scripts and `eval`, and
+         * keeps the site out). Chrome won't let another extension attach its
+         * debugger to a tab with such a frame, so tools like Playwriter remove
+         * it: the GUI and its shortcuts stop, with a Log warning. A same-origin
+         * `about:blank` frame wouldn't be removed, but it's under the page's
+         * CSP and open to the page, so TangiTweak doesn't offer one. For a GUI
+         * that must survive those tools, use `tweak.onPage` with `ctx.mount` and
+         * `ctx.shortcut` instead.
+         *
+         * @param route Page URL pattern(s), or `{ url, exclude, when }`.
+         * @param handler Draws the GUI. May return functions for this script's
+         * onPage code to call.
+         *
+         * @example
+         * tweak.onOverlay("*://example.com/*", () => {
+         *     const b = document.body.appendChild(document.createElement("button"));
+         *     b.textContent = "Hi";
+         *     b.style.cssText = "position:fixed;right:16px;bottom:16px";
+         * });
+         */
+        onOverlay<T = void>(route: TangiTweak.PageRoute, handler: (ctx: TangiTweak.OverlayCtx) => TangiTweak.Awaitable<T>): TangiTweak.Remote<T>;
+
+        /**
+         * Declare adjustable parameters, editable from the popup's ⚙ dialog,
+         * the Editor and settings.json without touching the script. Returns
+         * the current values (stored values over your defaults), typed from
+         * your defs. Routes may be built from them — a change re-runs the
+         * script. Libraries may declare params too (listed in the popup; one
+         * that registers handlers only for some value becomes a script then).
+         * Definitions may come from an import (`{ env: envParam }`, `{ ...defs }`).
+         *
+         * The values can be changed, like a valtio proxy: assign one
+         * (`cfg.enabled = false`) or change a list in place
+         * (`cfg.hosts.push("a.com")`) from a handler — onPage, onOverlay or
+         * network code, not onSite code and not the top level. The value is
+         * checked against its type (a wrong one throws), seen right away, and
+         * saved like a ⚙ change: logged, written to settings.json, and the
+         * script hot-reloads with it. A param with `parse` can't be assigned.
+         *
+         * @param defs Parameter name → definition (`type`, `default`, optional
+         *   `description` and `parse`; see {@link TangiTweak.ParamDef}), or a
+         *   nested section object ({@link TangiTweak.ParamGroup}) grouping
+         *   related parameters in the popup and settings.json. With `parse`, the
+         *   param's value is the parser's result (raw value in, e.g. a `URL` out)
+         *   while the stored/edited value stays raw.
+         * @returns The current values, typed from `defs`.
+         *
+         * @example
+         * const cfg = tweak.params({
+         *     enabled: { type: "boolean", default: true, description: "Return errors" },
+         *     network: {
+         *         status: { type: "enum", choices: ["500", "503"], default: "500" },
+         *         hosts: { type: "stringList", default: ["staging.example.com"] },
+         *     },
+         * });
+         *
+         * tweak.onRequest({ url: cfg.network.hosts.map((h) => `*://${h}/api/*`), strategy: "helper" }, () => {
+         *     if (cfg.enabled) return { replaceResponse: { status: Number(cfg.network.status), body: { error: "forced" } } };
+         * });
+         *
+         * @example
+         * // a page button turns the mock off and on (saved, the script re-runs)
+         * tweak.onOverlay("*://app.example.com/*", (ctx) => {
+         *     const btn = ctx.once("btn", () => document.body.appendChild(document.createElement("button")));
+         *     btn.textContent = cfg.enabled ? "Mock: on" : "Mock: off";
+         *     btn.onclick = () => (cfg.enabled = !cfg.enabled);
+         * });
+         *
+         * @example
+         * // parse: the script gets a URL (cfg.origin: URL), the ⚙ dialog edits the string
+         * const cfg = tweak.params({
+         *     origin: { type: "string", default: "https://app.example.com", parse: (s) => new URL(s) },
+         * });
+         * tweak.onResponseHeaders({ url: "*://api.example.com/*", strategy: "helper" }, () => ({
+         *     headers: { set: { "access-control-allow-origin": cfg.origin.origin } },
+         * }));
+         */
+        params<const T extends TangiTweak.ParamGroup>(defs: T): TangiTweak.ParamsOf<T>;
+
+        /**
+         * Per-script key/value storage (async, persistent).
+         *
+         * @example
+         * tweak.onRequest({ url: "*://example.com/*", strategy: "helper" }, async () => {
+         *     const hits = ((await tweak.storage.get("hits")) ?? 0) + 1;
+         *     await tweak.storage.set("hits", hits);
+         * });
+         */
+        storage: TangiTweak.Storage;
+
+        /**
+         * Reactive [valtio](https://valtio.dev) store shared across the entire browser.
+         *
+         * - **Lifetime:** One copy across all tabs and pages. Survives reloads,
+         *   navigations, closing tabs, script saves, and — by default (`persist: true`
+         *   or `persist: ["field"]`) — browser restarts (saved in the tweak's `.tweak/stores/<id>.json`).
+         *   With `{ persist: false }`, resets when the browser quits.
+         * - **Handlers:** All network handlers (`rules`, `page`, `debugger`,
+         *   `extension`, `helper` — sync and after `await`), `tweak.onPage`,
+         *   `tweak.onOverlay`, and top-level/timer code. **Throws in `tweak.onSite`**
+         *   (untrusted site world — use {@link siteStore}).
+         *
+         * Call at top level; values must be JSON (≤ 1 MB).
+         *
+         * @param id The store's ID, unique in the tweak: lowercase letters,
+         *   digits, `-`, `_` and `.` (not first).
+         *
+         * @example
+         * const state = tweak.globalStore("state", { mocking: true, hits: 0 });
+         * tweak.onRequest({ url: "*://api.example.com/*", strategy: "helper" }, () => {
+         *     state.hits++;
+         *     if (state.mocking) return { replaceResponse: { body: { mocked: true } } };
+         * });
+         */
+        globalStore<T extends object>(id: string, initial: T, opts?: TangiTweak.StoreOptions<T>): T;
+
+        /**
+         * Reactive [valtio](https://valtio.dev) store scoped to one browser tab.
+         *
+         * - **Lifetime:** One copy per browser tab (`tabId`; subframes share their
+         *   top tab's copy). **Survives page reloads, cross-page navigations, and
+         *   script saves** in that tab; dropped when the tab closes or the browser
+         *   quits (never persisted to a store file).
+         * - **Handlers:** All network handlers (`rules` included — builds per-tab
+         *   `tabIds` / `excludedTabIds` session rules on change; on `page`,
+         *   `debugger`, `extension`, and `helper`, **read/write synchronously before
+         *   the first `await`**), `tweak.onPage`, and `tweak.onOverlay`. **Throws in
+         *   `tweak.onSite`** and when read at top level or in background timers.
+         *
+         * @example
+         * const tab = tweak.tabStore({ staging: false });
+         * tweak.onRequest({ url: "https://api.example.com/*", strategy: "rules" }, (ctx) =>
+         *     tab.staging ? { redirect: `https://staging-api.example.com/${ctx.groups["0"]}` } : undefined,
+         * );
+         * tweak.onOverlay("https://example.com/*", () => {
+         *     // toggle tab.staging, then refresh: this tab's requests redirect from the start
+         * });
+         */
+        tabStore<T extends object>(initial: T): T;
+
+        /**
+         * Reactive [valtio](https://valtio.dev) store scoped to a single page document load.
+         *
+         * - **Lifetime:** One copy per top-frame document (subframes share their top
+         *   page's copy). Survives SPA route changes and script saves; **resets to
+         *   `initial` on reload or cross-document navigation**, and drops when the
+         *   page unloads or the tab closes (never persisted to a store file).
+         * - **Handlers:** Network handlers on `page`, `debugger`, `extension`, and
+         *   `helper` (**synchronously before the first `await`**; pageless requests
+         *   get a throwaway copy of `initial`), `tweak.onPage`, and `tweak.onOverlay`.
+         *   **Throws in `strategy: "rules"`** (use {@link tabStore} for per-tab
+         *   rules), **`tweak.onSite`**, and top-level/timer code.
+         *
+         * @example
+         * const page = tweak.pageStore({ staging: false });
+         * tweak.onRequest({ url: "https://api.example.com/*", strategy: "helper" }, (ctx) => {
+         *     if (page.staging) return { redirect: ctx.url.replace("api.", "staging-api.") };
+         * });
+         * tweak.onOverlay("https://example.com/*", () => {
+         *     // a checkbox bound to page.staging (useSnapshot(page) from "valtio")
+         * });
+         */
+        pageStore<T extends object>(initial: T): T;
+
+        /**
+         * Reactive [valtio](https://valtio.dev) store living in the site's own JavaScript world.
+         *
+         * - **Lifetime:** One copy per page JS world. Survives SPA route changes and
+         *   hot script saves; **resets to `initial` on reload or navigation**, and
+         *   disappears when the document unloads (never persisted).
+         * - **Handlers:** `tweak.onSite` (direct synchronous access), `tweak.onPage` (live
+         *   mirror), and `tweak.onOverlay` (live mirror of the top frame's copy).
+         *   **Throws in all network handlers** (`onRequest`, `replaceResponse`,
+         *   `onResponseHeaders`, `onResponseBody` on every strategy) and inside
+         *   imported libraries.
+         * - **Trust:** Untrusted page data — the site's own scripts can read, mutate,
+         *   or forge its values. Keep private/trusted state in {@link globalStore},
+         *   {@link tabStore}, or {@link pageStore}.
+         *
+         * @example
+         * const flags = tweak.siteStore({ loggedIn: false, mock: false });
+         * tweak.onSite("https://example.com/*", () => {
+         *     flags.loggedIn = !!document.cookie.match(/session=/);
+         *     if (flags.mock) (window as any).__MOCK__ = true;
+         * });
+         * tweak.onOverlay("https://example.com/*", () => {
+         *     // a checkbox bound to flags.mock (useSnapshot(flags) from "valtio")
+         * });
+         */
+        siteStore<T extends object>(initial: T): T;
+
+        /**
+         * `fetch` for scripts. By default it runs in the background with the
+         * extension's host permissions (no CORS) and the browser's cookies.
+         * `bypass: true` keeps every script's handlers — this one's too — off
+         * the request, e.g. to get the real response a mock replaces.
+         *
+         * @example
+         * const real = await (await tweak.fetch("https://api.example.com/user", { bypass: true })).json();
+         */
+        fetch(input: string | URL | Request, init?: TangiTweak.FetchInit): Promise<Response>;
+
+        /**
+         * Log to the Editor's Log view for the current tab.
+         *
+         * @example
+         * tweak.log("request to", ctx.url, { method: ctx.method });
+         */
+        log(...args: unknown[]): void;
+
+        /**
+         * `true` in Chromium-based browsers (Chrome, Edge, Brave, Vivaldi, Opera…).
+         * Always the opposite of {@link isFirefox}.
+         *
+         * @example
+         * tweak.onResponseBody({ url: "*://example.com/app.js", strategy: tweak.isFirefox ? "extension" : "helper" }, (ctx, body) => body.replace("DEBUG=false", "DEBUG=true"));
+         */
+        readonly isChrome: boolean;
+
+        /** `true` in Firefox. Always the opposite of {@link isChrome}. */
+        readonly isFirefox: boolean;
+
+        /**
+         * `true` in the Manifest V2 build (`dist/`: Firefox, and Chromium browsers
+         * that still load MV2 extensions). Always the opposite of {@link isMV3}.
+         */
+        readonly isMV2: boolean;
+
+        /**
+         * `true` in the Manifest V3 build (`dist-mv3/`: current Chrome / Edge),
+         * where the `extension` strategy isn't available.
+         *
+         * @example
+         * tweak.onRequest({ url: "*://api.example.com/*", strategy: tweak.isMV3 ? "debugger" : "extension" }, fn);
+         */
+        readonly isMV3: boolean;
+
+        /**
+         * `true` on macOS. At most one of `isMac`, {@link isWindows} and
+         * {@link isLinux} is `true`; on Android and ChromeOS none is.
+         *
+         * @example
+         * ctx.shortcut(tweak.isMac ? "Meta+Shift+P" : "Ctrl+Shift+P", openPalette);
+         */
+        readonly isMac: boolean;
+
+        /** `true` on Windows. See {@link isMac}. */
+        readonly isWindows: boolean;
+
+        /** `true` on desktop Linux (not Android or ChromeOS). See {@link isMac}. */
+        readonly isLinux: boolean;
+    }
+}
+
 /**
- * The global script API.
- *
- * A script is a file that registers handlers at top level. Each handler
- * takes its own **route** first — a URL pattern, a list, or a route object
- * (`url`, `exclude`, `methods`, `resourceTypes`, `strategy`) — then the handler:
- *
- * ```ts
- * tt.onRequest({ url: "*://api.example.com/*", strategy: "helper" }, (ctx) => ({ headers: { set: { "x-debug": "1" } } }));
- * ```
- *
- * A file that registers **no** handlers is a *library*: other scripts
- * import it, and it never runs on its own.
- *
- * **Stacking** — when several handlers match one request they run in list
- * order (scripts top to bottom in the Editor, then registration order):
- * - `onRequest`: the first *final* result (`replaceResponse`/`redirect`/
- *   `block`) wins and stops the chain; headers-only or `void` results
- *   don't stop it.
- * - `onResponseHeaders`: **all** matching handlers run; `set` is applied in
- *   order (later overwrites), `remove` accumulates.
- * - `onResponseBody`: transforms **compose** — each output is the next input.
- * - `replaceResponse`: the first handler returning a body wins.
- *
- * Handlers on different strategies run independently, each on its own
- * strategy (see {@link TangiTweak.Strategy}).
- *
- * **Async** — every handler may return a Promise. On Chromium's
- * `"extension"` strategy `onRequest`/`onResponseHeaders` must be
- * synchronous (an async result is ignored with a warning); every other
- * strategy awaits it.
+ * The TangiTweak API. Each file that imports it gets its own `tweak`;
+ * handlers it registers in a file are known by their order there ("the
+ * 2nd `onPage`"), and its tab/page/site stores by their order among the
+ * file's `tabStore` / `pageStore` / `siteStore` calls.
  */
-declare const tt: {
-    /**
-     * Intercept a request before it is sent. Return **one** of
-     * `{ replaceResponse }`, `{ redirect }`, `{ block }` or `{ headers }`
-     * (a combination is a type error; at runtime only the first, in that
-     * order, applies and a warning is logged).
-     *
-     * **Final** results — the first one wins and stops the chain:
-     * - `replaceResponse` — synthesize the response; the network is never contacted.
-     *   On Chromium's `"extension"` strategy it is served as a data-URL
-     *   redirect, so only status 200 is possible there.
-     * - `redirect` — continue at another URL.
-     * - `block` — fail the request.
-     *
-     * **Not final:** `{ headers }` — applied, and later handlers still run.
-     *
-     * @param route Where it applies — see {@link TangiTweak.RouteOptions}.
-     * @param handler Called once per matching request with its context.
-     *
-     * @example
-     * // answer an endpoint without the network
-     * tt.onRequest({ url: "https://api.example.com/users/:id", strategy: "helper" }, (ctx) => ({
-     *     replaceResponse: { body: { id: Number(ctx.groups.id), name: "Mock" } },
-     * }));
-     *
-     * @example
-     * // add a header to every POST, on the debugger
-     * tt.onRequest({ url: "*://example.com/*", methods: ["POST"], strategy: "debugger" }, () => ({
-     *     headers: { set: { "x-debug": "1" } },
-     * }));
-     */
-    onRequest(route: TangiTweak.RouteOptions, handler: (ctx: TangiTweak.RequestCtx) => TangiTweak.Awaitable<TangiTweak.RequestResult | void>): void;
-
-    /**
-     * Inspect / modify response headers. **All** matching handlers run.
-     * Not available on the `"page"` strategy (the page can't change headers
-     * before the browser enforces them).
-     *
-     * @param route Where it applies — see {@link TangiTweak.RouteOptions}.
-     * @param handler Called when the response headers arrive.
-     *
-     * @example
-     * tt.onResponseHeaders({ url: "*://api.example.com/*", strategy: "helper" }, () => ({
-     *     headers: {
-     *         set: { "access-control-allow-origin": "*" },
-     *         remove: ["content-security-policy"],
-     *     },
-     * }));
-     */
-    onResponseHeaders(
-        route: TangiTweak.RouteOptions,
-        handler: (ctx: TangiTweak.ResponseHeaderCtx) => TangiTweak.Awaitable<TangiTweak.ResponseHeaderResult | void>
-    ): void;
-
-    /**
-     * Replace the response body completely. Return a string, `Uint8Array`,
-     * an object (sent as JSON), or `{ file: "<path or data url>" }`; return
-     * nothing to leave the response alone.
-     *
-     * @param route Where it applies — see {@link TangiTweak.RouteOptions}.
-     * @param handler Called per matching response; its result becomes the body.
-     *
-     * @example
-     * tt.replaceResponse({ url: "*://api.example.com/flags", strategy: "helper" }, () => ({ beta: true }));
-     *
-     * @example
-     * // serve a fixture fetched elsewhere
-     * tt.replaceResponse({ url: "*://api.example.com/user", strategy: "helper" }, async () => {
-     *     const res = await fetch("https://fixtures.local/user.json");
-     *     return await res.text();
-     * });
-     */
-    replaceResponse(
-        route: TangiTweak.RouteOptions,
-        handler: (ctx: TangiTweak.ReplaceCtx) => TangiTweak.Awaitable<string | Uint8Array | object | { file: string } | null | void>
-    ): void;
-
-    /**
-     * Transform the response body: receives the original body and returns
-     * the new one. Matching transforms compose in order.
-     *
-     * The handler gets text bodies (a string) only, unless its route sets
-     * `binary: true` — binary bodies (images, video, …) only, as a
-     * `Uint8Array` — or `binary: "both"`. `binary: false` keeps text only
-     * and silences the "body is binary" warning. Which Content-Types are
-     * text: `settings.textTypes`.
-     *
-     * Needs a strategy that reads bodies: `"helper"`, `"debugger"`, `"page"`
-     * (page fetch/XHR only) or `"extension"` on Firefox. Chromium's
-     * `"extension"` strategy can't read bodies — the handler doesn't run there and
-     * the Log view says so.
-     *
-     * @param route Where it applies — see {@link TangiTweak.RouteOptions}.
-     * @param transform Receives the context and the original body; returns
-     * the new body, or nothing (`undefined` / `null`) to leave it as it is.
-     * Any body returned counts as a change — even the same one: it's
-     * re-encoded and served in place of the original.
-     *
-     * @example
-     * tt.onResponseBody({ url: "*://example.com/app/*.js", resourceTypes: ["script"], strategy: "helper" }, (ctx, body) => {
-     *     return body.replace("DEBUG=false", "DEBUG=true");
-     * });
-     * @example
-     * // binary: true — swap an image
-     * tt.onResponseBody({ url: "*://example.com/logo.png", binary: true, strategy: "helper" }, async (ctx, body) => {
-     *     const res = await fetch("https://example.org/other.png");
-     *     return new Uint8Array(await res.arrayBuffer());
-     * });
-     */
-    onResponseBody(
-        route: TangiTweak.BodyRouteOptions & { binary?: false },
-        transform: (ctx: TangiTweak.BodyCtx, body: string) => TangiTweak.Awaitable<string | Uint8Array | void>
-    ): void;
-    onResponseBody(
-        route: TangiTweak.BodyRouteOptions & { binary: true },
-        transform: (ctx: TangiTweak.BodyCtx, body: Uint8Array) => TangiTweak.Awaitable<string | Uint8Array | void>
-    ): void;
-    onResponseBody(
-        route: TangiTweak.BodyRouteOptions,
-        transform: (ctx: TangiTweak.BodyCtx, body: string | Uint8Array) => TangiTweak.Awaitable<string | Uint8Array | void>
-    ): void;
-
-    /**
-     * Run a handler in the **site's own JavaScript world**: it reads the
-     * site's globals (`window.myApp`, its Redux store) directly. The site
-     * can see and tamper with it, so it's untrusted: no stores, and it
-     * can't call handles. Return functions for the script's `onPage` and
-     * `onOverlay` code to call ({@link TangiTweak.Remote}).
-     *
-     * Runs once per document load in every frame whose URL matches the
-     * route, by default before the site's own scripts (`when:
-     * "document_start"`; `document.body` is usually `null` then). See
-     * {@link TangiTweak.DocumentOptions.when} for timing and
-     * {@link TangiTweak.PageRoute} for the three places. On Chrome (MV3) it
-     * runs through user scripts, which must be turned on (the Editor shows
-     * how).
-     *
-     * @example
-     * const site = tt.onSite("*://example.com/*", () => ({
-     *     user: () => (window as any).myApp?.user?.name as string | undefined,
-     *     dispatch: (action: { type: string }) => (window as any).__store.dispatch(action),
-     * }));
-     */
-    onSite<T = void>(route: TangiTweak.PageRoute, handler: (ctx: TangiTweak.SiteCtx) => TangiTweak.Awaitable<T>): TangiTweak.Remote<T>;
-
-    /**
-     * Run a handler in the page — the resilient way to change titles, text
-     * and DOM content. Works no matter how the response arrived
-     * (service-worker-served HTML, cached pages, hydration). Strategies
-     * don't apply.
-     *
-     * Runs once per document load in every frame whose URL matches the
-     * route — by default at `DOMContentLoaded` (`when: "document_end"`), in
-     * an isolated world that shares the page's DOM but not its JavaScript.
-     * It's trusted: it has the script's stores and calls its handles —
-     * read the site's globals through a {@link onSite} handle, draw on the
-     * overlay through an {@link onOverlay} one (top frame). On Chrome
-     * (MV3) it runs through user scripts, which must be turned on (the
-     * Editor shows how).
-     *
-     * The handler may return an object of functions, for the script's
-     * other `onPage` and `onOverlay` code to call ({@link TangiTweak.Remote}).
-     *
-     * @param route Frame URL pattern(s), or `{ url, exclude, when }`. See
-     * {@link TangiTweak.DocumentOptions.when} for exact timing, the MV3
-     * `document_start` race, SPA/re-render behavior and live-update re-runs.
-     * @param handler Receives the same `ctx` shape as `onRequest` (`url` is
-     * the frame's URL). May be async (not awaited).
-     *
-     * @example
-     * tt.onPage("*://example.com/*", () => {
-     *     document.title = "🎯 " + document.title;
-     * });
-     *
-     * @example
-     * // read the site's state through an onSite handle
-     * const site = tt.onSite("*://example.com/*", () => ({ user: () => (window as any).myApp?.user?.name }));
-     * const state = tt.pageStore("state", { user: "" });
-     * tt.onPage("*://example.com/*", async () => {
-     *     const u = await site.user();
-     *     if (typeof u === "string") state.user = u;
-     * });
-     */
-    onPage<T = void>(route: TangiTweak.PageRoute, handler: (ctx: TangiTweak.PageCtx) => TangiTweak.Awaitable<T>): TangiTweak.Remote<T>;
-
-    /**
-     * Draw this script's **overlay**: a transparent frame over the page
-     * (top frame only) with its own `window` and `document`, which the
-     * site can't see or reach. What it draws is visible and clickable;
-     * everywhere else, clicks go through to the page. It has the script's
-     * stores, `fetch`es as the page, calls the script's `onSite` and
-     * `onPage` handles, and the Editor's Preview shows it. All of the
-     * script's matching overlay handlers run in it, sharing top-level
-     * variables.
-     *
-     * Warning: the frame is a TangiTweak extension page (that's what lets
-     * the script run on sites whose CSP blocks scripts and `eval`, and
-     * keeps the site out). Chrome won't let another extension attach its
-     * debugger to a tab with such a frame, so tools like Playwriter remove
-     * it: the GUI and its shortcuts stop, with a Log warning. A same-origin
-     * `about:blank` frame wouldn't be removed, but it's under the page's
-     * CSP and open to the page, so TangiTweak doesn't offer one. For a GUI
-     * that must survive those tools, use `tt.onPage` with `ctx.mount` and
-     * `ctx.shortcut` instead.
-     *
-     * @param route Page URL pattern(s), or `{ url, exclude, when }`.
-     * @param handler Draws the GUI. May return functions for this script's
-     * onPage code to call.
-     *
-     * @example
-     * tt.onOverlay("*://example.com/*", () => {
-     *     const b = document.body.appendChild(document.createElement("button"));
-     *     b.textContent = "Hi";
-     *     b.style.cssText = "position:fixed;right:16px;bottom:16px";
-     * });
-     */
-    onOverlay<T = void>(route: TangiTweak.PageRoute, handler: (ctx: TangiTweak.OverlayCtx) => TangiTweak.Awaitable<T>): TangiTweak.Remote<T>;
-
-    /**
-     * The script's metadata. `description` is shown as a tooltip in the
-     * Editor and the popup, and in diagnostics; the rest describes it as a
-     * package — shown when someone installs it from a link, and `version`
-     * orders its updates. Call it once.
-     *
-     * @example
-     * tt.metadata({
-     *     name: "GitHub dark mode",
-     *     version: "1.2.0",
-     *     description: "Darker GitHub, every page",
-     *     connect: ["api.github.com"],
-     * });
-     */
-    metadata(metadata: TangiTweak.Metadata): void;
-
-    /**
-     * Declare adjustable parameters, editable from the popup's ⚙ dialog,
-     * the Editor and settings.json without touching the script. Returns
-     * the current values (stored values over your defaults), typed from
-     * your defs. Routes may be built from them — a change re-runs the
-     * script. Libraries may declare params too (listed in the popup; one
-     * that registers handlers only for some value becomes a script then).
-     * Definitions may come from an import (`{ env: envParam }`, `{ ...defs }`).
-     *
-     * The values can be changed, like a valtio proxy: assign one
-     * (`cfg.enabled = false`) or change a list in place
-     * (`cfg.hosts.push("a.com")`) from a handler — onPage, onOverlay or
-     * network code, not onSite code and not the top level. The value is
-     * checked against its type (a wrong one throws), seen right away, and
-     * saved like a ⚙ change: logged, written to settings.json, and the
-     * script hot-reloads with it. A param with `parse` can't be assigned.
-     *
-     * @param defs Parameter name → definition (`type`, `default`, optional
-     *   `description` and `parse`; see {@link TangiTweak.ParamDef}), or a
-     *   nested section object ({@link TangiTweak.ParamGroup}) grouping
-     *   related parameters in the popup and settings.json. With `parse`, the
-     *   param's value is the parser's result (raw value in, e.g. a `URL` out)
-     *   while the stored/edited value stays raw.
-     * @returns The current values, typed from `defs`.
-     *
-     * @example
-     * const cfg = tt.params({
-     *     enabled: { type: "boolean", default: true, description: "Return errors" },
-     *     network: {
-     *         status: { type: "enum", choices: ["500", "503"], default: "500" },
-     *         hosts: { type: "stringList", default: ["staging.example.com"] },
-     *     },
-     * });
-     *
-     * tt.onRequest({ url: cfg.network.hosts.map((h) => `*://${h}/api/*`), strategy: "helper" }, () => {
-     *     if (cfg.enabled) return { replaceResponse: { status: Number(cfg.network.status), body: { error: "forced" } } };
-     * });
-     *
-     * @example
-     * // a page button turns the mock off and on (saved, the script re-runs)
-     * tt.onOverlay("*://app.example.com/*", (ctx) => {
-     *     const btn = ctx.once("btn", () => document.body.appendChild(document.createElement("button")));
-     *     btn.textContent = cfg.enabled ? "Mock: on" : "Mock: off";
-     *     btn.onclick = () => (cfg.enabled = !cfg.enabled);
-     * });
-     *
-     * @example
-     * // parse: the script gets a URL (cfg.origin: URL), the ⚙ dialog edits the string
-     * const cfg = tt.params({
-     *     origin: { type: "string", default: "https://app.example.com", parse: (s) => new URL(s) },
-     * });
-     * tt.onResponseHeaders({ url: "*://api.example.com/*", strategy: "helper" }, () => ({
-     *     headers: { set: { "access-control-allow-origin": cfg.origin.origin } },
-     * }));
-     */
-    params<const T extends TangiTweak.ParamGroup>(defs: T): TangiTweak.ParamsOf<T>;
-
-    /**
-     * Declare a single parameter and get its current value (same store as
-     * {@link tt.params}).
-     *
-     * @example
-     * const host = tt.defineParam("host", { type: "string", default: "api.example.com" });
-     * tt.onRequest({ url: `*://${host}/*`, strategy: "helper" }, () => ({ headers: { set: { "x-debug": "1" } } }));
-     *
-     * @example
-     * // parse: hosts is a Set<string>; the stored value stays a list
-     * const hosts = tt.defineParam("hosts", { type: "stringList", parse: (l) => new Set(l) });
-     */
-    defineParam<const D extends TangiTweak.ParamDef>(name: string, def: D): TangiTweak.ParamValue<D>;
-
-    /**
-     * Per-script key/value storage (async, persistent).
-     *
-     * @example
-     * tt.onRequest({ url: "*://example.com/*", strategy: "helper" }, async () => {
-     *     const hits = ((await tt.storage.get("hits")) ?? 0) + 1;
-     *     await tt.storage.set("hits", hits);
-     * });
-     */
-    storage: TangiTweak.Storage;
-
-    /**
-     * Reactive [valtio](https://valtio.dev) store shared across the entire browser.
-     *
-     * - **Lifetime:** One copy across all tabs and pages. Survives reloads,
-     *   navigations, closing tabs, script saves, and — by default (`persist: true`
-     *   or `persist: ["field"]`) — browser restarts (saved in `stores.json`).
-     *   With `{ persist: false }`, resets when the browser quits.
-     * - **Handlers:** All network handlers (`rules`, `page`, `debugger`,
-     *   `extension`, `helper` — sync and after `await`), `tt.onPage`,
-     *   `tt.onOverlay`, and top-level/timer code. **Throws in `tt.onSite`**
-     *   (untrusted site world — use {@link siteStore}).
-     *
-     * Call at top level; `name` shares a per-script namespace with {@link tabStore}
-     * and {@link pageStore}, and values must be JSON (≤ 1 MB).
-     *
-     * @example
-     * const state = tt.globalStore("state", { mocking: true, hits: 0 });
-     * tt.onRequest({ url: "*://api.example.com/*", strategy: "helper" }, () => {
-     *     state.hits++;
-     *     if (state.mocking) return { replaceResponse: { body: { mocked: true } } };
-     * });
-     */
-    globalStore<T extends object>(name: string, initial: T, opts?: TangiTweak.StoreOptions<T>): T;
-
-    /**
-     * Reactive [valtio](https://valtio.dev) store scoped to one browser tab.
-     *
-     * - **Lifetime:** One copy per browser tab (`tabId`; subframes share their
-     *   top tab's copy). **Survives page reloads, cross-page navigations, and
-     *   script saves** in that tab; dropped when the tab closes or the browser
-     *   quits (never persisted to `stores.json`).
-     * - **Handlers:** All network handlers (`rules` included — builds per-tab
-     *   `tabIds` / `excludedTabIds` session rules on change; on `page`,
-     *   `debugger`, `extension`, and `helper`, **read/write synchronously before
-     *   the first `await`**), `tt.onPage`, and `tt.onOverlay`. **Throws in
-     *   `tt.onSite`** and when read at top level or in background timers.
-     *
-     * @example
-     * const tab = tt.tabStore("env", { staging: false });
-     * tt.onRequest({ url: "https://api.example.com/*", strategy: "rules" }, (ctx) =>
-     *     tab.staging ? { redirect: `https://staging-api.example.com/${ctx.groups["0"]}` } : undefined,
-     * );
-     * tt.onOverlay("https://example.com/*", () => {
-     *     // toggle tab.staging, then refresh: this tab's requests redirect from the start
-     * });
-     */
-    tabStore<T extends object>(name: string, initial: T): T;
-
-    /**
-     * Reactive [valtio](https://valtio.dev) store scoped to a single page document load.
-     *
-     * - **Lifetime:** One copy per top-frame document (subframes share their top
-     *   page's copy). Survives SPA route changes and script saves; **resets to
-     *   `initial` on reload or cross-document navigation**, and drops when the
-     *   page unloads or the tab closes (never persisted to `stores.json`).
-     * - **Handlers:** Network handlers on `page`, `debugger`, `extension`, and
-     *   `helper` (**synchronously before the first `await`**; pageless requests
-     *   get a throwaway copy of `initial`), `tt.onPage`, and `tt.onOverlay`.
-     *   **Throws in `strategy: "rules"`** (use {@link tabStore} for per-tab
-     *   rules), **`tt.onSite`**, and top-level/timer code.
-     *
-     * @example
-     * const page = tt.pageStore("page", { staging: false });
-     * tt.onRequest({ url: "https://api.example.com/*", strategy: "helper" }, (ctx) => {
-     *     if (page.staging) return { redirect: ctx.url.replace("api.", "staging-api.") };
-     * });
-     * tt.onOverlay("https://example.com/*", () => {
-     *     // a checkbox bound to page.staging (useSnapshot(page) from "valtio")
-     * });
-     */
-    pageStore<T extends object>(name: string, initial: T): T;
-
-    /**
-     * Reactive [valtio](https://valtio.dev) store living in the site's own JavaScript world.
-     *
-     * - **Lifetime:** One copy per page JS world. Survives SPA route changes and
-     *   hot script saves; **resets to `initial` on reload or navigation**, and
-     *   disappears when the document unloads (never persisted).
-     * - **Handlers:** `tt.onSite` (direct synchronous access), `tt.onPage` (live
-     *   mirror), and `tt.onOverlay` (live mirror of the top frame's copy).
-     *   **Throws in all network handlers** (`onRequest`, `replaceResponse`,
-     *   `onResponseHeaders`, `onResponseBody` on every strategy) and inside
-     *   imported libraries.
-     * - **Trust:** Untrusted page data — the site's own scripts can read, mutate,
-     *   or forge its values. Keep private/trusted state in {@link globalStore},
-     *   {@link tabStore}, or {@link pageStore}.
-     *
-     * @example
-     * const flags = tt.siteStore("flags", { loggedIn: false, mock: false });
-     * tt.onSite("https://example.com/*", () => {
-     *     flags.loggedIn = !!document.cookie.match(/session=/);
-     *     if (flags.mock) (window as any).__MOCK__ = true;
-     * });
-     * tt.onOverlay("https://example.com/*", () => {
-     *     // a checkbox bound to flags.mock (useSnapshot(flags) from "valtio")
-     * });
-     */
-    siteStore<T extends object>(name: string, initial: T): T;
-
-    /**
-     * `fetch` for scripts. By default it runs in the background with the
-     * extension's host permissions (no CORS) and the browser's cookies.
-     * `bypass: true` keeps every script's handlers — this one's too — off
-     * the request, e.g. to get the real response a mock replaces.
-     *
-     * @example
-     * const real = await (await tt.fetch("https://api.example.com/user", { bypass: true })).json();
-     */
-    fetch(input: string | URL | Request, init?: TangiTweak.FetchInit): Promise<Response>;
-
-    /**
-     * Log to the Editor's Log view for the current tab.
-     *
-     * @example
-     * tt.log("request to", ctx.url, { method: ctx.method });
-     */
-    log(...args: unknown[]): void;
-
-    /**
-     * `true` in Chromium-based browsers (Chrome, Edge, Brave, Vivaldi, Opera…).
-     * Always the opposite of {@link isFirefox}.
-     *
-     * @example
-     * tt.onResponseBody({ url: "*://example.com/app.js", strategy: tt.isFirefox ? "extension" : "helper" }, (ctx, body) => body.replace("DEBUG=false", "DEBUG=true"));
-     */
-    readonly isChrome: boolean;
-
-    /** `true` in Firefox. Always the opposite of {@link isChrome}. */
-    readonly isFirefox: boolean;
-
-    /**
-     * `true` in the Manifest V2 build (`dist/`: Firefox, and Chromium browsers
-     * that still load MV2 extensions). Always the opposite of {@link isMV3}.
-     */
-    readonly isMV2: boolean;
-
-    /**
-     * `true` in the Manifest V3 build (`dist-mv3/`: current Chrome / Edge),
-     * where the `extension` strategy isn't available.
-     *
-     * @example
-     * tt.onRequest({ url: "*://api.example.com/*", strategy: tt.isMV3 ? "debugger" : "extension" }, fn);
-     */
-    readonly isMV3: boolean;
-
-    /**
-     * `true` on macOS. At most one of `isMac`, {@link isWindows} and
-     * {@link isLinux} is `true`; on Android and ChromeOS none is.
-     *
-     * @example
-     * ctx.shortcut(tt.isMac ? "Meta+Shift+P" : "Ctrl+Shift+P", openPalette);
-     */
-    readonly isMac: boolean;
-
-    /** `true` on Windows. See {@link isMac}. */
-    readonly isWindows: boolean;
-
-    /** `true` on desktop Linux (not Android or ChromeOS). See {@link isMac}. */
-    readonly isLinux: boolean;
-};
+declare module "tangitweak" {
+    export const tweak: TangiTweak.Tweak;
+}
 
 /*
  * Newer web platform APIs that the editor's bundled TypeScript doesn't know
@@ -1592,7 +1577,7 @@ interface URLPatternResult {
 
 /**
  * Matches URLs against a pattern, e.g. `new URLPattern("https://*.example.com/users/:id")`.
- * The same syntax as handler routes (`tt.onRequest({ url: pattern, strategy }, fn)`).
+ * The same syntax as handler routes (`tweak.onRequest({ url: pattern, strategy }, fn)`).
  *
  * @see https://developer.mozilla.org/en-US/docs/Web/API/URL_Pattern_API
  */
@@ -1639,7 +1624,7 @@ declare module "*.md" {
 
 /**
  * Image data files import as their `data:image/...;base64,...` URL:
- * `import icon from "./icon.png"; tt.metadata({ icon });`
+ * `import icon from "./icon.png"; img.src = icon;`
  */
 declare module "*.png" {
     const url: string;

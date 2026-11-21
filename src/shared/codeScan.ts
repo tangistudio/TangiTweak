@@ -91,3 +91,19 @@ export function closeOf(src: string, from: number): number {
     }
     return to;
 }
+
+/**
+ * The names `code` reaches the API by, as a regex alternation: the
+ * imported `tweak` (`import { tweak } from "tangitweak"`) and any alias
+ * it's imported as (`{ tweak as t }`).
+ */
+export function apiPattern(code: string): string {
+    const names = new Set(["tweak"]);
+    if (code.includes("tangitweak"))
+        for (const m of code.matchAll(/\bimport\s*\{([^}]*)\}\s*from\s*["']tangitweak["']/g))
+            for (const part of m[1].split(",")) {
+                const alias = /^\s*tweak\s+as\s+([A-Za-z_$][\w$]*)\s*$/.exec(part)?.[1];
+                if (alias) names.add(alias);
+            }
+    return `(?:${[...names].map((n) => n.replace(/\$/g, "\\$")).join("|")})`;
+}

@@ -1,10 +1,10 @@
 /**
  * Shared E2E check (MV2 + MV3): folders and JSON data files, driven by the
- * background messages the Explorer uses. A folder `mock` holds a data file
- * `mock/rate-limits.json` and a script; a root script imports
- * `./mock/rate-limits.json` (rules strategy: a request header from the
- * JSON), the script in the folder imports `./rate-limits.json` (page
- * strategy: a replaced body from the JSON). Editing the JSON hot-applies
+ * background messages the Explorer uses. A tweak `limiter` holds a
+ * folder `mock` — itself a tweak — with a data file `mock/rate-limits.json`;
+ * `limiter`'s entry imports `./mock/rate-limits.json` (rules strategy: a
+ * request header from the JSON), `mock`'s entry imports `./rate-limits.json`
+ * (page strategy: a replaced body from the JSON). Editing the JSON hot-applies
  * both; invalid JSON is a problem of its importers. checkExplorerUi drives
  * the Explorer tree and the Code view the same way a user does.
  *
@@ -12,6 +12,7 @@
  * server.
  */
 import type http from "node:http";
+import { seedTweakPkg } from "./e2eTweak";
 
 type Check = (name: string, ok: boolean, extra?: string) => void;
 
@@ -37,27 +38,29 @@ export async function checkFoldersAndDataFiles(ctx: any, mgr: any, origin: strin
     const send = (msg: any): Promise<any> => mgr.evaluate((m: any) => new Promise((r) => chrome.runtime.sendMessage(m, (x: any) => r(x ?? null))), msg);
     const O = JSON.stringify(origin);
 
-    const made = await send({ type: "createFolder", path: "mock" });
-    check(t("createFolder"), !!made && !made.error && (await send({ type: "listFolders" })).includes("mock"), JSON.stringify(made));
-    const data = await send({ type: "saveDataFile", path: "mock/rate-limits.json", text: '{ "max": 5 }' });
-    check(t("saveDataFile in the folder"), !!data?.id && data.path === "mock/rate-limits.json", JSON.stringify(data));
+    const made = await send({ type: "createFolder", path: "limiter/mock" });
+    check(t("createFolder"), !!made && !made.error && (await send({ type: "listFolders" })).includes("limiter/mock"), JSON.stringify(made));
+    const data = await send({ type: "saveDataFile", path: "limiter/mock/rate-limits.json", text: '{ "max": 5 }' });
+    check(t("saveDataFile in the folder"), !!data?.id && data.path === "limiter/mock/rate-limits.json", JSON.stringify(data));
     const listed = await send({ type: "listDataFiles" });
     check(t("listDataFiles lists it"), listed?.some((d: any) => d.id === data?.id && d.text === '{ "max": 5 }'), JSON.stringify(listed));
 
+    await seedTweakPkg(send, "limiter");
+    await seedTweakPkg(send, "limiter/mock");
     const root = await send({
         type: "saveScript",
         id: "s_folders_root",
-        name: "rate limiter.tangitweak",
-        code: [`import limits from "./mock/rate-limits.json";`, `tt.onRequest({ url: ${O} + "/folders-echo*", strategy: "rules" }, () => ({ headers: { set: { "x-tt-limit": String(limits.max) } } }));`].join("\n"),
+        name: "limiter/index",
+        code: [`import limits from "./mock/rate-limits.json";`, `import { tweak } from "tangitweak"; tweak.onRequest({ url: ${O} + "/folders-echo*", strategy: "rules" }, () => ({ headers: { set: { "x-tt-limit": String(limits.max) } } }));`].join("\n"),
     });
-    check(t("a root script importing ./mock/rate-limits.json saves"), !!root && !root.error && root.meta?.active === true, JSON.stringify({ error: root?.error, active: root?.meta?.active }));
+    check(t("a tweak importing ./mock/rate-limits.json saves"), !!root && !root.error && root.meta?.active === true, JSON.stringify({ error: root?.error, active: root?.meta?.active }));
     const inner = await send({
         type: "saveScript",
         id: "s_folders_inner",
-        name: "mock/api mock.tangitweak",
-        code: [`import { max } from "./rate-limits.json";`, `tt.onRequest({ url: ${O} + "/folders-api", strategy: "page" }, () => ({ replaceResponse: { body: { max, from: "mock/api mock" } } }));`].join("\n"),
+        name: "limiter/mock/index",
+        code: [`import { max } from "./rate-limits.json";`, `import { tweak } from "tangitweak"; tweak.onRequest({ url: ${O} + "/folders-api", strategy: "page" }, () => ({ replaceResponse: { body: { max, from: "mock/api mock" } } }));`].join("\n"),
     });
-    check(t("a script inside the folder saves under its path"), !!inner && !inner.error && inner.meta?.name === "mock/api mock.tangitweak", JSON.stringify({ error: inner?.error, name: inner?.meta?.name }));
+    check(t("a tweak inside the folder saves under its path"), !!inner && !inner.error && inner.meta?.name === "limiter/mock/index", JSON.stringify({ error: inner?.error, name: inner?.meta?.name }));
 
     const probe = async (want: number): Promise<any> => {
         let r: any = {};
@@ -78,8 +81,8 @@ export async function checkFoldersAndDataFiles(ctx: any, mgr: any, origin: strin
         return r;
     };
     let r = await probe(5);
-    check(t("the root script's effect comes from the JSON (rules: header)"), r.header === "5", JSON.stringify(r));
-    check(t("the script inside the folder runs, with the JSON (page: replaced body)"), r.api?.max === 5 && r.api?.from === "mock/api mock", JSON.stringify(r));
+    check(t("the outer tweak's effect comes from the JSON (rules: header)"), r.header === "5", JSON.stringify(r));
+    check(t("the tweak inside the folder runs, with the JSON (page: replaced body)"), r.api?.max === 5 && r.api?.from === "mock/api mock", JSON.stringify(r));
 
     const edited = await send({ type: "saveDataFile", id: data.id, text: '{ "max": 9 }' });
     check(t("editing the data file saves"), edited?.text === '{ "max": 9 }', JSON.stringify(edited));
@@ -89,7 +92,7 @@ export async function checkFoldersAndDataFiles(ctx: any, mgr: any, origin: strin
     await send({ type: "saveDataFile", id: data.id, text: '{ "max": }' });
     const problem = await mgr
         .waitForFunction(
-            () => [...document.querySelectorAll<HTMLElement>("#problems-list .pb-item.error")].filter((l) => /\brate limiter\.tangitweak\.ts \[Ln 1\b/.test(l.title)).map((l) => l.textContent || "").find((x) => /mock\/rate-limits\.json:1:\d+ is not valid JSON/.test(x)),
+            () => [...document.querySelectorAll<HTMLElement>("#problems-list .pb-item.error")].filter((l) => /\blimiter\/index\.ts \[Ln 1\b/.test(l.title)).map((l) => l.textContent || "").find((x) => /limiter\/mock\/rate-limits\.json:1:\d+ is not valid JSON/.test(x)),
             null,
             { timeout: 10000 }
         )
@@ -106,16 +109,16 @@ export async function checkFoldersAndDataFiles(ctx: any, mgr: any, origin: strin
 
     await checkExplorerUi(ctx, mgr, check, t, data.id);
 
-    const renamed = await send({ type: "renameFolder", from: "mock", to: "fixtures" });
+    const renamed = await send({ type: "renameFolder", from: "limiter/mock", to: "limiter/fixtures" });
     const names = (await send({ type: "listScripts" })).map((s: any) => s.meta.name);
     const paths = (await send({ type: "listDataFiles" })).map((d: any) => d.path);
-    check(t("renaming the folder moves its scripts and data files"), !renamed?.error && names.includes("fixtures/api mock.tangitweak") && paths.includes("fixtures/rate-limits.json") && !paths.includes("mock/rate-limits.json"), JSON.stringify({ renamed, names, paths }));
+    check(t("renaming the folder moves its scripts and data files"), !renamed?.error && names.includes("limiter/fixtures/index") && paths.includes("limiter/fixtures/rate-limits.json") && !paths.includes("limiter/mock/rate-limits.json"), JSON.stringify({ renamed, names, paths }));
     const unresolved = (await send({ type: "listScripts" })).find((s: any) => s.id === "s_folders_root");
-    check(t("an import specifier isn't rewritten: the root importer now fails"), /no data file "mock\/rate-limits\.json"/.test(unresolved?.error || ""), String(unresolved?.error));
+    check(t("an import specifier isn't rewritten: the outer importer now fails"), /no data file "limiter\/mock\/rate-limits\.json"/.test(unresolved?.error || ""), String(unresolved?.error));
 
-    await send({ type: "deleteScript", id: "s_folders_root" });
-    const del = await send({ type: "deleteFolder", path: "fixtures" });
-    check(t("deleting the folder deletes what's inside"), del?.scripts === 1 && del?.dataFiles === 1 && !(await send({ type: "listFolders" })).includes("fixtures"), JSON.stringify(del));
+    const del = await send({ type: "deleteFolder", path: "limiter/fixtures" });
+    check(t("deleting the folder deletes what's inside"), del?.scripts === 1 && del?.dataFiles === 2 && !(await send({ type: "listFolders" })).includes("limiter/fixtures"), JSON.stringify(del));
+    await send({ type: "deleteFolder", path: "limiter" });
 }
 
 /** the explorer's rows: data-id, aria-level and shown name */
@@ -137,13 +140,13 @@ async function checkExplorerUi(ctx: any, mgr: any, check: Check, t: (s: string) 
     const row = (id: string): string => `#script-list li.script-item[data-id="${id}"]`;
     await mgr.waitForSelector(row(dataId), { timeout: 10000 }).catch(() => {});
 
-    // order: folder → its scripts → its data files, then the root's scripts
+    // order: folder → its scripts → its data files, then the parent's scripts
     let rows = await explorerRows(mgr);
     const at = (id: string): number => rows.findIndex((r) => r.id === id);
-    const [dir, inner, json, root] = ["dir:mock", "s_folders_inner", dataId, "s_folders_root"].map(at);
+    const [dir, inner, json, root] = ["dir:limiter/mock", "s_folders_inner", dataId, "s_folders_root"].map(at);
     check(
-        t("explorer: folder, then its script, then its data file, then root scripts"),
-        dir >= 0 && dir < inner && inner < json && json < root && rows[inner].level === "2" && rows[json].level === "2" && rows[root].level === "1" && rows[inner].name === "api mock.tangitweak.ts" && rows[json].name === "rate-limits.json",
+        t("explorer: folder, then its script, then its data file, then the parent's scripts"),
+        dir >= 0 && dir < inner && inner < json && json < root && rows[inner].level === "3" && rows[json].level === "3" && rows[root].level === "2" && rows[inner].name === "index.ts" && rows[json].name === "rate-limits.json",
         JSON.stringify(rows)
     );
 
@@ -153,8 +156,8 @@ async function checkExplorerUi(ctx: any, mgr: any, check: Check, t: (s: string) 
         const monaco = (window as any).monaco;
         const out: any = {};
         for (let i = 0; i < 40; i++) {
-            const m = monaco.editor.getModels().find((x: any) => x.uri.path === "/rate limiter.tangitweak.ts");
-            const mi = monaco.editor.getModels().find((x: any) => x.uri.path === "/mock/api mock.tangitweak.ts");
+            const m = monaco.editor.getModels().find((x: any) => x.uri.path === "/limiter/index.ts");
+            const mi = monaco.editor.getModels().find((x: any) => x.uri.path === "/limiter/mock/index.ts");
             if (m && mi) {
                 const w = await (await monaco.languages.typescript.getTypeScriptWorker())(m.uri);
                 // (no named helpers in here: tsx would wrap them in __name)
@@ -174,21 +177,21 @@ async function checkExplorerUi(ctx: any, mgr: any, check: Check, t: (s: string) 
     check(t("Code view: JSON imports resolve with the data file's types (no TS errors)"), !ts.root?.length && !ts.inner?.length && /max: number/.test(ts.type) && !ts.markers?.some((x: string) => /Cannot find module/.test(x)), JSON.stringify(ts));
 
     // collapse state persists (a second Editor tab reads it)
-    await mgr.click(`${row("dir:mock")} .script-name`);
-    const hidden = await mgr.waitForFunction(() => !document.querySelector('#script-list li[data-id="s_folders_inner"]') && document.querySelector('#script-list li[data-id="dir:mock"]')?.getAttribute("aria-expanded") === "false", null, { timeout: 5000 }).then(() => true, () => false);
+    await mgr.click(`${row("dir:limiter/mock")} .script-name`);
+    const hidden = await mgr.waitForFunction(() => !document.querySelector('#script-list li[data-id="s_folders_inner"]') && document.querySelector('#script-list li[data-id="dir:limiter/mock"]')?.getAttribute("aria-expanded") === "false", null, { timeout: 5000 }).then(() => true, () => false);
     check(t("explorer: clicking a folder collapses it"), hidden);
     const other = await ctx.newPage();
     await other.goto(mgr.url());
     const persisted = await other
-        .waitForFunction(() => document.querySelector('#script-list li[data-id="dir:mock"]')?.getAttribute("aria-expanded") === "false" && !document.querySelector('#script-list li[data-id="s_folders_inner"]'), null, { timeout: 15000 })
+        .waitForFunction(() => document.querySelector('#script-list li[data-id="dir:limiter/mock"]')?.getAttribute("aria-expanded") === "false" && !document.querySelector('#script-list li[data-id="s_folders_inner"]'), null, { timeout: 15000 })
         .then(() => true, () => false);
     await other.close();
     check(t("explorer: a collapsed folder stays collapsed (persisted)"), persisted);
-    await mgr.click(`${row("dir:mock")} .script-name`);
+    await mgr.click(`${row("dir:limiter/mock")} .script-name`);
     await mgr.waitForSelector(row("s_folders_inner"), { timeout: 5000 }).catch(() => {});
 
-    // New Folder (header button, at the root: the focused row is a root script)
-    await mgr.click(`${row("s_folders_root")} .script-name`);
+    // New Folder (header button, at the root: the focused row is the root settings.json)
+    await mgr.click(`${row("__settings__")} .script-name`);
     await mgr.hover("#explorer-section");
     await mgr.click("#btn-new-folder");
     await mgr.fill("#script-list li.creating input.script-rename", "ui-folder");
@@ -211,7 +214,7 @@ async function checkExplorerUi(ctx: any, mgr: any, check: Check, t: (s: string) 
     // invalid JSON: a JSON marker in the Code view + a problem under the data file (with its line), saved with ⌘S
     await mgr.evaluate(() => (window as any).monaco.editor.getEditors()[0].getModel().setValue('{\n  "a": 1,\n  "b": \n}\n'));
     await mgr.evaluate(() => (window as any).monaco.editor.getEditors()[0].focus());
-    await mgr.keyboard.press("Control+KeyS");
+    await mgr.keyboard.press("ControlOrMeta+KeyS");
     const saved = await mgr.waitForFunction(() => document.querySelector("#btn-save")?.getAttribute("data-state") === "saved", null, { timeout: 5000 }).then(() => true, () => false);
     const stored = (await send({ type: "listDataFiles" })).find((d: any) => d.id === uiData?.id)?.text;
     check(t("⌘S saves a data file"), saved && stored === '{\n  "a": 1,\n  "b": \n}\n', JSON.stringify({ saved, stored }));
@@ -232,7 +235,7 @@ async function checkExplorerUi(ctx: any, mgr: any, check: Check, t: (s: string) 
     const red = await mgr.evaluate((id: string) => !!document.querySelector(`#script-list li[data-id="${id}"] .script-name.error`), uiData?.id);
     check(t("explorer: a data file with JSON errors shows red"), red);
     await mgr.evaluate(() => (window as any).monaco.editor.getEditors()[0].getModel().setValue('{ "a": 1 }\n'));
-    await mgr.keyboard.press("Control+KeyS");
+    await mgr.keyboard.press("ControlOrMeta+KeyS");
     await mgr.waitForFunction(() => document.querySelector("#btn-save")?.getAttribute("data-state") === "saved", null, { timeout: 5000 }).catch(() => {});
 
     // F2 with a / moves it into another folder; the open file follows
@@ -258,13 +261,14 @@ async function checkExplorerUi(ctx: any, mgr: any, check: Check, t: (s: string) 
     const svg = (await send({ type: "listDataFiles" })).find((d: any) => d.path === "ui-folder/icon.svg");
     const svgIcon = await mgr.evaluate((id: string) => document.querySelector(`#script-list li[data-id="${id}"] .file-icon`)?.className, svg?.id);
     check(t("explorer: a new .svg data file opens as XML with its own icon"), svgLang === "xml" && /^<svg /.test(svg?.text || "") && /\bsvg\b/.test(svgIcon || ""), JSON.stringify({ svgLang, svg, svgIcon }));
-    const svgUser = await send({ type: "saveScript", id: "s_folders_svg", name: "ui-folder/uses svg.tangitweak", code: `import logo from "./icon.svg";\nconst markup: string = logo;\ntt.params({ markup: { type: "string", default: markup } });\n` });
+    await seedTweakPkg(send, "ui-folder");
+    const svgUser = await send({ type: "saveScript", id: "s_folders_svg", name: "ui-folder/index", code: `import { tweak } from "tangitweak"; import logo from "./icon.svg";\nconst markup: string = logo;\ntweak.params({ markup: { type: "string", default: markup } });\n` });
     const svgDefault = (await send({ type: "listScripts" })).find((s: any) => s.id === "s_folders_svg")?.paramDefs?.markup?.default;
     const svgTs = await mgr.evaluate(async () => {
         const monaco = (window as any).monaco;
         let out: any = null;
         for (let i = 0; i < 40; i++) {
-            const m = monaco.editor.getModels().find((x: any) => x.uri.path === "/ui-folder/uses svg.tangitweak.ts");
+            const m = monaco.editor.getModels().find((x: any) => x.uri.path === "/ui-folder/index.ts");
             if (m) {
                 const w = await (await monaco.languages.typescript.getTypeScriptWorker())(m.uri);
                 const all = [...(await w.getSyntacticDiagnostics(m.uri.toString())), ...(await w.getSemanticDiagnostics(m.uri.toString()))];

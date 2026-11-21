@@ -7,6 +7,7 @@
  * Set E2E_SHOT_DIR to save screenshots of the hovers and of the typings.
  */
 import path from "node:path";
+import { deleteTweak, saveTweak } from "./e2eTweak";
 
 type Check = (name: string, ok: boolean, extra?: string) => void;
 
@@ -52,23 +53,25 @@ export async function checkApiTypingsNav(mgr: any, check: Check, label = ""): Pr
     // under the pointer closes it. The window size is put back afterwards.
     const cdp = await mgr.context().newCDPSession(mgr);
     await cdp.send("Emulation.setDeviceMetricsOverride", { width: 1400, height: 800, deviceScaleFactor: 1, mobile: false });
-    await mgr.evaluate(() => new Promise((r) => chrome.runtime.sendMessage({
-        type: "saveScript", id: "s_api_nav", name: "api nav.tangitweak",
-        code: 'tt.onRequest({ url: "*://api-nav.invalid/*", strategy: "helper" }, (ctx) => {\n    console.log(ctx.url);\n});\n',
-    }, r)));
+    const send = (msg: any): Promise<any> => mgr.evaluate((m: any) => new Promise((r) => chrome.runtime.sendMessage(m, (x: any) => r(x ?? null))), msg);
+    await saveTweak(send, "s_api_nav", "api nav", 'import { tweak } from "tangitweak"; tweak.onRequest({ url: "*://api-nav.invalid/*", strategy: "helper" }, (ctx) => {\n    console.log(ctx.url);\n});\n');
     await mgr.keyboard.press("Escape"); // close a hover left by an earlier check
     // an earlier check may leave the current script dirty: discard it
     const dialogs: string[] = [];
     let accept = true;
     const onDialog = (d: any): void => { dialogs.push(d.message()); void (accept ? d.accept() : d.dismiss()); };
     mgr.on("dialog", onDialog);
-    await mgr.locator(".script-item", { hasText: "api nav" }).click();
-    const opened = await waitFor((s) => s.uri === "file:///api%20nav.tangitweak.ts");
+    const row = '#script-list li.script-item[data-id="s_api_nav"]';
+    const dirRow = '#script-list li.script-item[data-id="dir:api nav"]';
+    await mgr.waitForSelector(dirRow, { timeout: 8000 });
+    if ((await mgr.getAttribute(dirRow, "aria-expanded")) === "false") await mgr.click(dirRow);
+    await mgr.click(row);
+    const opened = await waitFor((s) => s.uri === "file:///api%20nav/index.ts");
     accept = false;
     dialogs.length = 0;
     await setCursor(3, 1);
     await mgr.evaluate(() => (window as any).monaco.editor.getEditors()[0].trigger("t", "type", { text: "// unsaved\n" }));
-    await setCursor(1, 6); // on `onRequest`
+    await setCursor(1, 44); // on `onRequest`
 
     // the visible content hover: signature <pre>, its links, the Back link
     const hoverInfo = () => mgr.evaluate(() => {
@@ -131,7 +134,7 @@ export async function checkApiTypingsNav(mgr: any, check: Check, label = ""): Pr
 
     const root = await showHover();
     const linkNames = root.links.map((l: string[]) => l[0]);
-    check("api typings: hover signature on tt.onRequest is highlighted, its API types are links",
+    check("api typings: hover signature on tweak.onRequest is highlighted, its API types are links",
         root.visible && linkNames.includes("RouteOptions") && linkNames.includes("RequestCtx") && root.links.every((l: string[]) => l[1].startsWith("command:tt.hoverShowType?")) &&
             root.colors.length >= 3 && /mono/i.test(root.preFont) && root.sig.includes("\n    route: TangiTweak.RouteOptions,"),
         JSON.stringify({ ...root, text: undefined }).slice(0, 400) + ` uri=${opened.uri}`);
@@ -148,7 +151,7 @@ export async function checkApiTypingsNav(mgr: any, check: Check, label = ""): Pr
     const here = await state();
     check("api typings: clicking RouteOptions swaps the same hover for RouteOptions', no navigation",
         drilled.visible && isRoute(drilled) && drilled.text.includes("applies and which") && drilled.back === "← Back to onRequest" &&
-            drilled.marked && drilled.count === 1 && here.uri === "file:///api%20nav.tangitweak.ts" && !here.note,
+            drilled.marked && drilled.count === 1 && here.uri === "file:///api%20nav/index.ts" && !here.note,
         JSON.stringify({ ...drilled, text: drilled.text.slice(0, 160), uri: here.uri }));
     await parkMouse(); // no hover-underline in the screenshot
     await shot("hover-drilled");
@@ -170,7 +173,7 @@ export async function checkApiTypingsNav(mgr: any, check: Check, label = ""): Pr
     await mgr.keyboard.press("Escape");
     const at = await mgr.evaluate(() => {
         const ed = (window as any).monaco.editor.getEditors()[0];
-        const p = ed.getScrolledVisiblePosition({ lineNumber: 1, column: 7 });
+        const p = ed.getScrolledVisiblePosition({ lineNumber: 1, column: 44 });
         const r = ed.getDomNode().getBoundingClientRect();
         return { x: r.left + p.left + 4, y: r.top + p.top + p.height / 2 };
     });
@@ -188,7 +191,7 @@ export async function checkApiTypingsNav(mgr: any, check: Check, label = ""): Pr
     await waitHover((h) => isRoute(h));
     await mgr.keyboard.press("Escape");
     await mgr.mouse.move(5, 5);
-    await setCursor(1, 6);
+    await setCursor(1, 44);
     const reopened = await showHover();
     check("api typings: a new hover after closing starts at the top again", /onRequest\(/.test(reopened.sig) && !reopened.back, reopened.sig.slice(0, 60));
 
@@ -205,14 +208,14 @@ export async function checkApiTypingsNav(mgr: any, check: Check, label = ""): Pr
     await mgr.keyboard.press("Escape");
     await setTheme(themeWas);
     const still = await state();
-    check("api typings: still in the script after all the hover clicks", still.uri === "file:///api%20nav.tangitweak.ts" && still.text.includes("// unsaved") && !still.note, still.uri);
+    check("api typings: still in the script after all the hover clicks", still.uri === "file:///api%20nav/index.ts" && still.text.includes("// unsaved") && !still.note, still.uri);
 
-    await setCursor(1, 6);
+    await setCursor(1, 44);
     let f12 = await state();
     for (const end = Date.now() + 15000; f12.uri !== "file:///tt-api.d.ts" && Date.now() < end; f12 = await waitFor((s) => s.uri === "file:///tt-api.d.ts", 1000)) {
         await mgr.keyboard.press("F12");
     }
-    check("api typings: F12 on tt.onRequest opens its declaration read-only",
+    check("api typings: F12 on tweak.onRequest opens its declaration read-only",
         f12.uri === "file:///tt-api.d.ts" && f12.readOnly === true && f12.note && f12.saveDisabled && f12.selected === "" && f12.line.includes("onRequest(route"),
         JSON.stringify({ ...f12, text: undefined }));
     await mgr.waitForTimeout(300);
@@ -220,9 +223,9 @@ export async function checkApiTypingsNav(mgr: any, check: Check, label = ""): Pr
 
     await mgr.keyboard.type("x"); // read-only: ignored
     await mgr.keyboard.press(back);
-    const ret = await waitFor((s) => s.uri === "file:///api%20nav.tangitweak.ts");
+    const ret = await waitFor((s) => s.uri === "file:///api%20nav/index.ts");
     check(`api typings: ${back} returns to the script, cursor restored, unsaved edit kept`,
-        ret.uri === "file:///api%20nav.tangitweak.ts" && JSON.stringify(ret.sel) === "[1,6,1,6]" && ret.text.includes("// unsaved") && !ret.readOnly && !ret.note && ret.selected.includes("api nav.tangitweak") && !ret.saveDisabled,
+        ret.uri === "file:///api%20nav/index.ts" && JSON.stringify(ret.sel) === "[1,44,1,44]" && ret.text.includes("// unsaved") && !ret.readOnly && !ret.note && ret.selected.includes("index") && !ret.saveDisabled,
         JSON.stringify({ ...ret, text: ret.text.slice(0, 80) }));
 
     await mgr.keyboard.press(forward);
@@ -246,9 +249,9 @@ export async function checkApiTypingsNav(mgr: any, check: Check, label = ""): Pr
     await mgr.keyboard.press(back);
     const back1 = await waitFor((s) => !atRoute(s));
     await mgr.keyboard.press(back);
-    const back2 = await waitFor((s) => s.uri === "file:///api%20nav.tangitweak.ts");
+    const back2 = await waitFor((s) => s.uri === "file:///api%20nav/index.ts");
     check("api typings: back twice → onRequest declaration, then the script",
-        back1.uri === "file:///tt-api.d.ts" && back1.line.includes("onRequest(route") && back2.uri === "file:///api%20nav.tangitweak.ts" && back2.text.includes("// unsaved"),
+        back1.uri === "file:///tt-api.d.ts" && back1.line.includes("onRequest(route") && back2.uri === "file:///api%20nav/index.ts" && back2.text.includes("// unsaved"),
         JSON.stringify([back1.sel, back2.uri]));
 
     check("api typings: no discard-changes prompt along the way", dialogs.length === 0, JSON.stringify(dialogs));
@@ -261,5 +264,5 @@ export async function checkApiTypingsNav(mgr: any, check: Check, label = ""): Pr
         const ed = (window as any).monaco.editor.getEditors()[0];
         ed.trigger("t", "undo", {});
     });
-    await mgr.evaluate(() => new Promise((r) => chrome.runtime.sendMessage({ type: "deleteScript", id: "s_api_nav" }, r)));
+    await deleteTweak(send, "api nav");
 }

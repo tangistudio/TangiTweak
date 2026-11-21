@@ -35,7 +35,7 @@ const push = (key: string, params: string) => `(globalThis[Symbol.for(${JSON.str
  * scriptFunction (EVAL_WRAPPER_LINES), so error positions map the same way.
  */
 export function scriptUnit(name: string, js: string): string {
-    return `${push(siteKey(name, js), "tt, console, require, module, exports")}\n\n"use strict";\n${js}\n}]);\n//# sourceURL=${scriptUrl(name)}`;
+    return `${push(siteKey(name, js), "console, require, module, exports")}\n\n"use strict";\n${js}\n}]);\n//# sourceURL=${scriptUrl(name)}`;
 }
 
 /** a package module's unit (`url`: its final URL) */

@@ -102,19 +102,20 @@ describe("packageModel", () => {
         expect(modifiedFiles(pkg as never, (f) => now[f.id])).toEqual(["b.ts", "c.json", "d.ts"]);
     });
 
-    it("resolves bundle display names only for bundles with a single script", () => {
+    it("resolves bundle display names for each bundle's entry", () => {
         const scripts = [
-            { id: "s1", meta: { name: "redwood/devtools.tsx", active: true } },
+            { id: "s1", meta: { name: "redwood/index.tsx", active: true } },
             { id: "s2", meta: { name: "redwood/shared/lib", active: false } },
             { id: "s3", meta: { name: "multi/a", active: true } },
             { id: "s4", meta: { name: "multi/b", active: true } },
-            { id: "s5", meta: { name: "unnamed/main", active: true } },
+            { id: "s5", meta: { name: "unnamed/index", active: true } },
             { id: "s6", meta: { name: "demo/demo.tangitweak", active: true } },
         ];
         const dataFiles = [
-            { path: "redwood/metadata.json", text: JSON.stringify({ name: "Redwood Devtools", description: "Atlas tools", scripts: ["devtools.tsx"] }) },
-            { path: "multi/metadata.json", text: JSON.stringify({ name: "Multi Kit", scripts: ["a.ts", "b.ts"] }) },
-            { path: "unnamed/metadata.json", text: JSON.stringify({ scripts: ["main.ts"] }) },
+            { path: "redwood/package.json", text: JSON.stringify({ name: "redwood", description: "Atlas tools", tangitweak: { displayName: "Redwood Devtools" } }) },
+            // its entry (index.ts) isn't there
+            { path: "multi/package.json", text: JSON.stringify({ name: "multi", tangitweak: {} }) },
+            { path: "unnamed/package.json", text: JSON.stringify({ tangitweak: {} }) },
         ];
         const installed = {
             p1: {
@@ -231,18 +232,20 @@ describe("localPackage", () => {
         expect(isPackageFile("readme.md")).toBe(true);
         expect(isPackageFile("node_modules/x/index.ts")).toBe(false);
         expect(isPackageFile("notes.txt")).toBe(false);
-        expect(startsIn(["sub/b.ts", "lib.ts", "a.tangitweak.tsx", "t.d.ts", "c.json"])).toEqual(["a.tangitweak.tsx", "lib.ts", "sub/b.ts"]);
-        // a bundle's scripts install with it
-        expect(startsIn(["kit/metadata.json", "kit/a.ts", "kit/sub/b.ts", "x.ts"])).toEqual(["x.ts", "kit/metadata.json"]);
+        expect(startsIn(["sub/b.ts", "lib.ts", "a.tangitweak.tsx", "t.d.ts", "c.json"])).toEqual([]);
+        // a tweak is a folder with a package.json (with a "tangitweak" block, when its text is known)
+        expect(startsIn(["kit/package.json", "kit/a.ts", "package.json", "node_modules/x/package.json", "x.ts"])).toEqual(["package.json", "kit/package.json"]);
+        const text: Record<string, string> = { "package.json": "{}", "kit/package.json": '{"tangitweak":{}}' };
+        expect(startsIn(["kit/package.json", "package.json"], (p) => text[p])).toEqual(["kit/package.json"]);
     });
 
     it("takes the entry and what it imports", async () => {
-        const files = { "x.tangitweak.ts": 'import { a } from "./lib";\nimport c from "./c.json";\nimport "./gone";', "lib.ts": "export const a = 1;", "c.json": "{}", "other.ts": "" };
-        const p = await localPackage(files, "x.tangitweak.ts");
-        expect(Object.keys(p.files).sort()).toEqual(["c.json", "lib.ts", "x.tangitweak.ts"]);
+        const files = { "package.json": '{"name":"x","tangitweak":{}}', "index.ts": 'import { a } from "./lib";\nimport c from "./c.json";\nimport "./gone";', "lib.ts": "export const a = 1;", "c.json": "{}", "other.ts": "" };
+        const p = await localPackage(files, "package.json");
+        expect(Object.keys(p.files).sort()).toEqual(["c.json", "index.ts", "lib.ts", "package.json"]);
         expect(p.missing.length).toBe(1);
         expect(p.revision).toMatch(/^[0-9a-f]+$/);
-        const again = await localPackage({ ...files, "other.ts": "changed" }, "x.tangitweak.ts");
+        const again = await localPackage({ ...files, "other.ts": "changed" }, "package.json");
         expect(again.revision).toBe(p.revision);
     });
 });

@@ -6,7 +6,7 @@ import { FETCH_MAX_BYTES } from "../src/shared/wire";
 
 afterEach(() => vi.unstubAllGlobals());
 
-describe("tt.fetch wire helpers", () => {
+describe("tweak.fetch wire helpers", () => {
     it("splitFetchInit strips from/bypass and checks them", () => {
         expect(splitFetchInit({ method: "POST", from: "background", bypass: true })).toEqual({ init: { method: "POST" }, from: "background", bypass: true });
         expect(splitFetchInit(undefined)).toEqual({ init: {}, from: undefined, bypass: false });
@@ -47,25 +47,25 @@ describe("tt.fetch wire helpers", () => {
     });
 });
 
-describe("tt.globalStore / tt.fetch in the background shim", () => {
+describe("tweak.globalStore / tweak.fetch in the background shim", () => {
     it("a store without an owner is a local valtio proxy; options are checked", () => {
-        const c = compileScript(`export const s = tt.globalStore("ui", { n: 1 }); s.n++;`);
+        const c = compileScript(`import { tweak } from "tangitweak"; export const s = tweak.globalStore("ui", { n: 1 }); s.n++;`);
         expect(c.error).toBeNull();
         expect(c.exports.s.n).toBe(2);
-        expect(compileScript(`tt.globalStore("ui", { n: 1 }, { persist: ["n"] });`).error).toBeNull();
-        expect(compileScript(`tt.globalStore("ui", { n: 1 }, { persist: 3 });`).error).toMatch(/persist must be/);
-        expect(compileScript(`tt.globalStore("", {});`).error).toMatch(/name/);
-        expect(compileScript(`tt.globalStore("a", [1]);`).error).toMatch(/initial must be an object/);
+        expect(compileScript(`import { tweak } from "tangitweak"; tweak.globalStore("ui", { n: 1 }, { persist: ["n"] });`).error).toBeNull();
+        expect(compileScript(`import { tweak } from "tangitweak"; tweak.globalStore("ui", { n: 1 }, { persist: 3 });`).error).toMatch(/persist must be/);
+        expect(compileScript(`import { tweak } from "tangitweak"; tweak.globalStore("", {});`).error).toMatch(/a store's ID is/);
+        expect(compileScript(`import { tweak } from "tangitweak"; tweak.globalStore("a", [1]);`).error).toMatch(/initial must be an object/);
     });
 
-    it("a name may be used once per script", () => {
-        expect(compileScript(`tt.globalStore("a", {}); tt.globalStore("a", {});`).error).toMatch(/already has a store named "a"/);
-        expect(compileScript(`tt.globalStore("a", {}); tt.globalStore("b", {});`).error).toBeNull();
+    it("a name may be used once per tweak", () => {
+        expect(compileScript(`import { tweak } from "tangitweak"; tweak.globalStore("a", {}); tweak.globalStore("a", {});`).error).toMatch(/a store ID is used once per tweak/);
+        expect(compileScript(`import { tweak } from "tangitweak"; tweak.globalStore("a", {}); tweak.globalStore("b", {});`).error).toBeNull();
     });
 
     it("the store override gets name, initial and persist", () => {
         const seen: any[] = [];
-        const c = compileScript(`export const s = tt.globalStore("ui", { n: 1 }, { persist: false });`, {
+        const c = compileScript(`import { tweak } from "tangitweak"; export const s = tweak.globalStore("ui", { n: 1 }, { persist: false });`, {
             store: (name, initial, persist) => (seen.push([name, initial, persist]), { from: "owner" }),
         });
         expect(c.error).toBeNull();
@@ -73,20 +73,20 @@ describe("tt.globalStore / tt.fetch in the background shim", () => {
         expect(c.exports.s).toEqual({ from: "owner" });
     });
 
-    it("tt.storage.set on a store's key warns", () => {
+    it("tweak.storage.set on a store's key warns", () => {
         const seen: string[] = [];
-        compileScript(`tt.storage.set("$store:ui", 1);`, { logSink: (_l, _s, text) => seen.push(text) });
-        expect(seen.join("\n")).toMatch(/persisted copy of tt\.globalStore\("ui"\)/);
+        compileScript(`import { tweak } from "tangitweak"; tweak.storage.set("$store:ui", 1);`, { logSink: (_l, _s, text) => seen.push(text) });
+        expect(seen.join("\n")).toMatch(/persisted copy of tweak\.globalStore\("ui"\)/);
     });
 
     it('from: "page" rejects in background code', async () => {
-        const c = compileScript(`export const go = () => tt.fetch("https://a.com/", { from: "page" });`);
+        const c = compileScript(`import { tweak } from "tangitweak"; export const go = () => tweak.fetch("https://a.com/", { from: "page" });`);
         await expect(c.exports.go()).rejects.toThrow(/only an overlay/);
     });
 
     it("fetch goes through the override with the bypass flag and comes back a Response", async () => {
         const seen: any[] = [];
-        const c = compileScript(`export const go = () => tt.fetch("https://a.com/x", { method: "PUT", body: "b", bypass: true });`, {
+        const c = compileScript(`import { tweak } from "tangitweak"; export const go = () => tweak.fetch("https://a.com/x", { method: "PUT", body: "b", bypass: true });`, {
             fetch: async (request, bypass) => {
                 seen.push({ url: request.url, method: request.method, body: new TextDecoder().decode(request.body), bypass });
                 return { status: 200, statusText: "OK", url: request.url, headers: [["x-y", "z"]], body: new TextEncoder().encode("done") };
@@ -102,7 +102,7 @@ describe("tt.globalStore / tt.fetch in the background shim", () => {
     it("without an override, fetch is the plain fetch with cookies", async () => {
         const fetchMock = vi.fn(async () => new Response("ok"));
         vi.stubGlobal("fetch", fetchMock);
-        const c = compileScript(`export const go = () => tt.fetch("https://a.com/");`);
+        const c = compileScript(`import { tweak } from "tangitweak"; export const go = () => tweak.fetch("https://a.com/");`);
         expect(await (await c.exports.go()).text()).toBe("ok");
         expect((fetchMock.mock.calls[0] as any[])[1]).toMatchObject({ credentials: "include" });
     });

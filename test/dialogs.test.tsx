@@ -239,7 +239,7 @@ describe("install dialog", () => {
         render(<InstallDialog />);
         expect($("#install-dialog")).toBeNull();
         await act(async () => openInstall());
-        expect($("#install-dialog-title").textContent).toBe("Install Script");
+        expect($("#install-dialog-title").textContent).toBe("Install Tweak");
         expect($("#install-drop")).not.toBeNull();
         expect($("#install-dialog h1")).toBeNull();
         const dataTransfer = { types: ["Files"], items: [], files: [new File(["# hi"], "notes.md")], getData: () => "", dropEffect: "" };
@@ -248,7 +248,7 @@ describe("install dialog", () => {
         await act(async () => void fireEvent.drop($("#install-drop"), { dataTransfer }));
         await act(tick);
         expect($(".install-dialog").classList.contains("dropping")).toBe(false);
-        expect($("#install-dialog .err").textContent).toContain("notes.md has no script");
+        expect($("#install-dialog .err").textContent).toContain("notes.md has no tweak to install");
         fireEvent.click($("#install-dialog .btn-close"));
         await act(tick);
         expect(dialogs.install).toBeNull();
@@ -261,12 +261,14 @@ describe("install dialog", () => {
         let pkgState: "downloading" | "ready" = "downloading";
 
         vi.stubGlobal("fetch", (url: string) => {
-            if (url === "https://example.com/dark.tangitweak.ts") {
-                return Promise.resolve(
-                    new Response('import "./lib";\nimport "https://unpkg.com/cmdk@1.1.1";\ntt.metadata({ name: "Dark", version: "1.2.0", icon: "data:image/png;base64,CAFE" });\n', { status: 200 })
-                );
+            if (url === "https://example.com/dark/package.json") {
+                const pkg = { name: "dark", version: "1.2.0", dependencies: { cmdk: "1.1.1" }, tangitweak: { displayName: "Dark", icon: "data:image/png;base64,CAFE" } };
+                return Promise.resolve(new Response(JSON.stringify(pkg), { status: 200 }));
             }
-            if (url === "https://example.com/lib.ts") {
+            if (url === "https://example.com/dark/index.ts") {
+                return Promise.resolve(new Response('import "./lib";\nimport "cmdk";\n', { status: 200 }));
+            }
+            if (url === "https://example.com/dark/lib.ts") {
                 return new Promise<Response>((res) => (resolveLib = res));
             }
             return Promise.resolve(new Response(null, { status: 404 }));
@@ -289,7 +291,7 @@ describe("install dialog", () => {
                             revision: msg.fetched.revision,
                             metadata: { name: "Dark", version: "1.2.0", icon: "data:image/png;base64,CAFE", connect: [] },
                             caps: { urls: [], strategies: [], pageJs: false, overlay: false, connect: [], packages: [] },
-                            files: { "dark.tangitweak.ts": { kind: "script", id: "s_1", name: "dark/dark.tangitweak", hash: "h" } },
+                            files: { "index.ts": { kind: "script", id: "s_1", name: "dark/index", hash: "h" } },
                             autoUpdate: true,
                             installedAt: 1,
                             updatedAt: 1,
@@ -304,14 +306,14 @@ describe("install dialog", () => {
             const { InstallDialog } = await import("../src/ui/dialogs/InstallDialog");
             const { openInstall, dialogs } = await import("../src/ui/state/dialogs");
             render(<InstallDialog />);
-            await act(async () => openInstall({ url: "https://example.com/dark.tangitweak.ts" }));
+            await act(async () => openInstall({ url: "https://example.com/dark/package.json" }));
             await act(tick);
 
-            // File 1 fetched, waiting on lib.ts -> determinate file progress bar (1 / 2 files)
+            // package.json and index.ts fetched, waiting on lib.ts -> determinate file progress bar (2 / 3 files)
             const bar1 = $('#install-dialog [role="progressbar"]');
             expect(bar1).not.toBeNull();
-            expect(bar1.getAttribute("aria-valuenow")).toBe("50");
-            expect($("#install-dialog .install-progress-detail").textContent).toBe("1 / 2 files");
+            expect(bar1.getAttribute("aria-valuenow")).toBe("67");
+            expect($("#install-dialog .install-progress-detail").textContent).toBe("2 / 3 files");
 
             // Finish lib.ts -> transitions to package download progress bar (0 / 1 packages)
             await act(async () => resolveLib(new Response("export {};\n", { status: 200 })));
@@ -332,7 +334,8 @@ describe("install dialog", () => {
                     error: null,
                     folder: "dark",
                     items: {
-                        "dark.tangitweak.ts": { kind: "script", name: "dark/dark.tangitweak" },
+                        "package.json": { kind: "data", name: "dark/package.json" },
+                        "index.ts": { kind: "script", name: "dark/index" },
                         "lib.ts": { kind: "script", name: "dark/lib" },
                     },
                 })

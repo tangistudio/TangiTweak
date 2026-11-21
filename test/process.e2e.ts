@@ -21,6 +21,7 @@ import net from "node:net";
 import crypto from "node:crypto";
 import { chromium } from "playwright-core";
 import { resolveBrowser } from "./browserSetup";
+import { deleteTweak, saveTweak } from "./e2eTweak";
 
 const ROOT = path.join(new URL("..", import.meta.url).pathname);
 // The store build asks for nativeMessaging from Settings → Local helper → Allow
@@ -141,23 +142,13 @@ try {
     const st0 = await send({ type: "processStatus" });
     check("helper idle without process scripts", st0.state === "idle", st0.state);
 
-    await send({
-        type: "saveScript",
-        id: "p_local",
-        name: "Proc local.tangitweak",
-        code: `tt.onRequest({ url: "${ORIGIN}/*", strategy: "helper" }, (c) => {
+    await saveTweak(send, "p_local", "Proc local", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "${ORIGIN}/*", strategy: "helper" }, (c) => {
     if (c.url.endsWith("/redir")) return { redirect: "${ORIGIN}/target" };
     if (c.url.endsWith("/mock")) return { replaceResponse: { body: { mocked: true, type: c.resourceType }, mime: "application/json" } };
 });
-tt.onResponseHeaders({ url: "${ORIGIN}/*", strategy: "helper" }, (c) => (c.url.endsWith("/doc") ? { headers: { set: { "x-proc": "yes" } } } : undefined));
-tt.onResponseBody({ url: "${ORIGIN}/*", strategy: "helper" }, (c, body) => (c.url.endsWith("/plain") ? undefined : body.replace("ORIGINAL", "PROCESSED")));`,
-    });
-    await send({
-        type: "saveScript",
-        id: "p_https",
-        name: "Proc https.tangitweak",
-        code: `tt.onResponseBody({ url: "https://example.com/*", strategy: "helper" }, (c, body) => body.replace("<title>Example Domain", "<title>Process Domain"));`,
-    });
+tweak.onResponseHeaders({ url: "${ORIGIN}/*", strategy: "helper" }, (c) => (c.url.endsWith("/doc") ? { headers: { set: { "x-proc": "yes" } } } : undefined));
+tweak.onResponseBody({ url: "${ORIGIN}/*", strategy: "helper" }, (c, body) => (c.url.endsWith("/plain") ? undefined : body.replace("ORIGINAL", "PROCESSED")));`);
+    await saveTweak(send, "p_https", "Proc https", `import { tweak } from "tangitweak"; tweak.onResponseBody({ url: "https://example.com/*", strategy: "helper" }, (c, body) => body.replace("<title>Example Domain", "<title>Process Domain"));`);
 
     check("store build: nativeMessaging and browsingData are optional", OPTIONAL_HELPER, JSON.stringify({ permissions: BUILT.permissions, optional: BUILT.optional_permissions }));
     let st: any = null;
@@ -218,8 +209,8 @@ tt.onResponseBody({ url: "${ORIGIN}/*", strategy: "helper" }, (c, body) => (c.ur
 
     // disabling the scripts stops the helper and restores the user's proxy
     await send({ type: "setEnabled", id: "p_local", enabled: false }).catch(() => {});
-    await send({ type: "deleteScript", id: "p_local" });
-    await send({ type: "deleteScript", id: "p_https" });
+    await deleteTweak(send, "Proc local");
+    await deleteTweak(send, "Proc https");
     let st2: any = null;
     for (let i = 0; i < 20; i++) {
         st2 = await send({ type: "processStatus" });

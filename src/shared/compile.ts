@@ -1,28 +1,28 @@
 /**
  * Compiles a TangiTweak source into { meta, handlers }.
  * Runs identically in the background (MV3: the sandbox page) and the page
- * hook — each provides its own minimal `tt` API shim and re-evaluates
+ * hook — each provides its own `tweak` (shim, tweakApi.ts) and re-evaluates
  * handler sources with `new Function`.
  */
 import { defaultMeta, finishMeta, type ResMeta } from "./metaParser";
-import { readMetadata } from "./packageMetadata";
-import { PARAM_TYPES, parseParamTree, resolveParamValues, serializableParamTree, type ParamDef, type ParamTree } from "./scriptDef";
+import { PARAM_TYPES, resolveParamValues, serializableParamTree, type ParamDef, type ParamTree } from "./scriptDef";
 import { paramsProxy, PARAM_AT_TOP, PARAM_NOT_HERE } from "./paramsProxy";
 import { parseShortcut } from "./shortcut";
 import { formatLogArgs, makeScriptConsole, type ScriptLogLevel } from "./scriptLog";
 import { scriptFunction } from "./scriptFn";
 import { callerLine } from "./scriptError";
-import { isNetKind, normalizeRoute, placeApi, placeKeyer, placeKind, placeOf, routeLabel, type PlaceApi, type RouteKind, type RouteMeta } from "./route";
+import { isNetKind, normalizeRoute, placeKeyer, placeKind, placeOf, routeLabel, type PlaceApi, type RouteKind, type RouteMeta } from "./route";
+import { storeRun, tweakHost, tweakStores, type NamedStores, type StoreRun, type TweakHost } from "./tweakApi";
 import { inertRemote, NO_SITE_STORE, REMOTE_FROM_BACKGROUND, SITE_NO_HANDLES, SITE_NO_STORES, unusableStore } from "./remote";
 import { scriptEnv } from "./scriptEnv";
 import { dataFileValue, importLine, importPath, importResolver, isDataSpec } from "./scriptImports";
-import { isUrlSpec, makePackageLoader, PackageImportError, type PackageModules } from "./packageImports";
+import { builtinMessage, finalUrl, isNodeBuiltin, isUrlSpec, makePackageLoader, PackageImportError, type PackageModules } from "./packageImports";
+import { bareImport, bundleOf, dataReader, dependenciesOf, type Bundle } from "./tweakBundle";
 import { builtinModule } from "./builtins";
 import { builtinSpec } from "./builtinSpecs";
 import { proxy } from "valtio/vanilla";
 import { ReplicaHub } from "./storeReplica";
 import { claimStoreName, storePersist } from "./storeOps";
-import { codeOnly } from "./codeScan";
 import { analyzeScript, lintLineWarning, rulesMessage, type LintAnalysis, type NetAnalysis } from "./scriptLint";
 import type { StorePersist, WireRequest, WireResponse } from "./wire";
 import { fromWireResponse, splitFetchInit, toWireRequest, type WtFetchInit } from "./ttFetch";
@@ -38,7 +38,7 @@ export interface Routed {
 }
 
 /**
- * Registrations STACK within a script: multiple tt.onRequest(...) calls
+ * Registrations STACK within a script: multiple tweak.onRequest(...) calls
  * all run, in registration order (same semantics as across scripts).
  */
 export interface ScriptHandlers {
@@ -46,9 +46,9 @@ export interface ScriptHandlers {
     onResponseHeaders: Routed[];
     replaceResponse: Routed[];
     onResponseBody: Routed[];
-    /** tt.onSite / tt.onPage: run in the page — the site's JS world or the isolated one (route.when = timing, route.world) */
+    /** tweak.onSite / tweak.onPage: run in the page — the site's JS world or the isolated one (route.when = timing, route.world) */
     onDocument: Routed[];
-    /** tt.onOverlay: run in the script's overlay frame above the page */
+    /** tweak.onOverlay: run in the script's overlay frame above the page */
     onOverlay: Routed[];
 }
 
@@ -58,7 +58,7 @@ export interface CompiledScript {
     error: string | null;
     /** original full source */
     code: string;
-    /** parameter definitions collected from tt.params / tt.defineParam (if any) */
+    /** parameter definitions collected from tweak.params (if any) */
     paramDefs?: ParamTree;
     /** the module's exports (utility scripts: importable by others) */
     exports?: any;
@@ -78,25 +78,25 @@ export interface ResApiOverrides {
     /** the script's name: labels its stack frames */
     name?: string;
     storage?: { get(key: string): Promise<any>; set(key: string, value: any): Promise<void> };
-    /** receives the script's tt.log and console.* output (source: "tt.log", "console.warn", …) */
+    /** receives the script's tweak.log and console.* output (source: "tweak.log", "console.warn", …) */
     logSink?: (level: ScriptLogLevel, source: string, text: string) => void;
-    /** stored parameter values, merged over tt.params defaults */
+    /** stored parameter values, merged over tweak.params defaults */
     paramValues?: Record<string, any>;
     /** resolves ES import specifiers ("./utils", "utils") to module exports */
     importModule?: (spec: string) => any;
-    /** `tt.globalStore`: the script's replicated store (default: a plain local valtio proxy) */
+    /** `tweak.globalStore`: the script's replicated store (default: a plain local valtio proxy) */
     store?: (name: string, initial: object, persist: StorePersist) => object;
-    /** `tt.tabStore`: the script's per-tab store (default: per-tab copies local to this instance) */
+    /** `tweak.tabStore`: the script's per-tab store (default: per-tab copies local to this instance) */
     tabStore?: (name: string, initial: object) => object;
-    /** `tt.pageStore`: the script's per-page store (default: per-page copies local to this instance) */
+    /** `tweak.pageStore`: the script's per-page store (default: per-page copies local to this instance) */
     pageStore?: (name: string, initial: object) => object;
-    /** `tt.siteStore`: a mirror of the site's world's store (default — no page here: a store that throws when used) */
+    /** `tweak.siteStore`: a mirror of the site's world's store (default — no page here: a store that throws when used) */
     siteStore?: (name: string, initial: object) => object;
-    /** `tt.fetch(…, { from: "background" })` (default: this context's own fetch, no bypass) */
+    /** `tweak.fetch(…, { from: "background" })` (default: this context's own fetch, no bypass) */
     fetch?: (request: WireRequest, bypass: boolean) => Promise<WireResponse>;
-    /** `tt.fetch(…, { from: "page" })`, then the default `from` (the overlay); `url` resolves relative URLs */
+    /** `tweak.fetch(…, { from: "page" })`, then the default `from` (the overlay); `url` resolves relative URLs */
     pageFetch?: { url: string; fetch: (request: WireRequest, bypass: boolean) => Promise<WireResponse> };
-    /** what a `tt.onSite` / `tt.onPage` / `tt.onOverlay` registration returns (default: an inert handle) */
+    /** what a `tweak.onSite` / `tweak.onPage` / `tweak.onOverlay` registration returns (default: an inert handle) */
     remote?: (route: RouteMeta) => any;
     /** a param assigned by the code (`cfg.on = false`): save it like the ⚙ panel (absent: params can't change) */
     setParam?: (key: string, value: any) => Promise<void>;
@@ -139,7 +139,7 @@ const runnable = new Map<string, { js: string; syntax: unknown }>();
 let runnableChars = 0;
 const RUNNABLE_MAX_CHARS = 8_000_000;
 
-/** transpiled + keyPlaceCalls'd code, and the transpiler's error (the code then runs as written) */
+/** transpiled code, and the transpiler's error (the code then runs as written) */
 function runnableOf(code: string): { js: string; syntax: unknown } {
     const hit = runnable.get(code);
     if (hit) {
@@ -155,7 +155,7 @@ function runnableOf(code: string): { js: string; syntax: unknown } {
         syntax = e;
         js = code;
     }
-    const out = { js: keyPlaceCalls(js), syntax };
+    const out = { js, syntax };
     runnable.set(code, out);
     runnableChars += code.length + out.js.length;
     for (const [k, v] of runnable) {
@@ -182,7 +182,7 @@ export function toRunnableJs(code: string): string {
  */
 export function compileScript(code: string, overrides?: ResApiOverrides): CompiledScript {
     const meta = defaultMeta();
-    const owner = createOwner(meta, overrides?.paramValues);
+    const owner = createOwner(overrides?.paramValues);
     const store = createCollector();
     let syntax: any = null;
     try {
@@ -198,7 +198,7 @@ export function compileScript(code: string, overrides?: ResApiOverrides): Compil
             : (spec: string) => {
                   throw new Error(`cannot import "${spec}" here — imports resolve in the background/hook contexts`);
               };
-        withCollector(store, { name: overrides?.name ?? "", remote: overrides?.remote }, () => fn(shim, makeForwardingConsole(overrides?.logSink), requireShim, moduleObj, moduleObj.exports));
+        withCollector(store, { name: overrides?.name ?? "", remote: overrides?.remote, run: shim.run, host: shim.host }, () => fn(shim.host, makeForwardingConsole(overrides?.logSink), requireShim, moduleObj, moduleObj.exports));
         meta.routes = routesOf(store);
         finishMeta(meta);
         return { meta, handlers: store, error: null, code, paramDefs: owner.defs, exports: moduleObj.exports };
@@ -211,6 +211,19 @@ export function compileScript(code: string, overrides?: ResApiOverrides): Compil
         const error = at ? `SyntaxError: ${String(syntax.message).replace(/\s*\(\d+:\d+\)$/, "")} (line ${at})` : e && e.stack ? e.stack : String(e);
         return { meta, handlers: emptyHandlers(), error, code, paramDefs: owner.defs };
     }
+}
+
+/**
+ * Run a tweak's module (a file its entry imports) with the `tweak` of the
+ * tweak whose top level is running, so what it registers, its params and
+ * its stores are that tweak's; false when no top level is running.
+ */
+export function runInTweak(code: string, name: string, require: (spec: string) => any, moduleObj: { exports: any }, logSink?: ResApiOverrides["logSink"]): boolean {
+    const top = collectors[collectors.length - 1];
+    const host = top && collectorOf.get(top)?.host;
+    if (!host) return false;
+    scriptFunction(runnableOf(code).js, name)(host, makeForwardingConsole(logSink), require, moduleObj, moduleObj.exports);
+    return true;
 }
 
 const stubs = new WeakSet<object>();
@@ -260,6 +273,11 @@ export function withData(stored: DataFileSource[], extra: DataFileSource[] | und
  * line (`(line N)`, rewritten at each level as it propagates).
  */
 class DataFileImportError extends Error {
+    fatalImport = true;
+}
+
+/** an import that leaves the importer's bundle: never stubbed */
+class BundleImportError extends Error {
     fatalImport = true;
 }
 
@@ -375,8 +393,19 @@ export function makeModuleResolver(
     overridesFor: (s: { id: string; name: string; code: string }) => ResApiOverrides,
     opts?: { stubUnresolved?: boolean; dataFiles?: DataFileSource[]; packages?: PackageModules }
 ): { resolve: (spec: string) => any; resolveFrom: (importer: string) => (spec: string) => any; deps: Set<string> } {
-    const cache = new Map<string, any>();
-    const compiling = new Set<string>();
+    // a bundle's modules run once per entry run, with the entry's `tweak`: their
+    // registrations, params and stores are the entry's (so a module cached
+    // for another run would miss them); outside a run (a late import), once
+    const shared = { cache: new Map<string, any>(), compiling: new Set<string>() };
+    const perRun = new WeakMap<ScriptHandlers, typeof shared>();
+    const runOf = (): { modules: typeof shared; host?: TweakHost } => {
+        const top = collectors[collectors.length - 1];
+        const host = top && collectorOf.get(top)?.host;
+        if (!host) return { modules: shared };
+        let m = perRun.get(top);
+        if (!m) perRun.set(top, (m = { cache: new Map(), compiling: new Set() }));
+        return { modules: m, host };
+    };
     const deps = new Set<string>();
     // what each library imports, transitively: a second importer of a cached
     // library gets its deps too (callers clear `deps` between scripts)
@@ -387,6 +416,12 @@ export function makeModuleResolver(
         for (const f of loading) f.add(d);
     };
     const dataFiles = opts?.dataFiles || [];
+    const read = dataReader(dataFiles);
+    const bundles = new Map<string, Bundle | undefined>();
+    const bundleFor = (name: string) => {
+        if (!bundles.has(name)) bundles.set(name, bundleOf(name, read));
+        return bundles.get(name);
+    };
     const lookup = importResolver(
         scripts.map((s) => s.name),
         dataFiles.map((d) => d.path)
@@ -427,6 +462,14 @@ export function makeModuleResolver(
             addDep(spec);
             return loadPackage(spec);
         }
+        const bare = bareImport(importer, spec, read);
+        if (bare) {
+            addDep(bare.pkgPath);
+            if ("error" in bare) throw new PackageImportError(bare.error);
+            addDep(bare.url);
+            if (!finalUrl(opts?.packages, bare.url) && !opts?.packages?.failed?.[bare.url]) throw new PackageImportError(`cannot import "${spec}": not downloaded yet — save the tweak to download it`);
+            return loadPackage(bare.url, dependenciesOf(importer, read));
+        }
         const found = lookup(importer, spec);
         if (!found) {
             if (isDataSpec(spec)) {
@@ -434,13 +477,22 @@ export function makeModuleResolver(
                 throw new DataFileImportError(`cannot import "${spec}": ${path ? `no data file "${path}"` : "the path goes above the root folder"}`);
             }
             if (opts?.stubUnresolved) return makeStubModule();
+            const home = bundleFor(importer);
+            if (home && !/^[./]/.test(spec))
+                throw new Error(isNodeBuiltin(spec) ? builtinMessage(spec) : `cannot import "${spec}": add it to the "dependencies" in ${home.pkgPath}`);
             throw new Error(`unknown module "${spec}" — no script named "${spec.replace(/^\.\//, "").replace(/\.(ts|js)$/, "")}"`);
         }
+        const home = bundleFor(importer);
+        const target = found.kind === "data" ? found.path : found.name;
+        if (home && !target.toLowerCase().startsWith(home.root.toLowerCase()))
+            throw new BundleImportError(`cannot import "${spec}": "${target}" is outside the tweak's folder${home.root ? ` (${home.root})` : ""} — a tweak imports its own files, built-ins and its package.json dependencies`);
         if (found.kind === "data") {
             addDep(found.path);
             return parseDataFile(spec, dataFiles.find((d) => d.path === found.path)!);
         }
         const key = found.name;
+        const { modules, host } = runOf();
+        const { cache, compiling } = modules;
         if (cache.has(key)) {
             addDep(key);
             for (const d of libDeps.get(key) ?? []) addDep(d);
@@ -462,15 +514,19 @@ export function makeModuleResolver(
         // calls register into the importer's collector
         loading.push(own);
         try {
-            withCollector(createCollector(), { name: lib.name, remote: libOverrides.remote }, () =>
-                scriptFunction(js, lib.name)(
-                    makeShim(createOwner(defaultMeta(lib.name), libOverrides.paramValues), libOverrides, lib.name),
-                    makeForwardingConsole(libOverrides.logSink),
-                    resolveFrom(lib.name),
-                    moduleObj,
-                    moduleObj.exports
-                )
-            );
+            if (host) scriptFunction(js, lib.name)(host, makeForwardingConsole(libOverrides.logSink), resolveFrom(lib.name), moduleObj, moduleObj.exports);
+            else {
+                const shim = makeShim(createOwner(libOverrides.paramValues), libOverrides, lib.name);
+                withCollector(createCollector(), { name: lib.name, remote: libOverrides.remote, run: shim.run }, () =>
+                    scriptFunction(js, lib.name)(
+                        shim.host,
+                        makeForwardingConsole(libOverrides.logSink),
+                        resolveFrom(lib.name),
+                        moduleObj,
+                        moduleObj.exports
+                    )
+                );
+            }
         } catch (e) {
             loading.splice(loading.indexOf(own), 1);
             compiling.delete(key);
@@ -584,8 +640,8 @@ function makeForwardingConsole(sink?: ResApiOverrides["logSink"]): Console {
  * importer's top level belong to the importer). Empty = too late.
  */
 const collectors: ScriptHandlers[] = [];
-/** a collector's script: its name, its handles (`remote`) and its handler names (placeKeyer: one numbering per script run) */
-type CollectorOwner = { name: string; remote?: ResApiOverrides["remote"] };
+/** a collector's script: its name, its handles (`remote`), its stores, and its handler and store names (one numbering per script run) */
+type CollectorOwner = { name: string; remote?: ResApiOverrides["remote"]; run: StoreRun; host?: TweakHost };
 const collectorOf = new WeakMap<ScriptHandlers, CollectorOwner & { keyOf: ReturnType<typeof placeKeyer> }>();
 
 function withCollector<T>(c: ScriptHandlers, owner: CollectorOwner, run: () => T): T {
@@ -602,11 +658,11 @@ function routesOf(h: ScriptHandlers): RouteMeta[] {
     return [...h.onRequest, ...h.onResponseHeaders, ...h.replaceResponse, ...h.onResponseBody, ...h.onDocument, ...h.onOverlay].map((x) => x.route);
 }
 
-/** per-script state behind tt.metadata / tt.params / tt.defineParam */
-function createOwner(meta: ResMeta, storedValues?: Record<string, any>) {
+/** per-script state behind tweak.params */
+function createOwner(storedValues?: Record<string, any>) {
     let defs: ParamTree | undefined;
     const isChildObject = (v: unknown): boolean => !!v && typeof v === "object" && !Array.isArray(v) && !isStub(v);
-    const readGroup = (obj: Record<string, any>, where: string, prefix: string, leafOnly = false): { known: ParamTree; unknown: Record<string, any> } => {
+    const readGroup = (obj: Record<string, any>, where: string, prefix: string): { known: ParamTree; unknown: Record<string, any> } => {
         const known: ParamTree = {};
         const unknown: Record<string, any> = {};
         for (const [k, d] of Object.entries(obj)) {
@@ -620,13 +676,13 @@ function createOwner(meta: ResMeta, storedValues?: Record<string, any>) {
                 throw new Error(`${where}: parameter "${label}" needs a type (${PARAM_TYPES.join(", ")})`);
             }
             // A section object holds nested defs/sub-sections (no string/stub `type`); `{ type: { type: "enum", ... } }` is a section with a child named `type`.
-            const looksLikeSection = !leafOnly && !("type" in d && !isChildObject((d as any).type));
+            const looksLikeSection = !("type" in d && !isChildObject((d as any).type));
             if (looksLikeSection) {
                 const entries = Object.entries(d);
                 if (!entries.length || entries.some(([, v]) => !isStub(v) && !isChildObject(v))) {
                     throw new Error(`${where}: parameter "${label}" needs a type (${PARAM_TYPES.join(", ")})`);
                 }
-                const sub = readGroup(d, where, label, false);
+                const sub = readGroup(d, where, label);
                 if (Object.keys(sub.known).length) known[k] = sub.known;
                 if (Object.keys(sub.unknown).length) unknown[k] = sub.unknown;
                 continue;
@@ -651,21 +707,8 @@ function createOwner(meta: ResMeta, storedValues?: Record<string, any>) {
         return { known, unknown };
     };
     return {
-        metadata(raw: unknown) {
-            if (meta.metadata) throw new Error("tt.metadata: call it once");
-            if (isStub(raw)) return;
-            // fields from a stubbed import (meta-only compiles) are unknown here
-            const known = raw && typeof raw === "object" && !Array.isArray(raw) ? Object.fromEntries(Object.entries(raw).filter(([, v]) => !isStub(v))) : raw;
-            meta.metadata = readMetadata(known, "tt.metadata");
-            if (meta.metadata.description) meta.description = meta.metadata.description;
-        },
-        add(next: ParamTree, where: string, leafOnly = false): Record<string, any> {
-            const r = this.declare(next, where, leafOnly);
-            if (isStub(r)) return r;
-            return { ...parseParamTree(r.known, r.raw), ...r.unknown };
-        },
         /** `next` declared: its defs (with their parsers), raw values, and the stubbed ones' values */
-        declare(next: ParamTree, where: string, leafOnly = false): { known: ParamTree; raw: Record<string, any>; unknown: Record<string, any> } {
+        declare(next: ParamTree, where: string): { known: ParamTree; raw: Record<string, any>; unknown: Record<string, any> } {
             // defs that come from a stubbed import (meta-only compiles) are
             // unknown here, not invalid: skip them — their values read as
             // stubs — instead of failing the whole script
@@ -673,7 +716,7 @@ function createOwner(meta: ResMeta, storedValues?: Record<string, any>) {
             if (!next || typeof next !== "object" || Array.isArray(next)) throw new Error(`${where}: expected an object of parameter definitions`);
             // `known` keeps the parsers (to resolve values); `defs` — stored,
             // messaged, diffed — holds them stripped
-            const { known, unknown } = readGroup(next, where, "", leafOnly);
+            const { known, unknown } = readGroup(next, where, "");
             if (Object.keys(known).length) defs = { ...(defs || {}), ...serializableParamTree(known) };
             return { known, raw: resolveParamValues(known, storedValues), unknown };
         },
@@ -683,13 +726,12 @@ function createOwner(meta: ResMeta, storedValues?: Record<string, any>) {
     };
 }
 
-/** `tt.globalStore`, `tt.tabStore`, `tt.pageStore` (each name once, across all three) and `tt.siteStore` (its own names) for one compiled instance */
-function makeStores(overrides?: ResApiOverrides): {
-    globalStore: (name: string, initial: object, opts?: unknown) => object;
-    tabStore: (name: string, initial: object) => object;
-    pageStore: (name: string, initial: object) => object;
-    siteStore: (name: string, initial: object) => object;
-} {
+/**
+ * `tweak.globalStore`, `tweak.tabStore`, `tweak.pageStore` (each name once,
+ * across all three) and `tweak.siteStore` (its own names) for one compiled
+ * instance, by name (tweakStores names the unnamed ones)
+ */
+function makeStores(overrides?: ResApiOverrides): NamedStores {
     const names = new Map<string, string>();
     const siteNames = new Map<string, string>();
     let local: ReplicaHub | null = null;
@@ -697,58 +739,58 @@ function makeStores(overrides?: ResApiOverrides): {
         globalStore: (name, initial, opts) => {
             // save-time compile: arguments built from a stubbed import aren't known yet
             if (isStub(name) || isStub(initial) || isStub(opts)) return makeStubModule();
-            claimStoreName(names, "tt.globalStore", name, initial);
-            const persist = storePersist(name, opts);
+            claimStoreName(names, "tweak.globalStore", name, initial);
+            const persist = storePersist(name, opts, "tweak.globalStore");
             const out = overrides?.store ? overrides.store(name, initial, persist) : proxy(initial);
             const top = collectors[collectors.length - 1];
             if (top) (top as ScriptHandlers & { hasGlobalStore?: boolean }).hasGlobalStore = true;
-            names.set(name, "tt.globalStore");
+            names.set(name, "tweak.globalStore");
             return out;
         },
         tabStore: (name, initial) => {
-            if (isStub(name) || isStub(initial)) return makeStubModule();
-            claimStoreName(names, "tt.tabStore", name, initial);
+            if (isStub(initial)) return makeStubModule();
+            claimStoreName(names, "tweak.tabStore", name, initial);
             const out = overrides?.tabStore ? overrides.tabStore(name, initial) : (local ??= new ReplicaHub({ ctx: "local" })).tabStore("local", name, initial);
-            names.set(name, "tt.tabStore");
+            names.set(name, "tweak.tabStore");
             return out;
         },
         pageStore: (name, initial) => {
-            if (isStub(name) || isStub(initial)) return makeStubModule();
-            claimStoreName(names, "tt.pageStore", name, initial);
+            if (isStub(initial)) return makeStubModule();
+            claimStoreName(names, "tweak.pageStore", name, initial);
             const out = overrides?.pageStore ? overrides.pageStore(name, initial) : (local ??= new ReplicaHub({ ctx: "local" })).pageStore("local", name, initial);
-            names.set(name, "tt.pageStore");
+            names.set(name, "tweak.pageStore");
             return out;
         },
         siteStore: (name, initial) => {
-            if (isStub(name) || isStub(initial)) return makeStubModule();
-            claimStoreName(siteNames, "tt.siteStore", name, initial);
+            if (isStub(initial)) return makeStubModule();
+            claimStoreName(siteNames, "tweak.siteStore", name, initial);
             const out = overrides?.siteStore ? overrides.siteStore(name, initial) : unusableStore(NO_SITE_STORE);
-            siteNames.set(name, "tt.siteStore");
+            siteNames.set(name, "tweak.siteStore");
             return out;
         },
     };
 }
 
-/** `tt.fetch`: background code, or the overlay (with `pageFetch`) */
+/** `tweak.fetch`: background code, or the overlay (with `pageFetch`) */
 function makeFetch(overrides?: ResApiOverrides): (input: RequestInfo | URL, init?: WtFetchInit) => Promise<Response> {
     return async (input, init) => {
         const { init: rest, from, bypass } = splitFetchInit(init);
         const page = overrides?.pageFetch;
         if (page && from !== "background") return fromWireResponse(await page.fetch(await toWireRequest(input, rest, page.url), bypass));
-        if (from === "page") throw new Error('tt.fetch: from: "page" fetches as the page, which only an overlay (tt.onOverlay) can do — background code uses from: "background"');
+        if (from === "page") throw new Error(`tweak.fetch: from: "page" fetches as the page, which only an overlay (tweak.onOverlay) can do — background code uses from: "background"`);
         if (!overrides?.fetch) return fetch(input, { credentials: "include", ...rest });
         return fromWireResponse(await overrides.fetch(await toWireRequest(input, rest), bypass));
     };
 }
 
-/** `tt.storage.set("$store:…")` writes behind a store's back: warn (the store owns the key) */
+/** `tweak.storage.set("$store:…")` writes behind a store's back: warn (the store owns the key) */
 function guardStoreKeys(storage: { get(key: string): any; set(key: string, value: any): any }, overrides?: ResApiOverrides) {
     return {
         get: (key: string) => storage.get(key),
         set: (key: string, value: any) => {
             if (typeof key === "string" && key.startsWith("$store:")) {
-                const msg = `tt.storage.set("${key}"): that key is the persisted copy of tt.globalStore("${key.slice(7)}") — change the store instead (the store overwrites this on its next save)`;
-                if (overrides?.logSink) overrides.logSink("warn", "tt", msg);
+                const msg = `tweak.storage.set("${key}"): that key is the persisted copy of tweak.globalStore("${key.slice(7)}") — change the store instead (the store overwrites this on its next save)`;
+                if (overrides?.logSink) overrides.logSink("warn", "tweak.storage", msg);
                 else console.warn("[TangiTweak]", msg);
             }
             return storage.set(key, value);
@@ -756,9 +798,18 @@ function guardStoreKeys(storage: { get(key: string): any; set(key: string, value
     };
 }
 
-/** `module`: the script or library whose code this shim is given to */
-function makeShim(owner: ReturnType<typeof createOwner>, overrides: ResApiOverrides | undefined, module: string): any {
-    const register = (kind: RouteKind, api?: PlaceApi) => (route: unknown, fn: unknown, n?: number) => {
+/**
+ * `module`: the script or library whose code this shim is given to. Makes
+ * the host its code runs with (each file's `tweak`: the same internals —
+ * stores, params, handler collection) and its run (its stores, and how many
+ * unnamed ones each file made: its top level's, and late calls').
+ */
+function makeShim(owner: ReturnType<typeof createOwner>, overrides: ResApiOverrides | undefined, module: string): { host: TweakHost; run: StoreRun } {
+    const running = () => {
+        const top = collectors[collectors.length - 1];
+        return top && collectorOf.get(top);
+    };
+    const register = (kind: RouteKind, api?: PlaceApi, file?: string) => (route: unknown, fn: unknown) => {
         const name = api || kind;
         const top = collectors[collectors.length - 1];
         const c = top && collectorOf.get(top);
@@ -768,13 +819,13 @@ function makeShim(owner: ReturnType<typeof createOwner>, overrides: ResApiOverri
         // page/overlay registrations hand back an RPC handle; in the background it's inert
         const remote = (r?: RouteMeta) => (!api ? undefined : r && toRemote ? toRemote(r) : inertRemote(REMOTE_FROM_BACKGROUND));
         if (!top) {
-            const msg = `tt.${name} called after the script's top level finished — handlers must be registered synchronously at top level (not after await / in callbacks); ignored`;
-            if (overrides?.logSink) overrides.logSink("error", "tt", msg);
+            const msg = `tweak.${name} called after the script's top level finished — handlers must be registered synchronously at top level (not after await / in callbacks); ignored`;
+            if (overrides?.logSink) overrides.logSink("error", `tweak.${name}`, msg);
             else console.error("[TangiTweak]", msg);
             return remote();
         }
         if (typeof route === "function" && fn === undefined && !mentionsStub(route)) normalizeRoute(kind, route, 0, api); // throws the "first argument" error
-        if (typeof fn !== "function") throw new Error(`tt.${name}: second argument must be the handler function`);
+        if (typeof fn !== "function") throw new Error(`tweak.${name}: second argument must be the handler function`);
         const list = top[kind];
         // save-time compile with stubbed imports: route unknown until analyzed
         const r: RouteMeta = mentionsStub(route)
@@ -783,28 +834,28 @@ function makeShim(owner: ReturnType<typeof createOwner>, overrides: ResApiOverri
         const line = callerLine();
         if (line) r.line = line;
         if (api) {
-            const k = c!.keyOf(api, n, lib);
+            const k = c!.keyOf(api, lib);
             r.key = k.key;
             if (lib !== undefined) {
                 r.lib = lib;
                 r.n = k.n;
             } else if (api !== "onOverlay" && k.n !== r.index) r.n = k.n;
         }
+        if (lib === undefined && file !== undefined && file !== module) r.file = file;
         list.push({ fn: fn as HandlerFn, route: r });
         return remote(r);
     };
-    const place = (api: PlaceApi) => placeApi(register(placeKind(api), api));
-    return {
-        onRequest: register("onRequest"),
-        onResponseHeaders: register("onResponseHeaders"),
-        replaceResponse: register("replaceResponse"),
-        onResponseBody: register("onResponseBody"),
-        onSite: place("onSite"),
-        onPage: place("onPage"),
-        onOverlay: place("onOverlay"),
-        metadata: (m: unknown) => owner.metadata(m),
+    const run = storeRun(makeStores(overrides));
+    const host = tweakHost((file) => ({
+        onRequest: register("onRequest", undefined, file),
+        onResponseHeaders: register("onResponseHeaders", undefined, file),
+        replaceResponse: register("replaceResponse", undefined, file),
+        onResponseBody: register("onResponseBody", undefined, file),
+        onSite: register(placeKind("onSite"), "onSite", file),
+        onPage: register(placeKind("onPage"), "onPage", file),
+        onOverlay: register(placeKind("onOverlay"), "onOverlay", file),
         params: (defs: ParamTree) => {
-            const r = owner.declare(defs, "tt.params");
+            const r = owner.declare(defs, "tweak.params");
             if (isStub(r)) return r;
             const setParam = overrides?.setParam;
             return paramsProxy(r.known, r.raw, r.unknown, {
@@ -812,57 +863,32 @@ function makeShim(owner: ReturnType<typeof createOwner>, overrides: ResApiOverri
                 send: (k, v) => void setParam!(k, v).catch(() => {}),
             });
         },
-        defineParam: (name: string, def: ParamDef) => {
-            if (typeof name !== "string" || !name) throw new Error("tt.defineParam: first argument must be the parameter name");
-            return owner.add({ [name]: def }, "tt.defineParam", true)[name];
-        },
         storage: guardStoreKeys(overrides?.storage || {
             get: () => undefined,
             set: () => undefined,
         }, overrides),
-        ...makeStores(overrides),
         fetch: makeFetch(overrides),
-        log: (...args: any[]) => (overrides?.logSink ? overrides.logSink("info", "tt.log", formatLogArgs(args)) : console.log("[TangiTweak] tt.log:", ...args)),
+        log: (...args: any[]) => (overrides?.logSink ? overrides.logSink("info", "tweak.log", formatLogArgs(args)) : console.log("[TangiTweak] tweak.log:", ...args)),
         ...scriptEnv(),
-    };
-}
-
-
-/**
- * `js` with each `tt.onSite(` / `tt.onPage(` / `tt.onOverlay(` call
- * numbered per API in source order — `tt.onPage.k(2)(` — so the runtimes
- * name a handler by where it is in the source, not by which calls ran
- * before it (placeKeyer). Lines are kept; already-numbered calls stay.
- */
-export function keyPlaceCalls(js: string): string {
-    if (!/\bon(?:Site|Page|Overlay)\b/.test(js)) return js;
-    const src = codeOnly(js);
-    const counts: Record<string, number> = {};
-    let out = "";
-    let last = 0;
-    for (const m of src.matchAll(/(?<![\w$.])tt\s*\.\s*(onSite|onPage|onOverlay)\s*\(/g)) {
-        const n = (counts[m[1]] = (counts[m[1]] ?? -1) + 1);
-        const open = m.index! + m[0].length - 1;
-        out += js.slice(last, open) + `.k(${n})(`;
-        last = open + 1;
-    }
-    return out + js.slice(last);
+        ...tweakStores(file, run, () => running()?.run, isStub),
+    }));
+    return { host, run };
 }
 
 /** what an onSite handler uses that only trusted code may */
 export interface SiteUse {
-    /** 0-based: which `tt.onSite(` call of the source it is */
+    /** 0-based: which `tweak.onSite(` (or `tweak.onSite(`) call of the source it is */
     nth: number;
-    /** the stores it uses: the variable names (or `tt.pageStore` / `tt.tabStore` / `tt.globalStore`), by kind */
+    /** the stores it uses: the variable names (or `tweak.pageStore` / `tweak.tabStore` / …), by kind */
     pageStore: string[];
     tabStore?: string[];
     globalStore: string[];
-    /** the handles (variables bound to `tt.onSite` / `tt.onPage` / `tt.onOverlay`) it uses */
+    /** the handles (variables bound to `tweak.onSite` / `tweak.onPage` / `tweak.onOverlay`) it uses */
     handles: string[];
 }
 
 /**
- * Per `tt.onSite(` call, the stores (`tt.pageStore` / `tt.tabStore` / `tt.globalStore`)
+ * Per `tweak.onSite(` call, the stores (`tweak.pageStore` / `tweak.tabStore` / `tweak.globalStore`)
  * and handles its handler uses — by the variables they're bound to, or the
  * calls themselves — including in the outside functions it calls or
  * passes (scriptLint: scopes resolved, so a local of the same name doesn't
@@ -881,12 +907,12 @@ export function onSiteUses(code: string): SiteUse[] {
     return out;
 }
 
-/** each net route's registration call in the analysis: the first `tt.<api>(` on its line, once per call (a loop registering several routes from one call: warn once) */
+/** each net route's registration call in the analysis: the first `tweak.<api>(` on its line (the entry's own code: a module's routes aren't in it), once per call (a loop registering several routes from one call: warn once) */
 function netCalls(a: LintAnalysis, routes: RouteMeta[], keep: (r: RouteMeta) => boolean): { r: RouteMeta; call: NetAnalysis }[] {
     const out: { r: RouteMeta; call: NetAnalysis }[] = [];
     const seen = new Set<NetAnalysis>();
     for (const r of routes) {
-        if (!keep(r) || !r.line) continue;
+        if (!keep(r) || !r.line || r.file !== undefined) continue;
         const call = a.nets.find((n) => n.api === (r.api || r.kind) && n.line === r.line);
         if (!call || seen.has(call)) continue;
         seen.add(call);
@@ -914,7 +940,7 @@ export function rulesProblems(code: string, routes: RouteMeta[]): string[] {
 
 /**
  * Network handlers (by their registration line, as rulesProblems) that use
- * `tt.siteStore` — directly or through a variable bound to it:
+ * `tweak.siteStore` — directly or through a variable bound to it:
  * "onRequest #N: uses `x` — …" (an error in the Problems view). They have
  * no page, so it throws there.
  */
@@ -929,7 +955,7 @@ function netSiteStoreProblems(a: LintAnalysis, routes: RouteMeta[]): string[] {
  * Warnings ("onSite #N: …", Problems view) for onSite handlers that use a
  * store or a handle: in the site's world stores throw and handle calls
  * throw (SiteCannotCallError). Errors for network handlers that use
- * `tt.siteStore` (which needs a page). And scriptLint's static selector and
+ * `tweak.siteStore` (which needs a page). And scriptLint's static selector and
  * shortcut checks, as "line N (error|warning): …".
  */
 export function siteProblems(code: string, routes: RouteMeta[]): string[] {
@@ -942,9 +968,12 @@ export function siteProblems(code: string, routes: RouteMeta[]): string[] {
     const out: string[] = net ? netSiteStoreProblems(a, routes) : [];
     const uses = site ? onSiteUses(code) : [];
     const names = (n: string[]) => n.map((x) => `\`${x}\``).join(", ");
+    // the code's own calls, in order (a module's, run with its tweak, are numbered with them)
+    let nth = 0;
     for (const r of uses.length ? routes : []) {
-        if (r.kind !== "onDocument" || placeOf(r) !== "onSite" || r.lib !== undefined) continue;
-        const u = uses.find((u) => u.nth === (r.n ?? r.index));
+        if (r.kind !== "onDocument" || placeOf(r) !== "onSite" || r.lib !== undefined || r.file !== undefined) continue;
+        const i = nth++;
+        const u = uses.find((u) => u.nth === i);
         if (!u) continue;
         const at = `${routeLabel(r)}: `;
         const stores = [...u.pageStore, ...(u.tabStore ?? []), ...u.globalStore];

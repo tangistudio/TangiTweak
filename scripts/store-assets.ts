@@ -230,14 +230,10 @@ const OVERLAY_ICON_SVG = `<svg viewBox="0 0 16 16" fill="none" xmlns="http://www
   <rect x="8.2" y="8.2" width="3.3" height="2.8" rx="0.6" fill="#FF8E49"/>
 </svg>`;
 
-const MOCK_USERS_CODE = `import limits from "./rate-limits.json";
+const MOCK_USERS_CODE = `import { tweak } from "tangitweak";
+import limits from "./rate-limits.json";
 
-tt.metadata({
-    description: "Mock user profiles and rate-limit headers across environments",
-    icon: "./icon.svg",
-});
-
-const cfg = tt.params({
+const cfg = tweak.params({
     environment: {
         target: { type: "enum", choices: ["local", "staging", "prod"], default: "staging" },
         role: { type: "enum", choices: ["admin", "staff", "viewer"], default: "admin" },
@@ -248,7 +244,7 @@ const cfg = tt.params({
     },
 });
 
-tt.replaceResponse({ url: "*://acme-cloud.io/api/v1/users/:id", strategy: "page" }, (ctx) => ({
+tweak.replaceResponse({ url: "*://acme-cloud.io/api/v1/users/:id", strategy: "page" }, (ctx) => ({
     id: Number(ctx.groups.id),
     name: "Alex Rivera",
     role: cfg.environment.role,
@@ -256,7 +252,7 @@ tt.replaceResponse({ url: "*://acme-cloud.io/api/v1/users/:id", strategy: "page"
     rateLimitRpm: limits.rpm,
 }));
 
-tt.onRequest(
+tweak.onRequest(
     { url: ["*://acme-cloud.io/api/v1/orders", "*://acme-cloud.io/api/v1/feature-flags", "*://acme-cloud.io/api/v1/health"], strategy: "rules" },
     () => ({
         headers: { set: { "x-tangitweak-env": cfg.environment.target } },
@@ -264,12 +260,9 @@ tt.onRequest(
 );
 `;
 
-const TRANSFORM_ORDERS_CODE = `tt.metadata({
-    description: "Rewrite /api/v1/orders JSON payloads in flight",
-    icon: "./icon.svg",
-});
+const TRANSFORM_ORDERS_CODE = `import { tweak } from "tangitweak";
 
-tt.onResponseBody({ url: "*://acme-cloud.io/api/v1/orders", strategy: "page" }, (_ctx, body) => {
+tweak.onResponseBody({ url: "*://acme-cloud.io/api/v1/orders", strategy: "page" }, (_ctx, body) => {
     const text = typeof body === "string" ? body : new TextDecoder().decode(body);
     const data = JSON.parse(text);
     return JSON.stringify(
@@ -288,12 +281,9 @@ tt.onResponseBody({ url: "*://acme-cloud.io/api/v1/orders", strategy: "page" }, 
 });
 `;
 
-const CORS_CODE = `tt.metadata({
-    description: "Add permissive CORS headers to acme-cloud.io API responses",
-    icon: "./icons/cors.svg",
-});
+const CORS_CODE = `import { tweak } from "tangitweak";
 
-tt.onResponseHeaders(
+tweak.onResponseHeaders(
     { url: ["*://acme-cloud.io/api/v1/orders", "*://acme-cloud.io/api/v1/feature-flags", "*://acme-cloud.io/api/v1/health"], strategy: "rules" },
     () => ({
         headers: {
@@ -306,20 +296,16 @@ tt.onResponseHeaders(
 );
 `;
 
-const OVERLAY_CODE = `import { useSnapshot } from "valtio";
+const OVERLAY_CODE = `import { tweak } from "tangitweak";
+import { useSnapshot } from "valtio";
 
-tt.metadata({
-    description: "Floating React inspector on acme-cloud.io",
-    icon: "./icons/overlay.svg",
-});
-
-const state = tt.globalStore("acme-inspector", {
+const state = tweak.globalStore("acme-inspector", {
     mockActive: true,
     env: "staging" as "local" | "staging" | "prod",
     hits: 4,
 });
 
-tt.onOverlay("*://acme-cloud.io/*", (ctx) => {
+tweak.onOverlay("*://acme-cloud.io/*", (ctx) => {
     function Inspector() {
         const snap = useSnapshot(state);
         return (
@@ -604,7 +590,9 @@ try {
         <span class="cw-file"><span class="ts-badge">TS</span>api-kit/mock-users.ts</span>
         <span class="saved-pill">✓ Saved · Hot reload</span>
       </div>
-      <pre><span class="kw">const</span> cfg = tt.<span class="fn">params</span>({
+      <pre><span class="kw">import</span> { tweak } <span class="kw">from</span> <span class="str">"tangitweak"</span>;
+
+<span class="kw">const</span> cfg = tweak.<span class="fn">params</span>({
   <span class="prop">env</span>: {
     <span class="prop">type</span>: <span class="str">"enum"</span>,
     <span class="prop">choices</span>: [<span class="str">"staging"</span>, <span class="str">"local"</span>, <span class="str">"prod"</span>],
@@ -612,7 +600,7 @@ try {
   },
 });
 
-tt.<span class="fn">replaceResponse</span>(<span class="str">"*://acme-cloud.io/api/v1/users/:id"</span>, (ctx) =&gt; ({
+tweak.<span class="fn">replaceResponse</span>(<span class="str">"*://acme-cloud.io/api/v1/users/:id"</span>, (ctx) =&gt; ({
   <span class="prop">id</span>: <span class="fn">Number</span>(ctx.groups.id),
   <span class="prop">name</span>: <span class="str">"Alex Rivera"</span>,
   <span class="prop">role</span>: <span class="str">"admin"</span>,

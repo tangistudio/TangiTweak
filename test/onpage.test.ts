@@ -1,14 +1,15 @@
 import { describe, it, expect } from "vitest";
-import { compileScript } from "../src/shared/compile";
-import { makePageShim, domHandlersFor } from "../src/shared/pageShim";
+import { compileScript, toRunnableJs } from "../src/shared/compile";
+import { makePageShim, domHandlersFor, type PageShim } from "../src/shared/pageShim";
+import { scriptFunction } from "../src/shared/scriptFn";
 import { isNetKind, normalizeRoute, pageWorld, routeLabel } from "../src/shared/route";
 import { inertRemote, SITE_NO_STORES, SiteCannotCallError } from "../src/shared/remote";
 
 const shim = (world?: "page" | "isolated") => makePageShim({ params: {}, log: () => {}, storage: { get: () => undefined, set: () => undefined }, world });
 
-describe("tt.onPage", () => {
+describe("tweak.onPage", () => {
     it("registers kind onDocument, labelled onPage", () => {
-        const c = compileScript(`tt.onPage("*://a.com/*", () => {});\ntt.onPage("*://b.com/*", () => {});`);
+        const c = compileScript(`import { tweak } from "tangitweak"; tweak.onPage("*://a.com/*", () => {});\ntweak.onPage("*://b.com/*", () => {});`);
         expect(c.error).toBeNull();
         const [a, b] = c.handlers.onDocument.map((h) => h.route);
         expect(a.kind).toBe("onDocument");
@@ -17,8 +18,8 @@ describe("tt.onPage", () => {
         expect([routeLabel(a), routeLabel(b)]).toEqual(["onPage #1", "onPage #2"]);
     });
 
-    it("tt.onSite runs in the site's world, tt.onPage in the isolated world", () => {
-        const c = compileScript(`tt.onPage("*", () => {});\ntt.onSite("*", () => {});\ntt.onPage({ url: "*", when: "document_idle" }, () => {});`);
+    it("tweak.onSite runs in the site's world, tweak.onPage in the isolated world", () => {
+        const c = compileScript(`import { tweak } from "tangitweak"; tweak.onPage("*", () => {});\ntweak.onSite("*", () => {});\ntweak.onPage({ url: "*", when: "document_idle" }, () => {});`);
         expect(c.error).toBeNull();
         const [iso, site, idle] = c.handlers.onDocument.map((h) => h.route);
         expect([iso, site, idle].map(pageWorld)).toEqual(["isolated", "page", "isolated"]);
@@ -29,7 +30,7 @@ describe("tt.onPage", () => {
     });
 
     it("returns a handle whose calls reject in the background", async () => {
-        const c = compileScript(`module.exports.h = tt.onPage("*", () => ({ f: () => 1 }));`);
+        const c = compileScript(`import { tweak } from "tangitweak"; module.exports.h = tweak.onPage("*", () => ({ f: () => 1 }));`);
         expect(c.error).toBeNull();
         const h = c.exports.h;
         expect(h.then).toBeUndefined();
@@ -37,8 +38,8 @@ describe("tt.onPage", () => {
     });
 });
 
-describe("tt.onOverlay", () => {
-    const code = [`tt.onSite("*", () => {});`, `tt.onOverlay("*", () => {});`, `tt.onOverlay({ url: "*", when: "document_idle" }, () => {});`, `tt.onPage("*", () => {});`].join("\n");
+describe("tweak.onOverlay", () => {
+    const code = [`import { tweak } from "tangitweak"; tweak.onSite("*", () => {});`, `tweak.onOverlay("*", () => {});`, `tweak.onOverlay({ url: "*", when: "document_idle" }, () => {});`, `tweak.onPage("*", () => {});`].join("\n");
 
     it("registers overlay handlers, keyed and labelled apart from page handlers", () => {
         const c = compileScript(code);
@@ -56,44 +57,52 @@ describe("tt.onOverlay", () => {
 
 
 describe("page shim worlds", () => {
-    const src = (tt: any) => {
-        tt.onSite("*://a.com/*", () => "site");
-        tt.onPage("*://a.com/*", () => "iso");
-        tt.onOverlay("*://a.com/*", () => "overlay");
-        tt.onSite("*://a.com/*", () => "site 2");
+    /** the `tweak` file main.ts's code gets from a page shim */
+    const tw = (s: PageShim): any => s.host.module("main.ts").tweak;
+    const src = (t: any) => {
+        t.onSite("*://a.com/*", () => "site");
+        t.onPage("*://a.com/*", () => "iso");
+        t.onOverlay("*://a.com/*", () => "overlay");
+        t.onSite("*://a.com/*", () => "site 2");
     };
 
     it("the site's world collects only onSite handlers, keyed like the background", () => {
         const s = shim();
-        src(s.tt);
+        src(tw(s));
         expect(s.dom.map((d) => d.fn({}))).toEqual(["site", "site 2"]);
         expect(s.dom.map((d) => [d.h, d.route.index])).toEqual([
-            ["onSite:~0", 0],
-            ["onSite:~1", 2],
+            ["onSite:0", 0],
+            ["onSite:1", 2],
         ]);
     });
 
     it("the isolated world collects only onPage handlers", () => {
         const s = shim("isolated");
-        src(s.tt);
-        expect(s.dom.map((d) => [d.h, d.fn({})])).toEqual([["onPage:~0", "iso"]]);
+        src(tw(s));
+        expect(s.dom.map((d) => [d.h, d.fn({})])).toEqual([["onPage:0", "iso"]]);
         expect(domHandlersFor(s.dom, "https://b.com/").length).toBe(0);
     });
 
-    it("the compiler's keys win over call order", () => {
-        const s = shim("isolated");
-        s.tt.onPage.k(3)("*", () => 0);
-        s.tt.onPage("*", () => 1);
-        s.tt.onPage.k(3)("*", () => 2);
-        expect(s.dom.map((d) => d.h)).toEqual(["onPage:3", "onPage:~1", "onPage:3#1"]);
+    it("keys are each API's registration order, the same as the background's for the same source", () => {
+        const code = [`import { tweak } from "tangitweak";`, `tweak.onSite("*", () => 0);`, `for (const u of ["*://a/*", "*://b/*"]) tweak.onPage(u, () => 1);`, `tweak.onSite("*", () => 2);`].join("\n");
+        const c = compileScript(code, { name: "main.ts" });
+        expect(c.error).toBeNull();
+        for (const world of ["page", "isolated"] as const) {
+            const s = shim(world);
+            const m = { exports: {} };
+            s.top(() => scriptFunction(toRunnableJs(code), "main.ts")(s.host, console, () => ({}), m, m.exports));
+            const bg = c.handlers.onDocument.map((h) => h.route.key).filter((k): k is string => !!k && k.startsWith(world === "page" ? "onSite" : "onPage"));
+            expect(s.dom.map((d) => d.h)).toEqual(bg);
+        }
+        expect(c.handlers.onDocument.map((h) => h.route.key)).toEqual(["onSite:0", "onPage:0", "onPage:1", "onSite:1"]);
     });
 
     it("in the site's world handles throw SiteCannotCallError where they're called, and are reported", () => {
         const seen: Error[] = [];
         const s = makePageShim({ params: {}, log: () => {}, storage: { get: () => undefined, set: () => undefined }, onSiteCall: (e) => seen.push(e) });
-        const h = s.tt.onOverlay("*", () => {});
+        const h = tw(s).onOverlay("*", () => {});
         expect(() => h.ping()).toThrow(SiteCannotCallError);
-        expect(() => s.tt.onSite("*", () => {}).ping()).toThrow(/onSite code can't call handles/);
+        expect(() => tw(s).onSite("*", () => {}).ping()).toThrow(/onSite code can't call handles/);
         expect(seen.map((e) => e.name)).toEqual(["SiteCannotCallError", "SiteCannotCallError"]);
     });
 
@@ -107,21 +116,21 @@ describe("page shim worlds", () => {
             world: "isolated",
             call: (api, key, route) => ((asked.push(`${api}/${key}`), routes.push(route), { ping: async () => "pong" }) as any),
         });
-        await expect(iso.tt.onOverlay("*", () => {}).ping()).resolves.toBe("pong");
-        iso.tt.onSite("*://a.test/*", () => {});
-        expect(asked).toEqual(["onOverlay/onOverlay:~0", "onSite/onSite:~0"]);
+        await expect(tw(iso).onOverlay("*", () => {}).ping()).resolves.toBe("pong");
+        tw(iso).onSite("*://a.test/*", () => {});
+        expect(asked).toEqual(["onOverlay/onOverlay:0", "onSite/onSite:0"]);
         expect(routes.map((r) => r.url)).toEqual([["*"], ["*://a.test/*"]]);
-        await expect(shim("isolated").tt.onOverlay("*", () => {}).ping()).rejects.toThrow();
+        await expect(tw(shim("isolated")).onOverlay("*", () => {}).ping()).rejects.toThrow();
     });
 
     it("store can be declared at top level but not used; fetch rejects", async () => {
-        const s = shim().tt.globalStore("x", { n: 1 });
+        const s = tw(shim()).globalStore("x", { n: 1 });
         expect(s.then).toBeUndefined();
-        expect(() => s.n).toThrow(/tt\.globalStore/);
-        await expect(shim().tt.fetch("/")).rejects.toThrow(/tt\.fetch/);
+        expect(() => s.n).toThrow(/tweak\.globalStore/);
+        await expect(tw(shim()).fetch("/")).rejects.toThrow(/tweak\.fetch/);
     });
 
-    it("isolated code gets the stores it's given; the site's world never does", () => {
+    it("isolated code gets the stores it's given (unnamed ones named file#n); the site's world never does", () => {
         const made: string[] = [];
         const stores = {
             store: (name: string, initial: object, persist: boolean | string[]) => (made.push(`g:${name}:${JSON.stringify(persist)}`), { ...initial }),
@@ -129,16 +138,16 @@ describe("page shim worlds", () => {
             pageStore: (name: string, initial: object) => (made.push(`p:${name}`), { ...initial }),
         };
         const iso = makePageShim({ params: {}, log: () => {}, storage: { get: () => undefined, set: () => undefined }, world: "isolated", stores });
-        expect(iso.tt.globalStore("a", { n: 1 }, { persist: ["n"] }).n).toBe(1);
-        expect(iso.tt.pageStore("b", { m: 2 }).m).toBe(2);
-        expect(iso.tt.tabStore("d", { k: 3 }).k).toBe(3);
-        expect(made).toEqual(['g:a:["n"]', "p:b", "t:d"]);
-        expect(() => iso.tt.pageStore("a", {})).toThrow(/already has a store named "a"/);
-        expect(() => iso.tt.tabStore("b", {})).toThrow(/already has a store named "b"/);
-        expect(() => iso.tt.globalStore("c", [])).toThrow(/initial must be an object/);
+        expect(tw(iso).globalStore("a", { n: 1 }, { persist: ["n"] }).n).toBe(1);
+        expect(tw(iso).pageStore({ m: 2 }).m).toBe(2);
+        expect(tw(iso).tabStore({ k: 3 }).k).toBe(3);
+        expect(made).toEqual(['g:a:["n"]', "p:main.ts#0", "t:main.ts#1"]);
+        expect(() => tw(iso).globalStore("a", {})).toThrow(/a store ID is used once per tweak/);
+        expect(() => tw(iso).globalStore("A", {})).toThrow(/a store's ID is lowercase/);
+        expect(() => tw(iso).globalStore("c", [])).toThrow(/initial must be an object/);
         const site = makePageShim({ params: {}, log: () => {}, storage: { get: () => undefined, set: () => undefined }, world: "page", stores });
-        expect(() => site.tt.pageStore("b", { m: 2 }).m).toThrow(SITE_NO_STORES);
-        expect(() => site.tt.tabStore("d", { k: 3 }).k).toThrow(SITE_NO_STORES);
+        expect(() => tw(site).pageStore({ m: 2 }).m).toThrow(SITE_NO_STORES);
+        expect(() => tw(site).tabStore({ k: 3 }).k).toThrow(SITE_NO_STORES);
         expect(made.length).toBe(3);
     });
 });

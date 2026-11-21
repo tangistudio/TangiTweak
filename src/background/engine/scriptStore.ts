@@ -21,7 +21,7 @@ export interface Script {
     updatedAt: number;
     error: string | null;
     meta: ResMeta;
-    /** param definitions from tt.params / tt.defineParam (captured at save time) */
+    /** param definitions from tweak.params (captured at save time) */
     paramDefs?: ParamTree;
 }
 
@@ -127,7 +127,7 @@ async function saveScriptsBatchNow(partials: (Pick<Script, "id" | "code"> & Part
         targetIds.push(partial.id);
     }
 
-    await ensurePackages(partials.map((p) => p.code), { retry: true });
+    await ensurePackages(partials.map((p) => ({ name: byId[p.id].meta.name, code: p.code })), { retry: true });
     const toCompile = new Set<string>(targetIds);
     const allPlain = plain(byId);
     for (const partial of partials) {
@@ -165,7 +165,7 @@ async function saveScriptsBatchNow(partials: (Pick<Script, "id" | "code"> & Part
         if (folders) items[FOLDERS_KEY] = folders;
     }
     await storageSet(items);
-    void prunePackages(Object.values(byId).map((x) => x.code));
+    void prunePackages(plain(byId));
     for (const [id, prev] of prevById) {
         const cur = byId[id];
         if (prev && prev.meta.name !== cur.meta.name) {
@@ -196,7 +196,7 @@ async function saveScriptNow(partial: Pick<Script, "id" | "code"> & Partial<Scri
     // cannot eval) — see compileHost.
     const allValues = await loadAllParamValues();
     // download the package URLs it imports (a save retries failed ones)
-    const downloaded = await ensurePackages([partial.code], { retry: true });
+    const downloaded = await ensurePackages([{ name: name ?? "", code: partial.code }], { retry: true });
     const compiled = await compileForStorage(partial.code, name, allValues[partial.id], { id: partial.id, scripts: plain(byId), paramValues: allValues });
     // MV3 sandbox RPC failure (host unavailable): keep the previous
     // meta/paramDefs rather than corrupting an active script into a
@@ -230,9 +230,9 @@ async function saveScriptNow(partial: Pick<Script, "id" | "code"> & Partial<Scri
     }
     // a package download (or failure) changes what the other scripts importing it compile to
     if (downloaded) {
-        const urls = packageUrlsIn([script.code]);
+        const urls = packageUrlsIn([{ name: script.meta.name, code: script.code }]);
         for (const x of Object.values(byId)) {
-            if (x.id === script.id || ![...packageUrlsIn([x.code])].some((u) => urls.has(u))) continue;
+            if (x.id === script.id || ![...packageUrlsIn([{ name: x.meta.name, code: x.code }])].some((u) => urls.has(u))) continue;
             for (const id of [x.id, ...dependantsOf(x.meta.name, plain(byId))]) if (id !== script.id && !importers.includes(id)) importers.push(id);
         }
     }
@@ -246,7 +246,7 @@ async function saveScriptNow(partial: Pick<Script, "id" | "code"> & Partial<Scri
         if (folders) items[FOLDERS_KEY] = folders;
     }
     await storageSet(items);
-    if (prev && prev.code !== script.code) void prunePackages(Object.values(byId).map((x) => x.code));
+    if (prev && prev.code !== script.code) void prunePackages(plain(byId));
     if (prev && prev.meta.name !== script.meta.name) {
         for (const fn of renameListeners) await fn(prev.meta.name, script.meta.name);
     }
@@ -330,7 +330,7 @@ export async function deleteScript(id: string): Promise<void> {
         [ORDER_KEY]: order.filter((x) => x !== id),
         ...(folders ? { [FOLDERS_KEY]: folders } : {}),
     });
-    void prunePackages(Object.values(byId).map((x) => x.code));
+    void prunePackages(plain(byId));
     notify();
 }
 
@@ -407,6 +407,16 @@ function dataFileClash(path: string, data: { [id: string]: DataFile }, folders: 
     return "";
 }
 
+/** the scripts a data file's change recompiles: its importers and, for a package.json, every script in its folder (their bundle) */
+function dataDependants(path: string, scripts: { id: string; name: string; code: string }[]): string[] {
+    const out = dependantsOf(path, scripts, "data");
+    if (/(^|\/)package\.json$/i.test(path)) {
+        const root = path.slice(0, -"package.json".length).toLowerCase();
+        for (const s of scripts) if (s.name.toLowerCase().startsWith(root) && !out.includes(s.id)) out.push(s.id);
+    }
+    return out;
+}
+
 /** after data files changed: the snapshot, the importers' meta, storage, errors, listeners */
 async function commitDataFiles(byId: { [id: string]: Script }, data: { [id: string]: DataFile }, importers: string[], extra: Record<string, any> = {}): Promise<void> {
     setDataFilesSnapshot(data);
@@ -440,8 +450,8 @@ export async function saveDataFile(partial: { id?: string; path?: string; text?:
     if (clash) throw new Error(clash);
     const file: DataFile = { id, path, text, savedAt: Date.now() };
     data[id] = file;
-    const importers = dependantsOf(path, plain(byId), "data");
-    if (prev && prev.path !== path) for (const x of dependantsOf(prev.path, plain(byId), "data")) if (!importers.includes(x)) importers.push(x);
+    const importers = dataDependants(path, plain(byId));
+    if (prev && prev.path !== path) for (const x of dataDependants(prev.path, plain(byId))) if (!importers.includes(x)) importers.push(x);
     const kept = prev && folderOf(prev.path) !== folderOf(path) ? await keptFolders([prev.path]) : null;
     await commitDataFiles(byId, data, importers, kept ? { [FOLDERS_KEY]: kept } : {});
     return file;
@@ -455,7 +465,7 @@ export async function deleteDataFile(id: string): Promise<void> {
     if (!gone) return;
     delete data[id];
     const kept = await keptFolders([gone.path]);
-    await commitDataFiles(byId, data, dependantsOf(gone.path, plain(byId), "data"), kept ? { [FOLDERS_KEY]: kept } : {});
+    await commitDataFiles(byId, data, dataDependants(gone.path, plain(byId)), kept ? { [FOLDERS_KEY]: kept } : {});
 }
 
 /** add an (empty) folder; its missing parents are implied. Throws on an invalid path or a clash with a data file. */
@@ -564,7 +574,7 @@ export async function deleteFolder(path: string): Promise<{ scripts: number; dat
         [DATA_FILES_KEY]: data,
         [FOLDERS_KEY]: folders,
     });
-    if (goneScripts.length) void prunePackages(Object.values(byId).map((x) => x.code));
+    if (goneScripts.length) void prunePackages(plain(byId));
     notify();
     return { scripts: goneScripts.length, dataFiles: goneData.length, folders: subfolders.length };
 }
@@ -577,7 +587,7 @@ export async function scriptStorageGet(scriptId: string, key: string): Promise<a
     return (obj[SCRIPT_STORE_PREFIX + scriptId] || {})[key];
 }
 
-/** every key of a script's storage (tt.storage and the `$store:` persistence) */
+/** every key of a script's storage (tweak.storage and the `$store:` persistence) */
 export async function scriptStorageAll(scriptId: string): Promise<Record<string, any>> {
     const obj = await storageGet(SCRIPT_STORE_PREFIX + scriptId);
     return obj[SCRIPT_STORE_PREFIX + scriptId] || {};
@@ -600,7 +610,7 @@ export async function scriptStorageDelete(scriptId: string, key: string): Promis
     await storageSet({ [storeKey]: data });
 }
 
-// ---- per-script parameter values (tt.params / tt.defineParam) ----
+// ---- per-script parameter values (tweak.params) ----
 const PARAMS_KEY = "resParams";
 
 /** Load all stored param values: { scriptId: { key: value } }. */

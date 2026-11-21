@@ -1,9 +1,9 @@
 /**
- * Which page and tab the running handler call belongs to, for `tt.pageStore`
- * and `tt.tabStore`.
+ * Which page and tab the running handler call belongs to, for `tweak.pageStore`
+ * and `tweak.tabStore`.
  *
- * One compiled script serves every tab, so its `tt.pageStore` and
- * `tt.tabStore` proxies ask here which copy to use. The runner wraps each
+ * One compiled script serves every tab, so its `tweak.pageStore` and
+ * `tweak.tabStore` proxies ask here which copy to use. The runner wraps each
  * handler call in `withPage`; the context is known only during the call's
  * synchronous part — after the handler's first `await` it runs from a
  * microtask, outside any `withPage`, and `currentPage()` / `currentTab()`
@@ -14,7 +14,7 @@ import { tabScopeOfPage } from "./storeOps";
 
 /** the "page" of a strategy "rules" probe run: rules are built once, not per document */
 export const RULES_PAGE = "\u0000rules";
-/** the "tab" of a strategy "rules" base probe run: evaluates `tt.tabStore` against `initial` */
+/** the "tab" of a strategy "rules" base probe run: evaluates `tweak.tabStore` against `initial` */
 export const RULES_TAB = "\u0000rules-tab";
 
 export interface RulesProbeReads {
@@ -64,7 +64,7 @@ export function noteRuleCondition(): void {
     if (probeReads) probeReads.conditional = true;
 }
 
-/** record that the running `rules` probe read `tt.tabStore(name)` */
+/** record that the running `rules` probe read `tweak.tabStore(name)` */
 export function noteRuleTabStore(name: string): void {
     if (probeReads) {
         probeReads.conditional = true;

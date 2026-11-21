@@ -24,7 +24,7 @@ export type StoreOp = ["set", (string | number)[], Json] | ["del", (string | num
 /** which top-level fields of a store persist across browser restarts */
 export type StorePersist = boolean | string[];
 
-/** `tt.fetch` request as it crosses a link (the body as bytes) */
+/** `tweak.fetch` request as it crosses a link (the body as bytes) */
 export interface WireRequest {
     url: string;
     method: string;
@@ -37,7 +37,7 @@ export interface WireRequest {
     referrerPolicy?: ReferrerPolicy;
 }
 
-/** `tt.fetch` response as it crosses a link */
+/** `tweak.fetch` response as it crosses a link */
 export interface WireResponse {
     status: number;
     statusText: string;
@@ -57,11 +57,11 @@ export interface StoreSnapshot {
  * messages. `call`, `push`, `handle` and `on` are typed over it.
  */
 export interface WireOps {
-    /** a context ran `tt.globalStore(name, initial)` (or `tt.pageStore` / `tt.tabStore`: `scope: "page" | "tab"`, the template of every copy) */
+    /** a context ran `tweak.globalStore(name, initial)` (or `tweak.pageStore` / `tweak.tabStore`: `scope: "page" | "tab"`, the template of every copy) */
     "store.declare": { push: { name: string; initial: Json; persist: StorePersist; scope?: "page" | "tab" } };
     /**
      * The owner's snapshot when `rev` is stale or missing; `ops` = recently
-     * applied op ids. `page`: that page's copy of a `tt.pageStore` (the
+     * applied op ids. `page`: that page's copy of a `tweak.pageStore` (the
      * same on every store op).
      */
     "store.sub": { req: { name: string; rev?: number; page?: string }; res: { rev: number; data?: Json; ops: string[] } };
@@ -71,12 +71,12 @@ export interface WireOps {
     "store.patch": { push: { name: string; rev: number; ops: StoreOp[]; op?: string; page?: string } };
     /** the owner refused a `store.set` */
     "store.reject": { push: { name: string; op: string; reason: string; page?: string } };
-    /** a page ended (navigation, tab closed): its `tt.pageStore` copies are gone */
+    /** a page ended (navigation, tab closed): its `tweak.pageStore` copies are gone */
     "store.drop": { push: { page: string } };
     /** the current stores of some scripts (primes a context before its scripts compile) */
     /** (page copies are keyed `name + "\u0000" + page`, see `storeKey`) */
     "store.init": { req: { scripts: string[] }; res: { [scriptId: string]: { [name: string]: StoreSnapshot } } };
-    /** `tt.fetch(..., { from: "background" })` */
+    /** `tweak.fetch(..., { from: "background" })` */
     fetch: { req: { request: WireRequest; bypass: boolean; tabId?: number }; res: WireResponse };
     /** register a one-shot bypass (§3.5): the next matching request skips every script */
     "bypass.add": { req: { tabId: number; method: string; url: string }; res: {} };
@@ -94,7 +94,7 @@ export interface WireOps {
     "overlay.closed": { push: {} };
     /** bridge/preview → overlay frame: the script changed; recompile in place */
     "overlay.update": { push: OverlayInit };
-    /** L3: `tt.fetch(…, { from: "page" })` — the bridge fetches, with the page's cookies */
+    /** L3: `tweak.fetch(…, { from: "page" })` — the bridge fetches, with the page's cookies */
     pagefetch: { req: { request: WireRequest; bypass: boolean }; res: WireResponse };
     /** L3: the page reached a `when` phase */
     when: { push: { phase: "document_start" | "document_end" | "document_idle" } };
@@ -106,7 +106,7 @@ export interface WireOps {
     log: { push: { level: "debug" | "info" | "warn" | "error"; msg: string } };
     /** L3: the page navigated in place (history API, hash) */
     nav: { push: { url: string } };
-    /** L3: the overlay's `tt.storage` (the bridge relays it for this script) */
+    /** L3: the overlay's `tweak.storage` (the bridge relays it for this script) */
     "storage.get": { req: { key: string }; res: { value: any } };
     "storage.set": { req: { key: string; value: any }; res: {} };
     /** L3: the code assigned a param (`lib`: an imported library's) — saved like a ⚙ change */
@@ -131,7 +131,7 @@ export interface WireOps {
     "frameKeys.unwatch": { push: { token: string } };
     /** child → background → parent: the keys were pressed */
     "frameKeys.hit": { push: { token: string } };
-    /** L3: the overlay's `tt.siteStore` mirrors → the site's world (the bridge relays them for this script) */
+    /** L3: the overlay's `tweak.siteStore` mirrors → the site's world (the bridge relays them for this script) */
     "site.up": { push: SiteUp };
     /** L3: the site's world's answers to this overlay's subscriptions */
     "site.down": { push: SiteDown };
@@ -185,11 +185,11 @@ export interface IsoInit {
     libs: ShippedLib[];
     /** the script has an overlay on this page (top frame) */
     overlay: boolean;
-    /** the script's stores now (its `tt.pageStore` copies: this page's), keyed like `store.init` */
+    /** the script's stores now (its `tweak.pageStore` copies: this page's), keyed like `store.init` */
     stores: { [name: string]: StoreSnapshot };
     /** imported libraries' stores now (`lib.id` → stores), keyed like `store.init` */
     libStores?: { [scriptId: string]: { [name: string]: StoreSnapshot } };
-    /** the page the frame is part of (its top frame's document): the only one whose `tt.pageStore` copies it reaches */
+    /** the page the frame is part of (its top frame's document): the only one whose `tweak.pageStore` copies it reaches */
     page: string;
 }
 
@@ -212,7 +212,7 @@ export interface OverlayInit {
     stores: { [name: string]: StoreSnapshot };
     /** imported libraries' stores now (`lib.id` → stores), keyed like `store.init` */
     libStores?: { [scriptId: string]: { [name: string]: StoreSnapshot } };
-    /** the page the overlay is on (src/background/engine/pages.ts): its `tt.pageStore` copies */
+    /** the page the overlay is on (src/background/engine/pages.ts): its `tweak.pageStore` copies */
     page: string;
     libs: ShippedLib[];
     /** load the built-in React first */
@@ -240,7 +240,7 @@ export type WireMessage = Envelope | Envelope[];
 export const WIRE_TIMEOUT_MS = 30000;
 /** largest message on a link (fetch bodies excepted) */
 export const WIRE_MAX_BYTES = 1024 * 1024;
-/** largest `tt.fetch` body */
+/** largest `tweak.fetch` body */
 export const FETCH_MAX_BYTES = 10 * 1024 * 1024;
 
 function namedError(name: string, message: string): Error {

@@ -144,6 +144,29 @@ export const REGISTRY: Registry = {
             "index.js": `var fs = null;\ntry { fs = require("fs"); } catch (e) { exports.err = e.message; }\ntry { require("node:path"); } catch (e) { exports.err2 = e.message; }\nexports.ok = true;\n`,
         },
     },
+    "tiny-events": {
+        "1.0.0": {
+            "package.json": pj({ name: "tiny-events", version: "1.0.0" }),
+            "index.js": `exports.name = "tiny-events";\n`,
+        },
+        "2.0.0": {
+            "package.json": pj({ name: "tiny-events", version: "2.0.0" }),
+            "index.js": `exports.name = "tiny-events 2";\n`,
+        },
+    },
+    "alias-user": {
+        "1.0.0": {
+            "package.json": pj({ name: "alias-user", version: "1.0.0", dependencies: { evt: "npm:tiny-events@^1.0.0" } }),
+            "index.js": `exports.evt = require("evt").name;\n`,
+        },
+    },
+    // requires a Node.js built-in its package.json doesn't list: the tweak's dependencies may give it
+    "needs-events": {
+        "1.0.0": {
+            "package.json": pj({ name: "needs-events", version: "1.0.0" }),
+            "index.js": `try { exports.events = require("events").name; } catch (e) { exports.err = e.message; }\ntry { exports.nodeEvents = require("node:events").name; } catch (e) { exports.err2 = e.message; }\n`,
+        },
+    },
     "nested-fail": {
         "1.0.0": {
             "package.json": pj({ name: "nested-fail", version: "1.0.0" }),

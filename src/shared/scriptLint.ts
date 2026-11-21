@@ -4,7 +4,7 @@
  * store isn't one, and top-level helpers a handler calls count as its code):
  *
  * - `no-invalid-world-access`: onSite handlers using stores or handles,
- *   network handlers using `tt.siteStore`;
+ *   network handlers using `tweak.siteStore`;
  * - `no-rules-side-effects`: per-request-looking code (logging, fetch,
  *   timers, store writes) in `strategy: "rules"` handlers;
  * - `valid-selectors-and-shortcuts`: static CSS selectors of `ctx.elements`
@@ -56,7 +56,7 @@ interface Use {
     node: unknown;
 }
 export interface SiteAnalysis {
-    /** 0-based: which `tt.onSite(` call of the source it is */
+    /** 0-based: which `tweak.onSite(` call of the source it is */
     nth: number;
     line: number;
     pageStore: Use[];
@@ -201,23 +201,33 @@ export function scriptLintCore(env: LintEnv) {
             const r = refs.get(id);
             return !r || !r.resolved || r.resolved.defs.length === 0;
         };
-        const ttMember = (n: any): string | null => {
-            n = unwrap(n);
-            return n && n.type === "MemberExpression" && !n.computed && n.object.type === "Identifier" && n.object.name === "tt" && n.property.type === "Identifier" && isGlobal(n.object) ? n.property.name : null;
+        /** `tweak` as imported from "tangitweak" (or under an alias: `{ tweak as t }`), or an undeclared `tweak` */
+        const isApi = (id: any): boolean => {
+            if (id?.type !== "Identifier") return false;
+            const v = refs.get(id)?.resolved;
+            if (!v || v.defs.length === 0) return id.name === "tweak";
+            const d = v.defs[0];
+            if (d.type !== "ImportBinding" || d.node.type !== "ImportSpecifier" || d.parent?.source?.value !== "tangitweak") return false;
+            const imported = d.node.imported;
+            return (imported.type === "Identifier" ? imported.name : imported.value) === "tweak";
         };
-        const ttCall = (n: any): string | null => {
+        const apiMember = (n: any): string | null => {
             n = unwrap(n);
-            return n && n.type === "CallExpression" ? ttMember(n.callee) : null;
+            return n && n.type === "MemberExpression" && !n.computed && n.property.type === "Identifier" && isApi(n.object) ? n.property.name : null;
+        };
+        const apiCall = (n: any): string | null => {
+            n = unwrap(n);
+            return n && n.type === "CallExpression" ? apiMember(n.callee) : null;
         };
         const varOf = (id: any) => refs.get(id)?.resolved ?? null;
 
-        /** the top-level-ish variables bound to `tt.<store>(…)` / `tt.siteStore(…)` / a handle */
+        /** the top-level-ish variables bound to `tweak.<store>(…)` / `tweak.siteStore(…)` / a handle */
         const bound = new Map<any, { kind: string; name: string; at: number }>();
         const calls: any[] = [];
         walk(ast, (n) => {
             if (n.type === "CallExpression") calls.push(n);
             if (n.type !== "VariableDeclarator" || n.id.type !== "Identifier" || !n.init) return;
-            const api = ttMember(n.init) ?? ttCall(n.init);
+            const api = apiMember(n.init) ?? apiCall(n.init);
             if (!api) return;
             const kind = STORES.includes(api) || api === "siteStore" ? api : HANDLES.includes(api) ? "handles" : null;
             if (!kind) return;
@@ -265,17 +275,17 @@ export function scriptLintCore(env: LintEnv) {
                         return;
                     }
                     if (n.type === "MemberExpression") {
-                        const api = ttMember(n);
-                        if (api && (STORES.includes(api) || api === "siteStore") && !direct.some((d) => d.kind === api)) direct.push({ kind: api, name: `tt.${api}`, line: lineOf(here), node: here });
+                        const api = apiMember(n);
+                        if (api && (STORES.includes(api) || api === "siteStore") && !direct.some((d) => d.kind === api)) direct.push({ kind: api, name: `${unwrap(n).object.name}.${api}`, line: lineOf(here), node: here });
                         return;
                     }
                     if (seen.has(n)) return;
                     let effect: { text: string; does: string } | null = null;
                     if (n.type === "CallExpression") {
                         const callee = unwrap(n.callee);
-                        const api = ttMember(callee);
-                        if (api === "log") effect = { text: "tt.log", does: "log each request" };
-                        else if (api === "fetch") effect = { text: "tt.fetch", does: "fetch for each request" };
+                        const api = apiMember(callee);
+                        if (api === "log") effect = { text: `${callee.object.name}.log`, does: "log each request" };
+                        else if (api === "fetch") effect = { text: `${callee.object.name}.fetch`, does: "fetch for each request" };
                         else if (callee.type === "MemberExpression" && !callee.computed && callee.object.type === "Identifier" && callee.object.name === "console" && isGlobal(callee.object) && CONSOLE.includes(callee.property.name))
                             effect = { text: `console.${callee.property.name}`, does: "log each request" };
                         else if (callee.type === "Identifier" && isGlobal(callee)) {
@@ -331,7 +341,7 @@ export function scriptLintCore(env: LintEnv) {
         const perApi: Record<string, number> = {};
         for (const call of calls) {
             const callee = unwrap(call.callee);
-            const api = ttMember(callee);
+            const api = apiMember(callee);
             if (api === "onSite") {
                 const { uses, direct } = scan(call.arguments);
                 const site: SiteAnalysis = { nth: (perApi.onSite = (perApi.onSite ?? -1) + 1), line: lineOf(call), pageStore: [], tabStore: [], globalStore: [], handles: [] };
@@ -351,7 +361,7 @@ export function scriptLintCore(env: LintEnv) {
                 nets.push({ api, nth: (perApi[api] = (perApi[api] ?? -1) + 1), line: lineOf(call), ...(strategy ? { strategy } : {}), siteStores, effects: effects.map(({ at: _at, ...e }) => e) });
                 continue;
             }
-            if (api || callee?.type !== "MemberExpression" || callee.computed || callee.object.type !== "Identifier" || callee.object.name === "tt" || !DOM_CALLS.includes(callee.property.name)) continue;
+            if (api || callee?.type !== "MemberExpression" || callee.computed || callee.object.type !== "Identifier" || isApi(callee.object) || !DOM_CALLS.includes(callee.property.name)) continue;
             const what = `${callee.object.name}.${callee.property.name}`;
             const args = call.arguments;
             const report = (severity: LintSeverity, node: any, message: string) => checks.push({ rule: "valid-selectors-and-shortcuts", severity, line: lineOf(node), message, node });

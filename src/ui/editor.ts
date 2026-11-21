@@ -9,13 +9,12 @@ import { API_TYPINGS_URI } from "./apiLinks";
 import { NavHistory } from "./navHistory";
 import type { SampleScript } from "./samples";
 import { badPackageImports, folderOf, imageDataUrlToBytes, isImageDataPath, isMarkdownPath, isSvgPath, missingImports } from "../shared/scriptImports";
-import { makeFolderPackagePlan, makePackagePlan } from "../shared/makePackage";
-import { highestVersion, isManifestPath, MANIFEST_FILE, minTangiTweakProblem, parseManifest, scriptMinTangiTweakVersion } from "../shared/packageMetadata";
-import { manifestScriptCompletions, manifestScriptProblems } from "./manifestAssist";
-import { entryStem } from "../shared/packageModel";
+import { newTweakFiles } from "../shared/newTweak";
+import { highestVersion, isManifestPath, MANIFEST_FILE, minTangiTweakProblem, parseManifest } from "../shared/packageMetadata";
+import { bundleOf, dataReader, entryName } from "../shared/tweakBundle";
 import { localPackage } from "../shared/localPackage";
 import { writeZip } from "../shared/zip";
-import { buildExportZip, emptyFolders, EXPORT_ZIP_NAME, filesGoneFrom, importedSettingsDoc, parseExportedStores, readExportZip, settingsForScripts, STORES_FILE, storesForScripts, type ExportContents } from "../shared/exportZip";
+import { buildExportZip, emptyFolders, EXPORT_ZIP_NAME, filesGoneFrom, readExportZip, type ExportContents } from "../shared/exportZip";
 import { PACKAGE_ORIGIN } from "../shared/packageImports";
 import { isInFolder, movedPath } from "../shared/folders";
 import { baseName, folderPathOfRowId, folderRowId, isFolderRowId, movedCollapsed, type TreeRow } from "./explorerTree";
@@ -29,6 +28,7 @@ import { jsxElementAt } from "../shared/builtinSpecs";
 import { vscodeTargetPath, editorLaunchUrl, launchAppName, type LaunchMode } from "./bundle";
 import { computeDirty } from "./dirtyState";
 import { parseSettings, SETTINGS_FILE, isBodyCap, BODY_CAP_KEY, DEFAULT_BODY_CAP } from "../shared/settingsJson";
+import { DATA_FOLDER_KEY, dataFolderName, DEFAULT_DATA_FOLDER, TWEAK_SETTINGS_FILE } from "../shared/tweakData";
 import { createNetStore, type NetStore } from "./network/netStore";
 import { installTooltips } from "./tooltip";
 import type { ScriptHealthInput } from "../shared/scriptHealth";
@@ -44,7 +44,7 @@ import { layout, panelTabOf, type PanelTab } from "./state/layout";
 import { appendLog, clearLog, logState } from "./state/log";
 import { badges, badgesChanged, panel, setNetStore, setProblems } from "./state/panel";
 import { actions } from "./shell/actions";
-import { clearSel, everyFolder, explorer, explorerIds, isVirtualRootId, moveFocus, pruneCollapsed, revealInExplorer, setCollapsed, setSel, SETTINGS_ID, STORES_ID, startCreate as startCreateRow, syncExplorer, treeRow, treeRows, visibleRows, type NewKind } from "./state/explorer";
+import { clearSel, everyFolder, explorer, explorerIds, isTweakDataId, isVirtualRootId, moveFocus, pruneCollapsed, revealInExplorer, setCollapsed, setSel, SETTINGS_ID, startCreate as startCreateRow, syncExplorer, treeRow, treeRows, tweakDataId, tweakDataIn, tweakDataPathOf, visibleRows, type NewKind } from "./state/explorer";
 import { watchPackages } from "./state/packages";
 import { createCodeEditor } from "./shell/codeEditor";
 import { toolbar, type SaveState } from "./state/toolbar";
@@ -126,7 +126,8 @@ function status(text: string, cls = "", onClick?: () => void): void {
 
 // ---- script list ----
 let settingsModel: any = null;
-let storesModel: any = null;
+let tweakData: { path: string; text: string; root: string; scriptId: string }[] = [];
+const tweakDataModels = new Map<string, any>();
 
 async function loadSettingsModel(force = false): Promise<void> {
     if (!editor) return;
@@ -143,48 +144,99 @@ async function loadSettingsModel(force = false): Promise<void> {
     }
 }
 
-async function loadStoresModel(force = false): Promise<void> {
+/**
+ * The tweaks' data folder files (virtual: background/tweakDataFiles renders
+ * them from storage). Reloaded when scripts, params or stores change; an
+ * open file with unsaved edits keeps them.
+ */
+async function loadTweakData(force = false): Promise<void> {
     if (!editor) return;
     const monaco = (window as any).monaco;
-    const { text } = await send({ type: "getStoresJson" });
-    if (!storesModel) {
-        storesModel = monaco.editor.createModel(text, "json", monaco.Uri.parse("file:///" + STORES_FILE));
-        setBaseline(storesModel, text);
-    } else if (storesModel.getValue() !== text && (force || !(selectedId === STORES_ID && dirty))) {
+    const { files } = (await send({ type: "getTweakDataFiles" })) ?? {};
+    tweakData = files ?? [];
+    explorer.tweakData = ref(tweakData.map(({ path, root }) => ({ path, root })));
+    for (const f of tweakData) {
+        const id = tweakDataId(f.path);
+        const m = tweakDataModels.get(id);
+        if (!m || m.isDisposed() || m.getValue() === f.text || (!force && selectedId === id && dirty)) continue;
         applyingExternal = true;
-        storesModel.setValue(text);
+        m.setValue(f.text);
         applyingExternal = false;
-        setBaseline(storesModel, text);
+        setBaseline(m, f.text);
     }
+    for (const [id, m] of tweakDataModels) {
+        if (tweakData.some((f) => tweakDataId(f.path) === id) || (selectedId === id && dirty)) continue;
+        if (selectedId === id) {
+            selectedId = null;
+            renderEditorEmpty();
+        }
+        m.dispose();
+        tweakDataModels.delete(id);
+    }
+    updateJsonSchemas(
+        tweakData.flatMap((f) => (f.path.endsWith("/" + TWEAK_SETTINGS_FILE) && f.path.split("/").length === f.root.split("/").length + 1 ? [{ uri: monaco.Uri.parse("file:///" + f.path).toString(), defs: scripts.find((s) => s.id === f.scriptId)?.paramDefs }] : []))
+    );
+    renderList();
 }
 
-function registerManifestAssist(): void {
-    const monaco = (window as any).monaco;
-    // a package's metadata.json: "scripts" completes the .ts/.tsx files in its folder
-    monaco.languages.registerCompletionItemProvider("json", {
-        triggerCharacters: ['"', "/"],
-        provideCompletionItems(model: any, position: any) {
-            const path = decodeURIComponent(model.uri.path).replace(/^\//, "");
-            if (baseName(path) !== MANIFEST_FILE) return { suggestions: [] };
-            const folder = path.slice(0, path.length - MANIFEST_FILE.length).replace(/\/$/, "");
-            const r = manifestScriptCompletions(model.getValue(), model.getOffsetAt(position), folder, scripts.map((s) => scriptFileName(s.meta.name)));
-            if (!r) return { suggestions: [] };
-            const a = model.getPositionAt(r.replaceFrom);
-            const b = model.getPositionAt(r.replaceTo);
-            const range = { startLineNumber: a.lineNumber, startColumn: a.column, endLineNumber: b.lineNumber, endColumn: b.column };
-            return {
-                suggestions: r.paths.map((p, i) => ({
-                    label: p,
-                    kind: monaco.languages.CompletionItemKind.File,
-                    insertText: r.inString ? p : JSON.stringify(p),
-                    filterText: r.inString ? p : JSON.stringify(p),
-                    detail: "script in this package's folder",
-                    sortText: String(i).padStart(4, "0"),
-                    range,
-                })),
-            };
-        },
-    });
+async function selectTweakData(id: string): Promise<void> {
+    const back = typingsShown && selectedId === id;
+    leaveTypings();
+    selectedId = id;
+    explorer.focusedId = null;
+    showWelcome(false);
+    if (!back) await loadTweakData(true);
+    const f = tweakData.find((x) => tweakDataId(x.path) === id);
+    let m = tweakDataModels.get(id);
+    if (!m && f) {
+        const monaco = (window as any).monaco;
+        m = monaco.editor.createModel(f.text, "json", monaco.Uri.parse("file:///" + f.path));
+        setBaseline(m, f.text);
+        tweakDataModels.set(id, m);
+    }
+    renderList();
+    if (!m) return;
+    if (editor.getModel() !== m) {
+        captureViewState();
+        editor.setModel(m);
+        restoreViewState(m);
+    }
+    if (back) updateDirty();
+    else {
+        setDirty(false);
+        status("");
+    }
+    updateOpenVscode();
+}
+
+async function saveTweakData(id: string): Promise<void> {
+    const path = tweakDataPathOf(id);
+    setSaveState("saving");
+    const res = await send({ type: "applyTweakDataFile", path, text: editor.getValue() });
+    if (res?.error) {
+        setSaveState("unsaved");
+        status(`${path}: ${res.error}`, "error");
+        return;
+    }
+    await loadTweakData(true);
+    setDirty(false);
+    status("");
+    await refresh();
+}
+
+/** delete a data folder file: its setting or store goes back to the defaults */
+async function currentDataFolder(): Promise<string> {
+    return ((await send({ type: "getDataFolder" }).catch(() => null)) as { name?: string } | null)?.name || DEFAULT_DATA_FOLDER;
+}
+
+async function resetTweakData(path: string): Promise<void> {
+    if (!confirm(`Delete ${path}? ${path.endsWith("/" + TWEAK_SETTINGS_FILE) ? "The tweak goes back to on, with its params' defaults." : "The store starts over from its defaults."}`)) return;
+    const res = await send({ type: "applyTweakDataFile", path, text: null });
+    if (res?.error) return status(`${path}: ${res.error}`, "error");
+    if (selectedId === tweakDataId(path)) setDirty(false);
+    await loadTweakData(true);
+    await refresh();
+    status(`deleted ${path}`);
 }
 
 async function selectSettings(): Promise<void> {
@@ -223,41 +275,6 @@ async function saveSettings(): Promise<void> {
     await refresh();
 }
 
-async function selectStores(): Promise<void> {
-    const back = typingsShown && selectedId === STORES_ID;
-    leaveTypings();
-    selectedId = STORES_ID;
-    explorer.focusedId = null;
-    showWelcome(false);
-    renderList();
-    await loadStoresModel(!back);
-    if (editor.getModel() !== storesModel) {
-        captureViewState();
-        editor.setModel(storesModel);
-        restoreViewState(storesModel);
-    }
-    if (back) updateDirty();
-    else {
-        setDirty(false);
-        status("");
-    }
-    updateOpenVscode();
-}
-
-async function saveStores(): Promise<void> {
-    setSaveState("saving");
-    const res = await send({ type: "applyStoresJson", text: editor.getValue() });
-    if (res && res.error) {
-        setSaveState("unsaved");
-        status(`${STORES_FILE}: ${res.error}`, "error");
-        return;
-    }
-    await loadStoresModel(true);
-    setDirty(false);
-    status("");
-    await refresh();
-}
-
 async function refresh(): Promise<void> {
     const prev = scripts;
     const prevData = dataFiles;
@@ -282,7 +299,7 @@ async function refresh(): Promise<void> {
     renderList();
     pruneCollapsed();
     syncWorkspace();
-    updateJsonSchemas(scripts.map((s: any) => ({ name: scriptFileName(s.meta.name), declared: s.meta.active !== false, enabled: s.enabled, defs: s.paramDefs ?? {}, values: {} })));
+    void loadTweakData();
     scheduleDiagnostics();
     if (selectedId && !isVirtualRootId(selectedId) && !known(selectedId)) {
         selectedId = null;
@@ -366,7 +383,23 @@ function focusExplorer(): void {
 }
 
 /** why `path` can't be the new path of a `kind` item (other than `selfId`), or "" */
+/** `path` is in (or is) a tweak's data folder: why that's not allowed, else "" */
+function dataFolderPathProblem(path: string): string {
+    const b = bundleOf(path, dataReader(dataFiles));
+    const df = settings.dataFolder;
+    const rel = b ? path.slice(b.root.length) : "";
+    return b && (rel.toLowerCase() === df.toLowerCase() || rel.toLowerCase().startsWith(df.toLowerCase() + "/")) ? `${b.root}${df} is the tweak's data folder, not for code or data files` : "";
+}
+
 function itemPathProblem(kind: NewKind, path: string, selfId?: string): string {
+    const inData = dataFolderPathProblem(path);
+    if (inData) return inData;
+    if (kind === "tweak") {
+        const problem = folderPathProblem(path);
+        if (problem) return problem;
+        if (everyFolder().some((f) => f.toLowerCase() === path.toLowerCase())) return `the folder "${path}" already exists`;
+        return scripts.some((s) => s.meta.name.toLowerCase() === path.toLowerCase()) ? `a script named "${path}" already exists` : "";
+    }
     if (kind === "script") {
         const problem = scriptNameProblem(path);
         if (problem) return problem;
@@ -437,9 +470,9 @@ function download(name: string, data: BlobPart, type: string): void {
 }
 
 /**
- * Explorer → Export Package…: a script (or a bundle's metadata.json, at
- * `start`) and every file it brings, as saved — one file as itself, more as
- * a .zip of a folder named after the package (Install Script… takes either).
+ * Explorer → Export Package…: a tweak (its package.json, at `start`) and
+ * every file it brings, as saved — a .zip of a folder named after it
+ * (Install… takes it).
  */
 async function exportPackage(start: string): Promise<void> {
     const { files } = userFiles();
@@ -450,7 +483,7 @@ async function exportPackage(start: string): Promise<void> {
         return void status(`can't export "${start}": ${e?.message || e}`, "error");
     }
     const paths = Object.keys(pkg.files);
-    const stem = (pkg.manifest ? baseName(folderOf(start)) : entryStem(pkg.entries[0])) || "package";
+    const stem = baseName(folderOf(start)) || "tweak";
     if (paths.length === 1) download(baseName(paths[0]), isImageDataPath(paths[0]) ? (imageDataUrlToBytes(pkg.files[paths[0]]) as BlobPart) : pkg.files[paths[0]], "text/plain");
     else download(`${stem}.zip`, writeZip(Object.fromEntries(paths.map((p) => [`${stem}/${p}`, isImageDataPath(p) ? imageDataUrlToBytes(pkg.files[p]) : pkg.files[p]]))) as BlobPart, "application/zip");
     const warn = [
@@ -461,11 +494,6 @@ async function exportPackage(start: string): Promise<void> {
     status(`exported "${stem}" — ${paths.length === 1 ? baseName(paths[0]) : `${stem}.zip, ${paths.length} files`}${dirtyNote}${warn.length ? ` · ${warn.join(" · ")}` : ""}`, warn.length ? "dirty" : undefined);
 }
 
-const pathList = (paths: string[]): string => paths.map((p) => `  ${p}`).join("\n");
-const bareNote = (bare: { spec: string }[]): string =>
-    bare.length ? `\nImports by bare name resolve from the root of the installer's scripts, not the package: ${[...new Set(bare.map((b) => `"${b.spec}"`))].join(", ")} — use a relative path ("./…") to take the file along.` : "";
-const missingNote = (missing: { from: string; spec: string }[]): string => (missing.length ? `\nImports that point at no file: ${missing.map((m) => `"${m.spec}" in ${m.from}`).join(", ")}` : "");
-
 /** save through the background; false (and a status) when it failed — a compile error still saves */
 async function saveQuietly(msg: Record<string, unknown>, path: string): Promise<boolean> {
     const r = await send(msg);
@@ -474,76 +502,7 @@ async function saveQuietly(msg: Record<string, unknown>, path: string): Promise<
 }
 
 /**
- * Explorer → Make Package… on a script: name it with tt.metadata, or — when
- * it imports files — move it and them into a folder of their own with a
- * metadata.json (copying those other scripts use too) and rewrite their
- * imports (shared/makePackage).
- */
-async function makePackage(id: string): Promise<void> {
-    const s = scripts.find((x) => x.id === id);
-    if (!s) return;
-    const { files, owner } = userFiles();
-    const plan = makePackagePlan(scriptFileName(s.meta.name), files, everyFolder());
-    const changed = [...plan.files.filter((f) => !f.copy && (f.to !== f.from || f.text !== files[f.from])).map((f) => f.from), ...plan.edits.map((e) => e.path)];
-    const open = changed.map((p) => owner.get(p)?.script?.id ?? owner.get(p)?.data?.id).find((x) => x === selectedId);
-    if (open && dirty) return void status(`save "${treeRow(open)?.path ?? ""}" first — making the package changes it`, "error");
-    if (!plan.manifest && !changed.length) return void status(`"${s.meta.name}" names itself (tt.metadata) already — share its URL, or Export Package…`);
-    const moved = plan.files.filter((f) => !f.copy && f.to !== f.from);
-    const copied = plan.files.filter((f) => f.copy);
-    const lines = [
-        !plan.manifest
-            ? `Make "${scriptFileName(s.meta.name)}" a package? It gets a tt.metadata({ name, version… }) to fill in.`
-            : plan.inPlace
-              ? `"${plan.folder}/" holds this script and what it imports: make it a package with a ${MANIFEST_FILE}?`
-              : `Make "${scriptFileName(s.meta.name)}" a package in the folder "${plan.folder}/" (with a ${MANIFEST_FILE})?`,
-        moved.length ? `\nMoves:\n${pathList(moved.map((f) => `${f.from} → ${f.to}`))}` : "",
-        copied.length ? `\nCopies (other scripts use them too):\n${pathList(copied.map((f) => `${f.from} → ${f.to}`))}` : "",
-        plan.edits.length ? `\nUpdates the imports in:\n${pathList(plan.edits.map((e) => e.path))}` : "",
-        bareNote(plan.bare),
-        missingNote(plan.missing),
-    ];
-    if (!confirm(lines.filter(Boolean).join("\n"))) return;
-    let ok = true;
-    // what's imported first, the script last: each compiles against files in their new places
-    for (const f of [...plan.files].reverse()) {
-        const o = owner.get(f.from)!;
-        if (o.data) ok = (f.copy ? await saveQuietly({ type: "saveDataFile", path: f.to, text: f.text }, f.to) : f.to === f.from || (await saveQuietly({ type: "renameDataFile", id: o.data.id, path: f.to }, f.to))) && ok;
-        else if (f.copy) ok = (await saveQuietly({ type: "saveScript", id: uuid(), code: f.text, name: scriptNameFromFile(f.to) }, f.to)) && ok;
-        else if (f.to !== f.from || f.text !== files[f.from]) ok = (await saveQuietly({ type: "saveScript", id: o.script!.id, code: f.text, ...(f.to !== f.from ? { name: scriptNameFromFile(f.to) } : {}) }, f.to)) && ok;
-    }
-    for (const e of plan.edits) ok = (await saveQuietly({ type: "saveScript", id: owner.get(e.path)!.script!.id, code: e.text }, e.path)) && ok;
-    if (plan.manifest) ok = (await saveQuietly({ type: "saveDataFile", path: plan.manifest.path, text: plan.manifest.text }, plan.manifest.path)) && ok;
-    await refresh();
-    revealInExplorer(plan.manifest?.path ?? plan.files[0].to);
-    if (plan.manifest) {
-        const m = dataFiles.find((d) => d.path === plan.manifest!.path);
-        await select(m?.id ?? id);
-    } else await select(id);
-    if (ok) status(plan.manifest ? `"${plan.folder}/" is a package — fill in its ${MANIFEST_FILE}, then share the folder (or Export Package…)` : `"${s.meta.name}" is a package — fill in its tt.metadata, then share its URL (or Export Package…)`);
-}
-
-/** Explorer → Make Package… on a folder: a metadata.json listing its scripts (shared/makePackage) */
-async function makeFolderPackage(folder: string): Promise<void> {
-    const { files } = userFiles();
-    const plan = makeFolderPackagePlan(folder, files);
-    if (!plan.scripts.length) return void status(`"${folder}/" holds no script to package`, "error");
-    const lines = [
-        `Make "${folder}/" a package? It gets a ${MANIFEST_FILE} listing its scripts:\n${pathList(plan.scripts)}`,
-        plan.outside.length ? `\nImports of files outside the folder can't come along — move those files in first: ${plan.outside.map((m) => `"${m.spec}" in ${m.from}`).join(", ")}` : "",
-        bareNote(plan.bare),
-        missingNote(plan.missing),
-    ];
-    if (!confirm(lines.filter(Boolean).join("\n"))) return;
-    const ok = await saveQuietly({ type: "saveDataFile", path: plan.manifest.path, text: plan.manifest.text }, plan.manifest.path);
-    await refresh();
-    revealInExplorer(plan.manifest.path);
-    const m = dataFiles.find((d) => d.path === plan.manifest.path);
-    if (m) await select(m.id);
-    if (ok) status(`"${folder}/" is a package — fill in its ${MANIFEST_FILE}, then share the folder (or Export Package…)`);
-}
-
-/**
- * New Script / New JSON File / New Folder: shows the explorer, then an inline
+ * New Tweak / New Module / New JSON File / New Folder: shows the explorer, then an inline
  * name input in `folder` (default: the focused folder, or the focused file's folder).
  */
 function startCreate(kind: NewKind, folder?: string): void {
@@ -560,7 +519,18 @@ async function createItem(kind: NewKind, path: string): Promise<void> {
         return;
     }
     revealInExplorer(path);
-    if (kind === "script") {
+    if (kind === "tweak") {
+        // the data files first: the entry compiles as the tweak its package.json makes it
+        const files = newTweakFiles(path, await currentDataFolder());
+        let ok = true;
+        for (const d of files.data) ok = (await saveQuietly({ type: "saveDataFile", path: d.path, text: d.text }, d.path)) && ok;
+        const id = uuid();
+        ok = (await saveQuietly({ type: "saveScript", id, code: files.entry.code, name: files.entry.name }, files.entry.name)) && ok;
+        await refresh();
+        select(id);
+        editor?.focus();
+        if (ok) status(`"${path}/" is a new tweak — its package.json names it; share the folder (or Export Package…)`);
+    } else if (kind === "script") {
         const id = uuid();
         await send({ type: "saveScript", id, code: STARTER_TEMPLATE, name: path });
         await refresh();
@@ -700,8 +670,8 @@ function registerPinImportFix(): void {
 /**
  * Quick fixes for where a handler runs: an onSite handler calling a handle
  * (a runtime Problem) or using a store / handle (a route warning) moves to
- * tt.onPage; one using a store can keep running in the site, its stores
- * becoming `tt.siteStore`s.
+ * tweak.onPage; one using a store can keep running in the site, its stores
+ * becoming `tweak.siteStore`s.
  */
 function registerPlaceFixes(): void {
     const monaco = (window as any).monaco;
@@ -711,7 +681,7 @@ function registerPlaceFixes(): void {
             for (const mk of context.markers) {
                 const msg = String(mk.message);
                 if (!msg.includes(SITE_DISALLOWED)) continue;
-                // the marker's end: inside the call, or (a route warning, on the registration line) past `tt.onSite(`
+                // the marker's end: inside the call, or (a route warning, on the registration line) past `tweak.onSite(`
                 const offset = model.getOffsetAt({ lineNumber: mk.endLineNumber, column: mk.endColumn });
                 const textEdit = (fix: TextEdit) => {
                     const a = model.getPositionAt(fix.start);
@@ -721,7 +691,7 @@ function registerPlaceFixes(): void {
                 const fix = onPageEdit(model.getValue(), offset);
                 if (!fix) continue;
                 actions.push({
-                    title: "Move this handler to tt.onPage (the isolated world)",
+                    title: "Move this handler to tweak.onPage (the isolated world)",
                     kind: "quickfix",
                     isPreferred: true,
                     diagnostics: [mk],
@@ -730,7 +700,7 @@ function registerPlaceFixes(): void {
                 const site = msg.includes(SITE_NO_STORES) ? siteStoreEdits(model.getValue(), offset) : [];
                 if (site.length)
                     actions.push({
-                        title: "Change to tt.siteStore (its data becomes page data)",
+                        title: "Change to tweak.siteStore (its data becomes page data)",
                         kind: "quickfix",
                         diagnostics: [mk],
                         edit: { edits: site.map(textEdit) },
@@ -907,7 +877,7 @@ function disposeStaleDeclModels(changedUris: string[], shown: any): void {
     }
 }
 
-/** a package's metadata.json: an error on each "scripts" entry that names no script */
+/** a tweak's package.json: an error when its entry (`main`, else index.ts) isn't there */
 const MANIFEST_OWNER = "tt-manifest";
 let manifestMarkerTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -916,15 +886,22 @@ function scheduleManifestMarkers(): void {
     manifestMarkerTimer = setTimeout(() => {
         manifestMarkerTimer = null;
         const monaco = (window as any).monaco;
-        const files = scripts.map((s) => scriptFileName(s.meta.name));
+        const names = new Set(scripts.map((s) => s.meta.name.toLowerCase()));
         for (const d of dataFiles) {
             const m = dataModels.get(d.id);
             if (!m || m.isDisposed() || baseName(d.path) !== MANIFEST_FILE) continue;
-            const markers = manifestScriptProblems(m.getValue(), d.path.slice(0, -MANIFEST_FILE.length), files).map((p) => {
-                const a = m.getPositionAt(p.start);
-                const b = m.getPositionAt(p.end);
-                return { severity: monaco.MarkerSeverity.Error, message: p.message, source: MANIFEST_FILE, startLineNumber: a.lineNumber, startColumn: a.column, endLineNumber: b.lineNumber, endColumn: b.column };
-            });
+            const text = m.getValue();
+            const b = bundleOf(d.path, dataReader([{ path: d.path, text }]));
+            const entry = b && b.pkgPath.toLowerCase() === d.path.toLowerCase() ? entryName(b, (n) => names.has(n.toLowerCase())) : undefined;
+            const markers: any[] = [];
+            if (entry && !names.has(entry.toLowerCase())) {
+                const at = /"main"\s*:\s*"[^"]*"/.exec(text);
+                const a = m.getPositionAt(at ? at.index : 0);
+                const z = m.getPositionAt(at ? at.index + at[0].length : 1);
+                const file = entry.slice(b!.root.length);
+                const message = `this tweak's entry "${/\.tsx$/i.test(file) ? file : file + ".ts"}" isn't in its folder — it doesn't run until it is`;
+                markers.push({ severity: monaco.MarkerSeverity.Error, message, source: MANIFEST_FILE, startLineNumber: a.lineNumber, startColumn: a.column, endLineNumber: z.lineNumber, endColumn: z.column });
+            }
             if (markers.length || monaco.editor.getModelMarkers({ resource: m.uri, owner: MANIFEST_OWNER }).length) monaco.editor.setModelMarkers(m, MANIFEST_OWNER, markers);
         }
     }, 250);
@@ -1081,15 +1058,15 @@ function openNavEntry(e: NavEntry): boolean | "skip" {
         restore();
         return true;
     }
-    if (!isVirtualRootId(e.target) && !scripts.some((s) => s.id === e.target) && !isDataId(e.target)) return "skip";
+    if (!(e.target === SETTINGS_ID || tweakData.some((f) => tweakDataId(f.path) === e.target)) && !scripts.some((s) => s.id === e.target) && !isDataId(e.target)) return "skip";
     if (e.target !== selectedId && dirty && selectedId && !confirm("Discard unsaved changes?")) return false;
     if (e.target === SETTINGS_ID) {
         if (typingsShown || selectedId !== SETTINGS_ID) void selectSettings().then(restore);
         else restore();
         return true;
     }
-    if (e.target === STORES_ID) {
-        if (typingsShown || selectedId !== STORES_ID) void selectStores().then(restore);
+    if (isTweakDataId(e.target)) {
+        if (typingsShown || selectedId !== e.target) void selectTweakData(e.target).then(restore);
         else restore();
         return true;
     }
@@ -1120,7 +1097,7 @@ function saveCurrent(): Promise<void> {
 async function saveCurrentNow(): Promise<void> {
     if (typingsShown) return; // read-only
     if (selectedId === SETTINGS_ID) return saveSettings();
-    if (selectedId === STORES_ID) return saveStores();
+    if (isTweakDataId(selectedId)) return saveTweakData(selectedId!);
     if (!selectedId || !editor) return;
     if (isDataId(selectedId)) return saveDataFileNow(selectedId);
     const code = editor.getValue();
@@ -1361,18 +1338,20 @@ function updateProblems(): void {
     const settings = monaco && settingsModel && !settingsModel.isDisposed() ? modelProblems(settingsModel) : undefined;
     const data = monaco
         ? [
-              ...(storesModel && !storesModel.isDisposed() ? [{ id: STORES_ID, label: STORES_FILE, markers: modelProblems(storesModel) }] : []),
+              ...tweakData.flatMap((f) => {
+                  const m = tweakDataModels.get(tweakDataId(f.path));
+                  return m && !m.isDisposed() ? [{ id: tweakDataId(f.path), label: f.path, markers: modelProblems(m) }] : [];
+              }),
               ...dataFiles.flatMap((d) => {
                   const m = dataModels.get(d.id);
                   return m && !m.isDisposed() ? [{ id: d.id, label: d.path, markers: modelProblems(m) }] : [];
               }),
           ]
         : [];
-    // explorer order (settings.json, then stores.json, then tree rows)
+    // explorer order (settings.json, then tree rows, a tweak's data files right after its folder)
     const order = new Map<string, number>([
-        [SETTINGS_ID, -2],
-        [STORES_ID, -1],
-        ...treeRows(true).map((r, i) => [r.id, i] as [string, number]),
+        [SETTINGS_ID, -1],
+        ...treeRows(true).flatMap((r) => [r.id, ...(r.kind === "folder" ? tweakDataIn(r.path + "/").map((d) => d.id) : [])]).map((id, i) => [id, i] as [string, number]),
     ]);
     problemGroups = collectProblems(
         scripts.map((s) => ({
@@ -1384,7 +1363,6 @@ function updateProblems(): void {
             runtimeError: s.runtimeError,
             typeErrors: s.typeErrors,
             routeWarnings: s.routeWarnings,
-            versionWarning: minTangiTweakProblem(s.meta.metadata?.minTangiTweakVersion),
             routes: s.meta.routes,
             code: s.code,
         })),
@@ -1570,7 +1548,8 @@ function setupSettings(): void {
     });
     settings.folder.supported = fsBridge.isSupported();
     const bodyCap = (v: unknown): number => (isBodyCap(v) ? v : DEFAULT_BODY_CAP);
-    chrome.storage.local.get(["resLogLevel", "resMonacoVerbose", "resLogBadge", "resLogCap", BODY_CAP_KEY, "resVscodePath", "resVscodeLaunch", "resEditorUrl"], (d) => {
+    chrome.storage.local.get(["resLogLevel", "resMonacoVerbose", "resLogBadge", "resLogCap", BODY_CAP_KEY, DATA_FOLDER_KEY, "resVscodePath", "resVscodeLaunch", "resEditorUrl"], (d) => {
+        settings.dataFolder = dataFolderName(d?.[DATA_FOLDER_KEY]);
         if (d?.resLogLevel) logState.level = d.resLogLevel;
         setMonacoVerbose(!!d?.resMonacoVerbose);
         panel.statusBar = d?.resLogBadge !== false;
@@ -1583,12 +1562,11 @@ function setupSettings(): void {
     });
     chrome.storage.onChanged.addListener((c) => {
         if (c[BODY_CAP_KEY]) settings.bodyCap = bodyCap(c[BODY_CAP_KEY].newValue);
+        if (c[DATA_FOLDER_KEY]) settings.dataFolder = dataFolderName(c[DATA_FOLDER_KEY].newValue);
         if (c.resLogLevel?.newValue) logState.level = c.resLogLevel.newValue;
         if (c.resLogCap?.newValue) logState.cap = c.resLogCap.newValue;
         const storeChanged = Object.keys(c).some((k) => k.startsWith("resStore."));
-        if (storeChanged || c.resScripts) {
-            if (selectedId === STORES_ID || storesModel) void loadStoresModel();
-        }
+        if (storeChanged || c.resParams || c[DATA_FOLDER_KEY]) void loadTweakData();
         if (c.resScripts || c.resParams || c.resLogLevel || c.resLogCap || c[BODY_CAP_KEY] || c.resDataFiles || c.resFolders) {
             void (async () => {
                 if (selectedId === SETTINGS_ID || settingsModel) await loadSettingsModel();
@@ -1599,23 +1577,26 @@ function setupSettings(): void {
     });
 }
 
-/** a script name not taken yet: `base`, else `base 2`, `base 3`… */
-function freeScriptName(base: string, ext = ""): string {
-    const taken = new Set(scripts.map((s) => s.meta.name));
-    if (!taken.has(base + ext)) return base + ext;
+/** a folder name not taken yet (by a folder or a script): `base`, else `base 2`, `base 3`… */
+function freeFolderName(base: string): string {
+    const taken = new Set([...everyFolder(), ...scripts.map((s) => s.meta.name)].map((n) => n.toLowerCase()));
+    if (!taken.has(base.toLowerCase())) return base;
     let n = 2;
-    while (taken.has(`${base} ${n}${ext}`)) n++;
-    return `${base} ${n}${ext}`;
+    while (taken.has(`${base} ${n}`.toLowerCase())) n++;
+    return `${base} ${n}`;
 }
 
-/** add a sample as a new (enabled) script and open it; returns its id */
+/** add a sample as a new (enabled) tweak — its folder, package.json and index.ts — and open it; returns its entry's id */
 async function addSample(sample: SampleScript): Promise<string> {
+    const folder = freeFolderName(sample.name);
+    const files = newTweakFiles(folder, await currentDataFolder());
+    for (const d of files.data) await send({ type: "saveDataFile", path: d.path, text: d.text });
     const id = newId();
-    const name = freeScriptName(sample.name, jsxElementAt(sample.code) >= 0 ? ".tsx" : "");
+    const name = files.entry.name + (jsxElementAt(sample.code) >= 0 ? ".tsx" : "");
     await send({ type: "saveScript", id, code: sample.code, name, enabled: true });
     await refresh();
     selectReal(id);
-    status(`sample "${name}" added ✓`);
+    status(`sample "${folder}" added ✓`);
     return id;
 }
 
@@ -1810,13 +1791,11 @@ function openInEditor(): void {
         return;
     }
     if (!selectedId || typingsShown) return;
-    if (selectedId === STORES_ID) void send({ type: "ensureStoresOnDisk" });
-    // the ⚙ settings.json and stores.json entries are virtual (not in `scripts`) — their
-    // targets are <folder>/settings.json and <folder>/stores.json, written by folderSync
+    // settings.json and the data folder files are virtual (not in `scripts`) — folderSync writes them
     const data = dataFiles.find((d) => d.id === selectedId);
     const file =
-        selectedId === STORES_ID
-            ? `${folder.replace(/\/+$/, "")}/${STORES_FILE}`
+        isTweakDataId(selectedId)
+            ? `${folder.replace(/\/+$/, "")}/${tweakDataPathOf(selectedId)}`
             : data
               ? `${folder.replace(/\/+$/, "")}/${data.path}`
               : vscodeTargetPath(folder, selectedId, scripts.find((s) => s.id === selectedId)?.meta.name, SETTINGS_ID, SETTINGS_FILE);
@@ -1853,33 +1832,24 @@ async function exportBundle(): Promise<void> {
     const { text } = selectedId === SETTINGS_ID && dirty && settingsModel ? { text: settingsModel.getValue() } : await send({ type: "getSettingsJson" });
     const dataFiles: { path: string; text: string }[] = (await send({ type: "listDataFiles" })) || [];
     const folders: string[] = (await send({ type: "listFolders" })) || [];
-    const allStores: Record<string, Record<string, any>> = (await send({ type: "exportStores" }).catch(() => ({}))) || {};
-    const hasStores = Object.keys(allStores).length > 0;
+    const { files: tweakFiles = [] }: { files?: typeof tweakData } = (await send({ type: "getTweakDataFiles" }).catch(() => ({}))) || {};
     const list = [
         ...scripts.map((s) => ({ name: s.meta.name, code: s.code, data: false })),
         ...dataFiles.map((d) => ({ name: d.path, code: d.text, data: true })),
     ];
     const empty = emptyFolders(folders, [...scripts.map((s) => scriptFileName(s.meta.name)), ...dataFiles.map((d) => d.path)]);
     const settingsAt = list.length;
-    const storesAt = hasStores ? settingsAt + 1 : -1;
-    const foldersAt = settingsAt + 1 + (hasStores ? 1 : 0);
+    const withDataAt = tweakFiles.length ? settingsAt + 1 : -1;
+    const foldersAt = settingsAt + 1 + (tweakFiles.length ? 1 : 0);
     const chosen = await pickItems({
         title: "Export",
-        intro: "Pick what goes into the zip. It's laid out like the scripts folder: scripts and data files by path, settings.json with globals and params, and optionally persisted globalStore data.",
+        intro: "Pick what goes into the zip. It's laid out like the scripts folder: scripts and data files by path, and settings.json with TangiTweak's own settings. Each tweak's settings and saved data (its data folder) stay out unless you include them.",
         items: [
             ...scripts.map((s) => ({ path: scriptFileName(s.meta.name), kind: "script" as const, badge: s.meta.active !== false && !s.enabled ? "disabled" : undefined })),
             ...dataFiles.map((d) => ({ path: d.path, kind: "data" as const })),
-            { path: SETTINGS_FILE, kind: "settings" as const, detail: "globals + the picked scripts' enabled state and params" },
-            ...(hasStores
-                ? [
-                      {
-                          path: STORES_FILE,
-                          kind: "settings" as const,
-                          badge: "opt-in",
-                          detail: "persisted globalStore data for the picked scripts",
-                          checked: false,
-                      },
-                  ]
+            { path: SETTINGS_FILE, kind: "settings" as const, detail: "TangiTweak's own settings" },
+            ...(tweakFiles.length
+                ? [{ path: "Include my settings and saved data", kind: "section" as const, detail: "the picked tweaks' data folders: their enable switch, the params you changed and their saved stores", checked: false }]
                 : []),
             ...empty.map((f) => ({ path: f, kind: "folder" as const, detail: "empty folder" })),
         ],
@@ -1887,18 +1857,19 @@ async function exportBundle(): Promise<void> {
         warn: importsWarning(list),
     });
     if (!chosen) return;
+    const pickedIds = new Set(chosen.filter((i) => i < scripts.length).map((i) => scripts[i].id));
     const picked = chosen.filter((i) => i < scripts.length).map((i) => list[i]);
     const pickedData = chosen.filter((i) => i >= scripts.length && i < settingsAt).map((i) => ({ path: list[i].name, text: list[i].code }));
     const withSettings = chosen.includes(settingsAt);
-    const withStores = storesAt >= 0 && chosen.includes(storesAt);
     const pickedFolders = chosen.filter((i) => i >= foldersAt).map((i) => empty[i - foldersAt]);
-    const storesJson = withStores ? storesForScripts(allStores, picked.map((s) => s.name)) : null;
+    // a tweak's data goes along with its entry
+    const tweakDataOut = withDataAt >= 0 && chosen.includes(withDataAt) ? tweakFiles.filter((f) => pickedIds.has(f.scriptId)).map(({ path, text }) => ({ path, text })) : [];
     const zip = buildExportZip({
-        settings: withSettings ? settingsForScripts(text, picked.map((s) => s.name)) : null,
-        stores: storesJson,
+        settings: withSettings ? text : null,
         scripts: picked,
         dataFiles: pickedData,
         folders: pickedFolders,
+        tweakData: tweakDataOut,
     });
     download(picked.length === 1 && chosen.length === 1 ? `${baseName(picked[0].name)}.zip` : EXPORT_ZIP_NAME, zip as BlobPart, "application/zip");
     const parts = [
@@ -1906,7 +1877,7 @@ async function exportBundle(): Promise<void> {
         ...(pickedData.length ? [plural(pickedData.length, "data file")] : []),
         ...(pickedFolders.length ? [plural(pickedFolders.length, "folder")] : []),
         ...(withSettings ? ["settings"] : []),
-        ...(storesJson ? ["stores"] : []),
+        ...(tweakDataOut.length ? ["saved data"] : []),
     ];
     status(`exported ${parts.join(" + ")} ✓`);
 }
@@ -1929,10 +1900,8 @@ function importBundle(): void {
         const text = await file.text();
         const base = cleanScriptName(file.name.replace(/\.ts$/i, "")) || "Imported script";
         const name = uniqueScriptName(base, scripts.map((s) => s.meta.name));
-        const saved = await send({ type: "saveScript", id: uuid(), code: text, name });
-        const verWarn = minTangiTweakProblem(saved?.meta?.metadata?.minTangiTweakVersion ?? scriptMinTangiTweakVersion(text));
-        if (verWarn) status(`imported script — ⚠ ${verWarn}`, "error");
-        else status("imported script ✓");
+        await send({ type: "saveScript", id: uuid(), code: text, name });
+        status("imported script ✓");
         await refresh();
     };
     input.click();
@@ -1940,15 +1909,16 @@ function importBundle(): void {
 async function importZip(file: File): Promise<void> {
     let zip: ExportContents;
     try {
-        zip = await readExportZip(await file.arrayBuffer());
+        zip = await readExportZip(await file.arrayBuffer(), await currentDataFolder());
     } catch (e) {
         status(`${file.name}: not a zip (${(e as Error).message})`, "error");
         return;
     }
-    if (!zip.scripts.length && !zip.dataFiles.length && !zip.folders.length && zip.settings === null && !zip.stores) {
-        status(`${file.name}: no scripts, data files, ${SETTINGS_FILE} or ${STORES_FILE} in it`, "error");
+    if (!zip.scripts.length && !zip.dataFiles.length && !zip.folders.length && zip.settings === null) {
+        status(`${file.name}: no scripts, data files or ${SETTINGS_FILE} in it`, "error");
         return;
     }
+    const df = await currentDataFolder();
     const existingData: { id: string; path: string }[] = (await send({ type: "listDataFiles" })) || [];
     const dataFileIn = (path: string) => existingData.find((d) => d.path.toLowerCase() === path.toLowerCase());
     const existingFolders: string[] = zip.folders.length ? (await send({ type: "listFolders" })) || [] : [];
@@ -1960,16 +1930,8 @@ async function importZip(file: File): Promise<void> {
             settingsError = (e as Error).message;
         }
     }
-    let parsedStores: Record<string, Record<string, Record<string, any>>> | null = null;
-    let storesError = "";
-    if (zip.stores) {
-        try {
-            parsedStores = parseExportedStores(zip.stores);
-        } catch (e) {
-            storesError = (e as Error).message;
-        }
-    }
-    const scriptMinVers = zip.scripts.map((s) => scriptMinTangiTweakVersion(s.code));
+    // the zip's data folder files, at their paths here
+    const tweakIn = zip.tweakData.map((d) => ({ path: `${d.root}${df}/${d.file}`, text: d.text }));
     const dataMinVers = zip.dataFiles.map((d) => {
         if (!isManifestPath(d.path)) return undefined;
         try {
@@ -1980,8 +1942,8 @@ async function importZip(file: File): Promise<void> {
     });
     const named = [...zip.scripts.map((s) => ({ name: s.name, code: s.code, data: false })), ...zip.dataFiles.map((d) => ({ name: d.path, code: d.text, data: true }))];
     const settingsAt = zip.settings === null ? -1 : named.length;
-    const storesAt = !zip.stores ? -1 : named.length + (zip.settings === null ? 0 : 1);
-    const foldersAt = named.length + (zip.settings === null ? 0 : 1) + (zip.stores ? 1 : 0);
+    const tweakAt = named.length + (zip.settings === null ? 0 : 1);
+    const foldersAt = tweakAt + tweakIn.length;
     // a package's new version: its files that version doesn't have go (unless unchecked)
     const existingFiles = [...scripts.map((s) => ({ path: scriptFileName(s.meta.name), id: s.id, kind: "script" as const })), ...existingData.map((d) => ({ path: d.path, id: d.id, kind: "data" as const }))];
     const gonePaths = new Set(filesGoneFrom(zip, existingFiles.map((f) => f.path)));
@@ -1991,17 +1953,9 @@ async function importZip(file: File): Promise<void> {
     const missingWarn = importsWarning(named);
     const chosen = await pickItems({
         title: `Import ${file.name}`,
-        intro: `Pick what to import. A script (data file) replaces the existing script (data file) at the same path; ${SETTINGS_FILE} applies the globals and the picked scripts' enabled state and params.${gone.length ? " Files marked deleted are in the package here but not in this version: checked, they're deleted." : ""}${ignored}`,
+        intro: `Pick what to import. A script (data file) replaces the existing script (data file) at the same path; ${SETTINGS_FILE} applies TangiTweak's own settings, and a tweak's ${df} files its enable switch, params and saved stores.${gone.length ? " Files marked deleted are in the package here but not in this version: checked, they're deleted." : ""}${ignored}`,
         items: [
-            ...zip.scripts.map((s, idx) => {
-                const verProb = minTangiTweakProblem(scriptMinVers[idx]);
-                return {
-                    path: s.file,
-                    kind: "script" as const,
-                    badge: verProb ? `needs TangiTweak ≥ ${scriptMinVers[idx]}` : existsBadge(s.name),
-                    detail: verProb ?? undefined,
-                };
-            }),
+            ...zip.scripts.map((s) => ({ path: s.file, kind: "script" as const, badge: existsBadge(s.name) })),
             ...zip.dataFiles.map((d, idx) => {
                 const verProb = minTangiTweakProblem(dataMinVers[idx]);
                 return {
@@ -2014,13 +1968,7 @@ async function importZip(file: File): Promise<void> {
             ...(zip.settings === null
                 ? []
                 : [settingsError ? { path: SETTINGS_FILE, kind: "settings" as const, badge: "JSON error", detail: settingsError, checked: false } : { path: SETTINGS_FILE, kind: "settings" as const }]),
-            ...(!zip.stores
-                ? []
-                : [
-                      storesError
-                          ? { path: STORES_FILE, kind: "settings" as const, badge: "JSON error", detail: storesError, checked: false }
-                          : { path: STORES_FILE, kind: "settings" as const, detail: `persisted globalStore data (${plural(Object.keys(parsedStores || {}).length, "script")})` },
-                  ]),
+            ...tweakIn.map((d) => ({ path: d.path, kind: "settings" as const, badge: "saved data" })),
             ...zip.folders.map((f) => ({ path: f, kind: "folder" as const, badge: existingFolders.some((e) => e.toLowerCase() === f.toLowerCase()) ? "exists" : "new" })),
             ...gone.map((f) => ({ path: f.path, kind: f.kind, badge: "deleted", detail: "not in this version", removed: true })),
         ],
@@ -2029,13 +1977,7 @@ async function importZip(file: File): Promise<void> {
             const miss = missingWarn(picked);
             if (miss) return miss;
             const req = highestVersion(
-                picked.map((i) =>
-                    i < zip.scripts.length
-                        ? scriptMinVers[i]
-                        : i < named.length
-                          ? dataMinVers[i - zip.scripts.length]
-                          : undefined
-                )
+                picked.map((i) => (i >= zip.scripts.length && i < named.length ? dataMinVers[i - zip.scripts.length] : undefined))
             );
             const verProb = minTangiTweakProblem(req);
             return verProb ? { text: verProb } : null;
@@ -2047,7 +1989,7 @@ async function importZip(file: File): Promise<void> {
     const pickedFolders = chosen.filter((i) => i >= foldersAt && i < goneAt).map((i) => zip.folders[i - foldersAt]);
     const pickedGone = chosen.filter((i) => i >= goneAt).map((i) => gone[i - goneAt]);
     const withSettings = settingsAt >= 0 && chosen.includes(settingsAt);
-    const withStores = storesAt >= 0 && chosen.includes(storesAt) && !!parsedStores;
+    const pickedTweakData = chosen.filter((i) => i >= tweakAt && i < foldersAt).map((i) => tweakIn[i - tweakAt]);
     // folders and data files first: the scripts compile against them
     const failed: string[] = [];
     for (const f of pickedFolders) {
@@ -2066,12 +2008,12 @@ async function importZip(file: File): Promise<void> {
     }
     await refresh();
     const parts = [plural(pickedScripts.length, "script"), ...(pickedData.length ? [plural(pickedData.length, "data file")] : []), ...(pickedFolders.length ? [plural(pickedFolders.length, "folder")] : []), ...(pickedGone.length ? [`${plural(pickedGone.length, "file")} deleted`] : [])];
-    // settings apply through the real path (globals + the scripts'
-    // enabled state and params); storage.onChanged refreshes the settings UI
+    // settings apply through the real path; storage.onChanged refreshes the settings UI
     if (withSettings) {
         let res: any;
         try {
-            res = await send({ type: "applySettingsDoc", doc: importedSettingsDoc(zip.settings!, pickedScripts.map((s) => s.name), zip.scripts.length > 0) });
+            // the data folder keeps its name here
+            res = await send({ type: "applySettingsDoc", doc: { globals: { ...parseSettings(zip.settings!).globals, dataFolder: df } } });
         } catch (e) {
             res = { error: (e as Error).message };
         }
@@ -2081,15 +2023,12 @@ async function importZip(file: File): Promise<void> {
         }
         parts.push("settings");
     }
-    if (withStores && parsedStores) {
-        const wanted = zip.scripts.length > 0 ? new Set(pickedScripts.map((s) => scriptPathKey(s.name))) : null;
-        const storesToApply = wanted
-            ? Object.fromEntries(Object.entries(parsedStores).filter(([k]) => wanted.has(scriptPathKey(k))))
-            : parsedStores;
-        const res: any = await send({ type: "importStores", stores: storesToApply });
-        if (res && res.error) failed.push(`stores: ${res.error}`);
-        else parts.push("stores");
+    // after the scripts: the data applies to their tweaks
+    for (const d of pickedTweakData) {
+        const r = await send({ type: "applyTweakDataFile", path: d.path, text: d.text });
+        if (r?.error) failed.push(`${d.path}: ${r.error}`);
     }
+    if (pickedTweakData.length) parts.push("saved data");
     if (failed.length) {
         status(`imported ${parts.join(" + ")}; ${failed.join("; ")}`, "error");
         return;
@@ -2112,8 +2051,6 @@ async function main(): Promise<void> {
         select: (id: string) => void select(id),
         deleteRows: (rows: TreeRow[]) => void deleteRows(rows),
         moveRows,
-        makePackage: (id: string) => void makePackage(id),
-        makeFolderPackage: (folder: string) => void makeFolderPackage(folder),
         exportPackage: (start: string) => void exportPackage(start),
         itemPathProblem,
         createItem: (kind: NewKind, path: string) => void createItem(kind, path),
@@ -2131,9 +2068,10 @@ async function main(): Promise<void> {
             const script = scripts.find((s) => s.id === id);
             if (script) void setScriptEnabled(script, enabled);
         },
+        resetTweakData: (path: string) => void resetTweakData(path),
         quickOpenItems: () => [
             { id: SETTINGS_ID, name: SETTINGS_FILE },
-            { id: STORES_ID, name: STORES_FILE },
+            ...tweakData.map((f) => ({ id: tweakDataId(f.path), name: f.path })),
             ...scripts.map((s) => ({ id: s.id, name: scriptFileName(s.meta.name) })),
             ...dataFiles.map((d) => ({ id: d.id, name: d.path })),
         ],
@@ -2167,6 +2105,10 @@ async function main(): Promise<void> {
         setMonacoVerbose: (on: boolean) => {
             chrome.storage.local.set({ resMonacoVerbose: on });
             setMonacoVerbose(on, "warn");
+        },
+        setDataFolder: async (name: string) => {
+            const r = await send({ type: "setDataFolder", name }).catch((e) => ({ error: (e as Error).message }));
+            return (r?.error as string) || "";
         },
     } satisfies typeof actions);
     await loadMonaco();
@@ -2203,7 +2145,6 @@ async function main(): Promise<void> {
         if ((problemMarkerKeys.get(m) ?? "[]") !== "[]") setProblemMarkers(m, []);
         scheduleProblems();
     });
-    registerManifestAssist();
     registerPinImportFix();
     registerPlaceFixes();
     registerTsxFix();
@@ -2343,7 +2284,7 @@ function select(id: string): Promise<void> {
         }
     }
     if (id === SETTINGS_ID) return selectSettings();
-    if (id === STORES_ID) return selectStores();
+    if (isTweakDataId(id)) return selectTweakData(id);
     const row = treeRow(id);
     if (row) revealInExplorer(row.path);
     selectReal(id);

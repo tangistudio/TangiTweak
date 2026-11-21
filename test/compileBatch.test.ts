@@ -10,8 +10,8 @@ import { transform } from "sucrase";
 
 const lib = { id: "l", name: "lib", code: `import { base } from "./base";\nexport const hosts: string[] = [base + ".com"];\nglobalThis.__libRuns = (globalThis.__libRuns || 0) + 1;` };
 const base = { id: "b", name: "base", code: `export const base = "api";` };
-const a = { id: "a", name: "a", code: `import { hosts } from "./lib";\ntt.onRequest({ url: "*://" + hosts[0] + "/*", strategy: "helper" }, () => {});` };
-const b = { id: "c", name: "b", code: `import { hosts } from "./lib";\ntt.params({ host: { type: "string", default: hosts[0] } });` };
+const a = { id: "a", name: "a", code: `import { tweak } from "tangitweak"; import { hosts } from "./lib";\ntweak.onRequest({ url: "*://" + hosts[0] + "/*", strategy: "helper" }, () => {});` };
+const b = { id: "c", name: "b", code: `import { tweak } from "tangitweak"; import { hosts } from "./lib";\ntweak.params({ host: { type: "string", default: hosts[0] } });` };
 const scripts = [base, lib, a, b];
 
 describe("compileManyWithLibs", () => {
@@ -29,10 +29,10 @@ describe("compileManyWithLibs", () => {
         expect(many.get("c")!.deps.sort()).toEqual(["base", "lib"]);
     });
 
-    it("runs a shared library once", () => {
+    it("runs a shared module once per tweak (with that tweak's `tweak`)", () => {
         (globalThis as any).__libRuns = 0;
         compileManyWithLibs(["a", "c"], scripts, {});
-        expect((globalThis as any).__libRuns).toBe(1);
+        expect((globalThis as any).__libRuns).toBe(2);
     });
 
     it("skips ids it doesn't have", () => {
@@ -58,13 +58,13 @@ describe("transpile cache", () => {
             return transform(code, { transforms: ["typescript", "imports"], disableESTransforms: true }).code;
         });
         try {
-            const src = `const n: number = 1;\ntt.onPage("*://x/*", () => {});`;
+            const src = `import { tweak } from "tangitweak"; const n: number = 1;\ntweak.onPage("*://x/*", () => {});`;
             const first = toRunnableJs(src);
             expect(toRunnableJs(src)).toBe(first);
             expect(compileScript(src).error).toBeNull();
             expect(calls).toBe(1);
             expect(first).not.toContain(": number");
-            expect(first).toContain(`tt.onPage`);
+            expect(first).toContain(`tweak.onPage`);
         } finally {
             setTranspiler((code) => transform(code, { transforms: ["typescript", "imports"], disableESTransforms: true }).code);
         }

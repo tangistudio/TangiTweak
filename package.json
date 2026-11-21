@@ -1,8 +1,13 @@
 {
   "name": "tangitweak",
-  "version": "0.36.1-alpha",
+  "version": "0.40.1-alpha",
   "description": "Rewrite requests, responses, and pages in TypeScript.",
   "private": true,
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tangistudio/TangiTweak.git"
+  },
   "type": "module",
   "scripts": {
     "build": "node scripts/build.mjs",
@@ -16,6 +21,7 @@
     "screenshots": "tsx scripts/screenshots.ts"
   },
   "devDependencies": {
+    "@testing-library/dom": "^10.4.2",
     "@testing-library/react": "^16.3.3",
     "@types/chrome": "^0.0.280",
     "@types/node": "^26.6.5",
@@ -33,6 +39,7 @@
     "eslint-scope": "^9.1.2",
     "monaco-editor": "^0.52.0",
     "proxy-compare": "^3.0.1",
+    "re2js": "^2.10.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "sucrase": "^3.35.1",

@@ -8,49 +8,65 @@ conversation.
 
 ## Scripts
 
+**Tweak**:
+A folder whose `package.json` has a `"tangitweak"` block, and what it runs: one enable switch, its params, stores and handlers. The only way to write and ship code for TangiTweak; **New Tweak…** creates one.
+_Avoid_: bundle, package (for the folder), `metadata.json` bundle (the pre-0.40 format)
+
+**Entry**:
+The file of a tweak that runs: `package.json`'s `main`, else `index.ts`, else `index.tsx`. It owns the tweak's enable switch, params and stores.
+_Avoid_: main script, root script
+
+**Module**:
+A file of a tweak other than its entry; it runs only when imported, and what it registers belongs to the tweak.
+_Avoid_: library, utility, lib, helper
+
 **Script**:
-A TypeScript file the user writes that registers handlers. Its name is its path in the explorer, folders included (`mock/api mock`).
+A TypeScript file in the explorer (an entry or a module). Its name is its path in the explorer, folders included (`mock/index`). One outside a tweak's folder doesn't run: it **needs a rewrite**.
 _Avoid_: rule, override, userscript
 
-**Library**:
-A script that registers no handlers with its current param values; it only runs when another script imports it.
-_Avoid_: utility, lib, helper
+**`tweak`**:
+The scripting API object a file imports (`import { tweak } from "tangitweak"`); each file gets its own, and its handlers and unnamed stores are named after that file.
+_Avoid_: `tt` (the global it replaced, removed in 0.40)
 
 **Data file**:
 A JSON, Markdown, SVG or image file (`.json`, `.md`, `.svg`, `.png`, …) in the explorer that scripts import; it never runs.
 _Avoid_: fixture, asset, JSON script
 
+**Data folder**:
+The folder inside a tweak (`.tweak` by default, the **Tweak data folder** setting) holding the user's own state for it: `settings.json` (enable switch and changed params) and `stores/<id>.json` (one per persisted global store). Never code or data files: exports leave it out unless asked, and installs and tests never read it.
+_Avoid_: config folder, state folder, `stores.json` (the root file it replaced)
+
 **Package import**:
-An import of an npm package by its pinned unpkg.com URL (`https://unpkg.com/dayjs@1.11.13`); TangiTweak downloads the package, its dependencies and its typings when the script is saved.
-_Avoid_: CDN import, remote import, URL import, external library
+An import of an npm package: by name, from the tweak's `package.json` `dependencies` (`import dayjs from "dayjs"`), or by its pinned unpkg.com URL (`https://unpkg.com/dayjs@1.11.13`); TangiTweak downloads the package, its dependencies and its typings from unpkg when the file is saved.
+_Avoid_: CDN import, remote import, external library
 
 **Folder**:
 A folder in the explorer grouping scripts and data files; folders nest, can be empty, and mirror subfolders of the synced folder.
 _Avoid_: directory, group, namespace
 
 **Recipe**:
-A function exported by a library that registers handlers on behalf of the script that calls it.
+A function exported by a module that registers handlers for the tweak.
 _Avoid_: macro, preset
 
 **Handler**:
-One registration in a script (`tt.onRequest`, `tt.onResponseHeaders`, `tt.onResponseBody`, `tt.replaceResponse`, `tt.onSite`, `tt.onPage` or `tt.onOverlay`) pairing a route with a function.
+One registration in a script (`tweak.onRequest`, `tweak.onResponseHeaders`, `tweak.onResponseBody`, `tweak.replaceResponse`, `tweak.onSite`, `tweak.onPage` or `tweak.onOverlay`) pairing a route with a function.
 _Avoid_: hook, rule, interceptor, listener, onDom
 
 **Place**:
-Where a page handler's code runs: the site's own JavaScript world (`tt.onSite`, untrusted), the isolated world over the same DOM (`tt.onPage`), or the script's own GUI frame (`tt.onOverlay`).
+Where a page handler's code runs: the site's own JavaScript world (`tweak.onSite`, untrusted), the isolated world over the same DOM (`tweak.onPage`), or the script's own GUI frame (`tweak.onOverlay`).
 _Avoid_: world option, `js: "page"`, `dom: "overlay"`
 
 **Handle**:
-What `tt.onSite`, `tt.onPage` or `tt.onOverlay` returns: the functions its handler returned, callable (async) from `onPage` and `onOverlay` code. Calls wait for the handler and never time out.
+What `tweak.onSite`, `tweak.onPage` or `tweak.onOverlay` returns: the functions its handler returned, callable (async) from `onPage` and `onOverlay` code. Calls wait for the handler and never time out.
 _Avoid_: remote, proxy, stub
 
 **Site store**:
-A `tt.siteStore`: a store that lives in the site's JavaScript world, one copy per page, which `onSite` code uses directly and the site can read and change — page data.
+A `tweak.siteStore`: a store that lives in the site's JavaScript world, one copy per page, which `onSite` code uses directly and the site can read and change — page data.
 _Avoid_: page-world store, unsafe store
 
 **Mirror**:
 A site store's live copy in `onPage` or `onOverlay` code: it follows the site's copy and sends its changes there.
-_Avoid_: replica (that's a copy of a `tt.globalStore` or `tt.pageStore`)
+_Avoid_: replica (that's a copy of a `tweak.globalStore` or `tweak.pageStore`)
 
 **Run**:
 One execution of a page handler in one frame. A save, navigation or disable ends it, aborting `ctx.signal`.
@@ -65,7 +81,7 @@ The one stand-in `ctx.patch` installs on an object's property; saves swap what i
 _Avoid_: hook, monkey-patch wrapper
 
 **Body handler**:
-A `tt.onResponseBody` or `tt.replaceResponse` handler: one that works on a response body.
+A `tweak.onResponseBody` or `tweak.replaceResponse` handler: one that works on a response body.
 _Avoid_: response handler, modifyResponse
 
 **Route**:
@@ -81,7 +97,7 @@ A user-adjustable value a script declares, edited in the popup, the Editor or `s
 _Avoid_: option, setting, config, variable
 
 **Enabled**:
-The user's on/off switch for a script; a library has none.
+The user's on/off switch for a tweak (on its entry); a module has none.
 _Avoid_: active, on, running
 
 **Final result**:
@@ -89,7 +105,7 @@ An `onRequest` result that ends the request's handler chain: `replaceResponse`, 
 _Avoid_: terminal result, short-circuit, cancel, respond
 
 **Replacement**:
-A whole new response that TangiTweak serves instead of the real one (from a `tt.replaceResponse` handler or an `onRequest` `replaceResponse` result).
+A whole new response that TangiTweak serves instead of the real one (from a `tweak.replaceResponse` handler or an `onRequest` `replaceResponse` result).
 _Avoid_: mock, override, fake response, respond
 
 **Stacking**:
@@ -157,7 +173,7 @@ The "being debugged" bar Chrome shows while the `debugger` strategy is attached 
 _Avoid_: yellow bar, infobar
 
 **Page**:
-One document shown in a tab, from the navigation or reload that commits it until the next one or the tab closing; a single-page app's route change stays on the same page. Each page has its own copy of a `tt.pageStore`.
+One document shown in a tab, from the navigation or reload that commits it until the next one or the tab closing; a single-page app's route change stays on the same page. Each page has its own copy of a `tweak.pageStore`.
 _Avoid_: tab (a tab shows many pages over time)
 
 **Page load**:
@@ -262,10 +278,14 @@ _Avoid_: export, backup
 `tt-api.d.ts`, `tsconfig.json` and `settings.schema.json`: files TangiTweak writes into the synced folder and rewrites on every start, not meant to be edited.
 _Avoid_: generated files, owned files, support files, typings
 
+**SDK**:
+The `tangitweak` npm package: the `tweak` API's typings, the `tsconfig.json` tweaks extend, and the test SDK (`tangitweak/test`). Its version is the extension's; Folder Sync writes the running extension's copy to `.tangitweak/sdk/tangitweak/`.
+_Avoid_: `@tangitweak/test` (the test package it replaced in 0.40), typings package
+
 **Diagnostics report**:
 The Markdown file the Editor produces for a bug report.
 _Avoid_: debug dump, log export
 
 **Samples**:
-The ready-made starter scripts offered in the Editor's help dialog.
+The ready-made starter tweaks offered in the Editor's help dialog.
 _Avoid_: examples, templates

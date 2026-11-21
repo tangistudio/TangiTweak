@@ -16,7 +16,7 @@ const cls = (...names: (string | false | undefined)[]): string | undefined => na
 export function Workbench() {
     const snap = useSnapshot(layout, { sync: true });
     const dock = useSnapshot(dockLayout, { sync: true });
-    // files or a link dropped on the explorer open Install Script with them
+    // files or a link dropped on the explorer open Install Tweak with them
     const drop = useInstallDrop((d) => openInstall({ drop: d }));
     return (
         <div id="app" className={cls(snap.sidebarHidden && "sidebar-hidden", snap.panelHidden && "panel-hidden")} data-dock={dockOf(dock)} data-side={sideOf(dock)}>

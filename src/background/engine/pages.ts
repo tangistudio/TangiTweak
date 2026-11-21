@@ -1,5 +1,5 @@
 /**
- * Pages: which document each tab shows, for `tt.pageStore` (one copy per
+ * Pages: which document each tab shows, for `tweak.pageStore` (one copy per
  * page). A page starts when a tab's top frame commits a new document (a
  * navigation or reload; a single-page app's route change isn't one) and
  * ends at the next one or when the tab closes — its store copies go then.

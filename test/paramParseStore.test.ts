@@ -23,41 +23,43 @@ const store: Record<string, any> = {};
 };
 
 const { saveScript, listScripts, setParamValue, loadAllParamValues } = await import("../src/background/engine/scriptStore");
-const { currentSettingsState, getSettingsText, applySettingsText } = await import("../src/background/settingsFile");
+const { tweakDataFiles, applyTweakDataFile } = await import("../src/background/tweakDataFiles");
 const { addUiPort, getScriptErrors } = await import("../src/background/engine/logs");
+const { seedBundle } = await import("./bundleHelper");
 
 const logs: { message: string; level: string; scriptId: string | null }[] = [];
 addUiPort({ postMessage: (m: any) => m?.type === "log" && logs.push(m.entry), onDisconnect: { addListener: () => {} } } as any);
 
-const CODE = `
-const cfg = tt.params({ origin: { type: "string", default: "https://a.com", parse: (s) => new URL(s) } });
-tt.onRequest({ url: \`*://\${cfg.origin.host}/*\`, strategy: "helper" }, () => {});
+const CODE = `import { tweak } from "tangitweak"; 
+const cfg = tweak.params({ origin: { type: "string", default: "https://a.com", parse: (s) => new URL(s) } });
+tweak.onRequest({ url: \`*://\${cfg.origin.host}/*\`, strategy: "helper" }, () => {});
 `;
 const get = async (id: string) => (await listScripts()).find((s) => s.id === id)!;
 
 describe("param parse — store and settings", () => {
-    beforeEach(() => {
+    beforeEach(async () => {
         for (const k of Object.keys(store)) delete store[k];
+        await seedBundle("parsed");
         logs.length = 0;
     });
 
     it("stores defs without parse; values and settings.json stay raw", async () => {
-        const s = await saveScript({ id: "p", name: "parsed.tangitweak", code: CODE });
+        const s = await saveScript({ id: "p", name: "parsed/index", code: CODE });
         expect(s.error).toBeNull();
         expect(s.meta.match).toEqual(["*://a.com/*"]);
         expect(s.paramDefs).toEqual({ origin: { type: "string", default: "https://a.com" } });
         expect(JSON.stringify(store.resScripts.p.paramDefs)).not.toContain("parse");
 
-        expect((await applySettingsText(JSON.stringify({ scripts: { "parsed.tangitweak": { origin: "https://b.org" } } }))).error).toBeUndefined();
+        expect((await applyTweakDataFile("parsed/.tweak/settings.json", JSON.stringify({ params: { origin: "https://b.org" } }))).error).toBeUndefined();
         expect((await loadAllParamValues()).p).toEqual({ origin: "https://b.org" });
         expect((await get("p")).meta.match).toEqual(["*://b.org/*"]);
-        const st = await currentSettingsState();
-        expect(st.scripts.find((x) => x.name === "parsed.tangitweak.ts")?.defs.origin).toEqual({ type: "string", default: "https://a.com" });
-        expect(JSON.parse(await getSettingsText())).toEqual({ scripts: { "parsed.tangitweak.ts": { origin: "https://b.org" } } });
+        const [file] = await tweakDataFiles();
+        expect(file.path).toBe("parsed/.tweak/settings.json");
+        expect(JSON.parse(file.text)).toEqual({ enabled: true, params: { origin: "https://b.org" } });
     });
 
     it("a value the parser rejects: a compile error naming the param, not logged", async () => {
-        await saveScript({ id: "p", name: "parsed.tangitweak", code: CODE });
+        await saveScript({ id: "p", name: "parsed/index", code: CODE });
         await setParamValue("p", "origin", "xyz");
         const s = await get("p");
         expect(s.error).toMatch(/param "origin": parse failed for value "xyz": Invalid URL/);

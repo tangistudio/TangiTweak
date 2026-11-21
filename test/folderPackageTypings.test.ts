@@ -21,7 +21,10 @@ const listeners: ((c: Record<string, any>) => void)[] = [];
     },
     runtime: { lastError: undefined, sendMessage: () => {}, getURL: (p: string) => `chrome-extension://x/${p}` },
 };
-(globalThis as any).fetch = async () => ({ ok: true, status: 200, text: async () => "declare const tt: any;\n" });
+(globalThis as any).fetch = async (url: string) =>
+    url.endsWith("/tangitweak-sdk.json")
+        ? { ok: true, status: 200, json: async () => ({ "index.d.ts": 'declare module "tangitweak" {}\n' }) }
+        : { ok: true, status: 200, text: async () => "declare const tt: any;\n", json: async () => ({}) };
 
 type Entry = { kind: "file"; text: string; t: number } | { kind: "directory"; dir: Dir };
 interface Dir {
@@ -84,7 +87,7 @@ function tree(d: Dir, prefix = ""): Record<string, string> {
     }
     return out;
 }
-const typingsOnDisk = () => Object.fromEntries(Object.entries(tree(root)).filter(([p]) => p.startsWith(".tangitweak/types/")));
+const typingsOnDisk = () => Object.fromEntries(Object.entries(tree(root)).filter(([p]) => p.startsWith(".tangitweak/") && !p.startsWith(".tangitweak/sdk/") && p !== ".tangitweak/eslint-plugin.mjs"));
 
 describe("folder sync package typings", () => {
     it("mirrors the stored typings under .tangitweak/types and removes stale ones", async () => {
@@ -120,10 +123,11 @@ describe("folder sync package typings", () => {
             ".tangitweak/types/unpkg.com/a@1.0.0/index.d.ts": "export declare const a: string;\n",
         });
 
-        // nothing left → the folder goes (the ESLint plugin stays)
+        // nothing left → the folder goes (the SDK next to it stays)
         chrome.storage.local.set({ [PACKAGE_TYPINGS_KEY]: { files: {}, tops: {} } });
         await sync.flush();
-        expect(Object.keys(tree(root)).filter((p) => p.startsWith(".tangitweak/"))).toEqual([".tangitweak/eslint-plugin.mjs"]);
+        expect(typingsOnDisk()).toEqual({});
+        expect((root.entries.get(".tangitweak") as any).dir.entries.has("types")).toBe(false);
         expect(root.entries.has("tsconfig.json")).toBe(true);
         sync.halt();
     });

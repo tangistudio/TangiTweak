@@ -7,6 +7,7 @@
  * nested specifier rules, typings paths and the runtime loader.
  */
 import type { PackageFn } from "./siteCode";
+import { scriptScope } from "./scriptScope";
 
 export const PACKAGE_ORIGIN = "https://unpkg.com/";
 /** where package typings live: Monaco's `file:///<root>/…` and the synced folder's `<root>/…` */
@@ -27,7 +28,12 @@ export interface PackageUrl {
 /** a downloaded module: CommonJS code plus where each of its `require` specifiers goes */
 export interface PackageModule {
     js: string;
-    /** spec → final URL of the module, or "!" + why it can't be required */
+    /**
+     * spec → final URL of the module, or "!" + why it can't be required.
+     * A Node.js built-in the package doesn't depend on also has an entry
+     * per tweak dependency range it falls back to (`fallbackKey`): the
+     * module is shared, which tweak requires it isn't.
+     */
     requires: Record<string, string>;
 }
 
@@ -109,8 +115,48 @@ export function isNodeBuiltin(spec: string): boolean {
     return spec.startsWith("node:") || BUILTINS.has(spec.split("/")[0]);
 }
 
+// each Node.js built-in's browser version on npm (none: it can't work in a browser)
+const BROWSER_BUILTINS: Record<string, string> = {
+    events: "events",
+    buffer: "buffer",
+    util: "util",
+    process: "process",
+    assert: "assert",
+    url: "url",
+    string_decoder: "string_decoder",
+    punycode: "punycode",
+    path: "path-browserify",
+    crypto: "crypto-browserify",
+    stream: "stream-browserify",
+    os: "os-browserify",
+    http: "stream-http",
+    https: "https-browserify",
+    zlib: "browserify-zlib",
+    querystring: "querystring-es3",
+    timers: "timers-browserify",
+    tty: "tty-browserify",
+    vm: "vm-browserify",
+    constants: "constants-browserify",
+};
+
+/** why a Node.js built-in can't be imported, and the tweak's dependency that would provide it */
 export function builtinMessage(spec: string): string {
-    return `"${spec}" is a Node.js built-in — not available in TangiTweak scripts`;
+    const name = splitBare(spec.replace(/^node:/, "")).name;
+    const pkg = BROWSER_BUILTINS[name];
+    const fix = pkg ? ` — add "${name}": "${pkg === name ? "latest" : `npm:${pkg}`}" to the tweak's package.json "dependencies" to use npm's browser version` : "";
+    return `"${spec}" is a Node.js built-in — not available in tweaks${fix}`;
+}
+
+/** the tweak dependency a Node.js built-in falls back to (`node:events` → events) */
+export const builtinName = (spec: string): string => splitBare(spec.replace(/^node:/, "")).name;
+
+/** where a module's require of a Node.js built-in goes for a tweak that gives it `range` */
+export const fallbackKey = (spec: string, range: string): string => `${spec} ${range}`;
+
+/** the dependencies a tweak's packages may fall back to: those named like a Node.js built-in */
+export function builtinFallbacks(deps: Record<string, string> | undefined): Record<string, string> | undefined {
+    const out = Object.entries(deps ?? {}).filter(([n]) => isNodeBuiltin(n));
+    return out.length ? Object.fromEntries(out.sort(([a], [b]) => (a < b ? -1 : 1))) : undefined;
 }
 
 /** a bare specifier's package name and path inside it (`@s/x/a/b` → `@s/x`, `a/b`) */
@@ -137,8 +183,15 @@ export function classifyNested(spec: string, from: string): { url: string } | { 
     return { bare: name, sub };
 }
 
-/** `https://unpkg.com/<name>@<range>[/sub]` for a dependency range; null for non-registry ranges (`npm:`, git, `file:`, …) */
+/** the package a dependency names: an `npm:` alias's target ("path": "npm:path-browserify@^1" → path-browserify, ^1), else itself */
+export function aliasTarget(name: string, range: string | undefined): { name: string; range: string | undefined } {
+    const m = /^npm:((?:@[^/@\s]+\/)?[^/@\s]+)(?:@(.*))?$/.exec((range ?? "").trim());
+    return m ? { name: m[1], range: m[2] || "latest" } : { name, range };
+}
+
+/** `https://unpkg.com/<name>@<range>[/sub]` for a dependency range (`npm:<name>@<range>` aliases followed); null for non-registry ranges (git, `file:`, …) */
 export function rangeUrl(name: string, range: string | undefined, sub: string): string | null {
+    ({ name, range } = aliasTarget(name, range));
     const r = (range ?? "").trim() || "latest";
     if (/[:/]/.test(r) || /^[\w.-]+\/[\w.-]+/.test(r)) return null;
     return `${PACKAGE_ORIGIN}${name}@${encodeURIComponent(r === "*" ? "latest" : r)}${sub ? `/${sub}` : ""}`;
@@ -412,9 +465,21 @@ export function isPackageExport(fn: Function): boolean {
     return packageFns.has(fn);
 }
 
-const evalPackage = (url: string, js: string): PackageFn =>
+/** where a module's `require(spec)` goes for a tweak whose built-in fallbacks are `fb` */
+export function requireTarget(mod: PackageModule, spec: string, fb?: Record<string, string>): string | undefined {
+    const to = mod.requires[spec];
+    const range = fb && to?.startsWith("!") && isNodeBuiltin(spec) ? fb[builtinName(spec)] : undefined;
+    return (range !== undefined && mod.requires[fallbackKey(spec, range)]) || to;
+}
+
+const evalPackage = (url: string, js: string, scope = scriptScope()): PackageFn => {
+    const params = ["require", "module", "exports", "process", "global", "__ttStyle"];
+    const body = `${js}\n//# sourceURL=${url}`;
     // eslint-disable-next-line no-new-func
-    new Function("require", "module", "exports", "process", "global", "__ttStyle", `${js}\n//# sourceURL=${url}`) as PackageFn;
+    if (!scope) return new Function(...params, body) as PackageFn;
+    // eslint-disable-next-line no-new-func
+    return new Function("__ttScope", `with (__ttScope) return function (${params.join(", ")}) {${body}\n}`)(scope.vars) as PackageFn;
+};
 const noEval = (url: string): never => {
     throw new Error(`cannot run ${url} here`);
 };
@@ -438,55 +503,65 @@ const PROCESS = { env: { NODE_ENV: "production" }, browser: true, versions: {}, 
  *
  * `compile` turns a module into its function (default: `new Function`;
  * the MV3 hook can't, it gets them as user scripts — shared/siteCode.ts).
+ *
+ * The loader's second argument, `deps`, is the importing tweak's
+ * package.json dependencies: where a Node.js built-in a package requires
+ * without depending on it comes from. Modules run once per distinct set
+ * of such fallbacks.
  */
 export function makePackageLoader(
     pkgs: PackageModules | undefined,
     builtin?: (spec: string, from: string) => { module: any } | undefined,
     opts?: { style?: (css: string, url: string) => void; shared?: string; compile?: (url: string, js: string) => PackageFn }
-): (url: string) => any {
+): (url: string, deps?: Record<string, string>) => any {
     const style = opts?.style ?? (() => {});
-    const compile = opts?.compile ?? (__NO_EVAL__ ? noEval : evalPackage);
+    const scope = scriptScope();
+    const compile = opts?.compile ?? (__NO_EVAL__ ? noEval : (url: string, js: string) => evalPackage(url, js, scope));
+    const shared = opts?.shared && scope ? `${opts.shared} ${scope.key}` : opts?.shared;
     const cache = new Map<string, { exports: any }>();
-    const run = (url: string): any => {
-        const hit = cache.get(url);
+    const run = (url: string, fb: Record<string, string> | undefined, fbKey: string): any => {
+        const key = fbKey + url;
+        const hit = cache.get(key);
         if (hit) return hit.exports;
         const mod = pkgs?.modules[url];
         if (!mod) throw new Error(`cannot import "${url}": it wasn't downloaded`);
-        const kept = opts?.shared ? sharedModules.get(opts.shared + " " + url) : undefined;
+        const kept = shared ? sharedModules.get(shared + " " + key) : undefined;
         if (kept && kept.js === mod.js) {
-            cache.set(url, kept);
+            cache.set(key, kept);
             return kept.exports;
         }
         const module = { exports: {} as any };
-        cache.set(url, module);
+        cache.set(key, module);
         const require = (spec: string): any => {
             const b = builtin?.(spec, url);
             if (b) return b.module;
-            const to = mod.requires[spec];
+            const to = requireTarget(mod, spec, fb);
             if (to === undefined) throw new Error(`cannot find module "${spec}" (required by ${url})`);
             if (to.startsWith("!")) throw new Error(to.slice(1));
-            return run(to);
+            return run(to, fb, fbKey);
         };
         try {
             const fn = compile(url, mod.js);
-            fn.call(module.exports, require, module, module.exports, PROCESS, globalThis, style);
+            fn.call(module.exports, require, module, module.exports, PROCESS, scope?.global ?? globalThis, style);
         } catch (e) {
-            cache.delete(url);
+            cache.delete(key);
             throw e;
         }
         markPackageExports(module.exports);
-        if (opts?.shared) sharedModules.set(opts.shared + " " + url, { js: mod.js, exports: module.exports });
+        if (shared) sharedModules.set(shared + " " + key, { js: mod.js, exports: module.exports });
         return module.exports;
     };
-    return (spec) => {
+    return (spec, deps) => {
         const p = parsePackageUrl(spec);
-        if (typeof p === "string") throw new PackageImportError(p);
+        // a dependency's range URL (a bundle's bare import) loads through its download's alias
+        if (typeof p === "string" && !finalUrl(pkgs, spec) && pkgs?.failed?.[spec] === undefined) throw new PackageImportError(p);
         const failed = pkgs?.failed?.[spec];
         if (failed !== undefined) throw new PackageImportError(`cannot import "${spec}": ${failed}`);
         const url = finalUrl(pkgs, spec);
         if (!url) throw new PackageImportError(`cannot import "${spec}": not downloaded yet — save the script to download it`);
         try {
-            return run(url);
+            const fb = builtinFallbacks(deps);
+            return run(url, fb, fb ? JSON.stringify(fb) + " " : "");
         } catch (e: any) {
             if (e instanceof PackageImportError) throw e;
             throw new PackageImportError(`cannot import "${spec}": ${e?.message ?? e}`);

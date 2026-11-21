@@ -1,18 +1,17 @@
 /**
- * The background's `tt.globalStore` owner and the links to it:
+ * The background's `tweak.globalStore` owner and the links to it:
  *
  *   MV2 — scripts compile right here: one in-process replica hub, joined
  *         to the owner by an endpoint pair, shared by every strategy's
  *         compiled instance (so a store is one object across them).
  *   MV3 — scripts compile in the sandbox: its hub talks to the owner over
  *         the L1 link (sandbox ⇄ offscreen ⇄ chrome.runtime ⇄ here). The
- *         link also serves the sandbox's `tt.fetch`.
+ *         link also serves the sandbox's `tweak.fetch`.
  */
 import { Endpoint, endpointPair, type Json, type StorePersist, type WireRequest, type WireResponse } from "../../shared/wire";
 import { ReplicaHub } from "../../shared/storeReplica";
 import { packBytes, unpackBytes } from "../../shared/bytesPack";
 import { isTabScope, jsonBytes, tabScopeId } from "../../shared/storeOps";
-import { scriptFileName, scriptPathKey } from "../../shared/scriptName";
 import { StoreOwner } from "./storeOwner";
 import { log } from "./logs";
 import { scriptStorageAll, scriptStorageSet, scriptStorageDelete, getScript, listScripts, onScriptsChanged } from "./scriptStore";
@@ -36,7 +35,7 @@ export const storeOwner = new StoreOwner({
     pageAlive: (p) => pages.isAlive(p),
     ready: () => pagesReady,
 });
-// a page ended: its tt.pageStore copies go; a tab closed: its tt.tabStore copies go
+// a page ended: its tweak.pageStore copies go; a tab closed: its tweak.tabStore copies go
 pages.onEnd((key) => storeOwner.dropPage(key));
 pages.onTabEnd((tabKey) => storeOwner.dropPage(tabKey));
 
@@ -104,32 +103,12 @@ export async function listAllStores(providedScripts?: readonly { id: string; met
     return rows;
 }
 
-export async function exportPersistedStores(): Promise<Record<string, Record<string, Json>>> {
-    const scripts = await listScripts();
-    return storeOwner.exportPersisted(scripts.map((s) => ({ id: s.id, name: scriptFileName(s.meta.name) })));
-}
-
-export async function importPersistedStores(exported: Record<string, Record<string, Json>>): Promise<number> {
-    const scripts = await listScripts();
-    const byKey = new Map(scripts.map((s) => [scriptPathKey(s.meta.name), s.id]));
-    let count = 0;
-    for (const [scriptName, stores] of Object.entries(exported || {})) {
-        const scriptId = byKey.get(scriptPathKey(scriptName));
-        if (!scriptId || !stores || typeof stores !== "object") continue;
-        for (const [storeName, data] of Object.entries(stores)) {
-            await storeOwner.replace(scriptId, storeName, data);
-            count++;
-        }
-    }
-    return count;
-}
-
 /** a script's name for log lines (its id if it's gone) */
 async function nameOf(scriptId: string): Promise<string> {
     return (await getScript(scriptId).catch(() => undefined))?.meta.name ?? scriptId;
 }
 
-/** `tt.fetch(..., { from: "background" })` for a script */
+/** `tweak.fetch(..., { from: "background" })` for a script */
 export async function fetchFor(scriptId: string, request: WireRequest, bypass: boolean): Promise<WireResponse> {
     return backgroundFetch(request, { bypass, scriptId, scriptName: await nameOf(scriptId) });
 }
@@ -151,7 +130,7 @@ export function backgroundHub(): ReplicaHub {
 
 /**
  * Before scripts compile (reload): drop the stores of deleted scripts and,
- * in MV2, load the others' current state into the hub so `tt.globalStore`
+ * in MV2, load the others' current state into the hub so `tweak.globalStore`
  * returns real data synchronously.
  */
 export async function prepareStores(scriptIds: string[]): Promise<void> {

@@ -6,15 +6,15 @@
  * extension port, never through the page.
  *
  * Here the script's module graph evaluates with network and onPage
- * registrations inert; its overlay handlers (`tt.onOverlay`) run at their
+ * registrations inert; its overlay handlers (`tweak.onOverlay`) run at their
  * `when`. A save recompiles here (`overlay.update`) and re-runs the
  * handlers as new runs (shared/runLifecycle.ts): the frame stays. Stores
- * are replicas (shared/storeReplica.ts), `fetch` and `tt.fetch` fetch as
+ * are replicas (shared/storeReplica.ts), `fetch` and `tweak.fetch` fetch as
  * the page (the bridge does it, with the page's cookies), calls into
  * onPage code and back go through shared/rpc.ts, and the frame reports
  * its visible areas so the bridge lets clicks through everywhere else.
  */
-import { compileScript, type ResApiOverrides } from "../shared/compile";
+import { compileScript, runInTweak, type ResApiOverrides } from "../shared/compile";
 import { messagePortEndpoint, type Endpoint, type OverlayInit } from "../shared/wire";
 import { ReplicaHub } from "../shared/storeReplica";
 import { tabScopeOfPage } from "../shared/storeOps";
@@ -58,6 +58,8 @@ export interface OverlayEnv {
     watchRects?: boolean;
     /** which key events count as the user's (default: `isTrusted`) */
     trustedKey?: (e: KeyboardEvent) => boolean;
+    /** the Fast Refresh registry's key (default: the script's name; the test loader keeps each page's apart) */
+    hotKey?: string;
 }
 
 /** run `init`'s script in this frame, talking to the bridge over `ep` */
@@ -71,7 +73,7 @@ export async function startOverlay(ep: Endpoint, init: OverlayInit, env: Overlay
     hub.prime({ [s]: init.stores, ...init.libStores });
     hub.attach(ep);
     ep.on("store.resync", () => hub.reconnect());
-    // `tt.siteStore`: the page's (the bridge relays, for this script's own)
+    // `tweak.siteStore`: the page's (the bridge relays, for this script's own)
     const site = new SiteMirrors({ ctx: "overlay", post: (m) => !ep.closed && ep.push("site.up", m), log: (_s, msg, level) => log(level, msg) });
     ep.on("site.down", (m) => site.receive(m));
     ep.onClose(() => site.dispose());
@@ -194,6 +196,7 @@ export async function startOverlay(ep: Endpoint, init: OverlayInit, env: Overlay
         const requireFrom = makeLibRequire(
             next.libs,
             (lib, require, moduleObj) => {
+                if (runInTweak(lib.src!, lib.name, require, moduleObj, common.logSink)) return;
                 const libId = lib.id ?? s;
                 const c = compileScript(lib.src!, {
                     ...common,
@@ -211,7 +214,7 @@ export async function startOverlay(ep: Endpoint, init: OverlayInit, env: Overlay
                 moduleObj.exports = c.exports;
             },
             {
-                builtin: scriptBuiltin(codeOf, hotRegistry(init.name).begin()),
+                builtin: scriptBuiltin(codeOf, hotRegistry(env.hotKey ?? init.name).begin()),
                 style: (css) => {
                     if (libCss.has(css)) return;
                     libCss.add(css);

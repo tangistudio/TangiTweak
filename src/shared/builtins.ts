@@ -1,11 +1,11 @@
 /**
  * Built-in modules: the extension's own valtio (^2.3) and React 19, which
  * script imports of `valtio`, `react`, `react-dom`, … (bare or esm.sh,
- * see builtinSpecs.ts) resolve to — one copy, so `tt.globalStore` proxies and
+ * see builtinSpecs.ts) resolve to — one copy, so `tweak.globalStore` proxies and
  * hooks just work.
  *
  * valtio's vanilla parts are bundled with the compiler (they're small and
- * `tt.globalStore` is built on them). React is a separate chunk
+ * `tweak.globalStore` is built on them). React is a separate chunk
  * (`builtins-react.js`, scripts/build.mjs) loaded with a <script> tag only
  * when a script imports it: `ensureBuiltins(codes)` before compiling.
  * `valtio/react` is built over whichever React the importer uses (the
@@ -15,6 +15,7 @@ import * as vanilla from "valtio/vanilla";
 import * as vanillaUtils from "valtio/vanilla/utils";
 import { createProxy, isChanged } from "proxy-compare";
 import { builtinNeedsReact, builtinSpec, preactRoot, preactTarget, REACT_BUILTINS } from "./builtinSpecs";
+import { TWEAK_MODULE } from "./tweakApi";
 import { importSpecs, type ShippedLib } from "./scriptImports";
 import type { PackageModules } from "./packageImports";
 import type { HotCompile } from "./hotRefresh";
@@ -181,6 +182,8 @@ function withHooks(base: object, hooks: () => { useSnapshot: any; useProxy: any 
 export function builtinModule(spec: string, code = "", loadUrl?: (url: string) => any, hot?: { compile: HotCompile; path: string }): any {
     const name = builtinSpec(spec);
     if (!name) throw new Error(`"${spec}" isn't a built-in module`);
+    // each file's own `tweak` (scriptFunction's require); a package can't import it
+    if (name === TWEAK_MODULE) throw new Error(`"${TWEAK_MODULE}" can only be imported by a tweak's own files`);
     const root = preactRoot(code);
     const mapped = root ? preactTarget(root, name) : null;
     if (mapped) {
