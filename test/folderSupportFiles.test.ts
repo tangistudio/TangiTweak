@@ -82,11 +82,12 @@ const dir = makeDir();
 vi.mock("../src/shared/folderSync", async (orig) => ({ ...(await orig<any>()), loadSavedHandle: async () => dir, saveHandle: async () => {}, clearSavedHandle: async () => {} }));
 
 describe("folder sync support files", () => {
-    it("writes typings, tsconfig, the SDK and schema on start and preserves user package.json fields", async () => {
+    it("writes typings, tsconfig and the SDK on start and preserves user package.json fields", async () => {
         files.set("feature.ts", { text: "import { tweak } from 'tangitweak'; tweak.onPage('*://example.com/*', () => {});\n", t: clock++ });
         files.set("feature.test.ts", { text: "import { test } from 'tangitweak/test';\n", t: clock++ });
         // what Folder Sync wrote before 0.40.0-alpha
         files.set(".tangitweak/test/index.mjs", { text: "old\n", t: clock++ });
+        files.set("settings.schema.json", { text: JSON.stringify({ $comment: GENERATED_NOTE }), t: clock++ });
         files.set(
             "package.json",
             {
@@ -136,8 +137,8 @@ describe("folder sync support files", () => {
         // the Editor's checks as ESLint rules
         expect(files.get("eslint.config.mjs")?.text).toContain(".tangitweak/eslint-plugin.mjs");
         expect(files.get(".tangitweak/eslint-plugin.mjs")?.text).toContain("no-invalid-world-access");
-        expect(JSON.parse(files.get("settings.schema.json")!.text).$comment).toBe(GENERATED_NOTE);
-        const kept = ["tt-api.d.ts", "tsconfig.json", "package.json", "settings.schema.json", ".tangitweak/sdk/tangitweak/test.js"];
+        expect(files.has("settings.schema.json")).toBe(false);
+        const kept = ["tt-api.d.ts", "tsconfig.json", "package.json", ".tangitweak/sdk/tangitweak/test.js"];
         const stamps = kept.map((f) => files.get(f)!.t);
 
         // unchanged → nothing rewritten on the next start

@@ -1284,14 +1284,13 @@ tweak.replaceResponse({ url: "${ORIGIN}/sf-data", strategy: "page" }, async () =
             await w.close();
         }, [path, text] as any);
 
-    // GUI change → settings.json and settings.schema.json in the folder; the tweak's settings in its data folder
+    // GUI change → settings.json in the folder; the tweak's settings in its data folder
     await saveTweak(fSend, "s_sync", "Sync guinea", 'import { tweak } from "tangitweak"; tweak.params({ token: { type: "string", default: "abc", description: "Sync token" } });\ntweak.onRequest({ url: "*://sync.invalid/*", strategy: "page" }, () => {});\n');
     await fPage.waitForTimeout(2500); // export debounce + SW poller cadence
     const json1 = await opfsText("settings.json");
     check("MV3 folder sync: settings.json exported to the folder", typeof json1 === "string" && json1.trim().startsWith("{"), (json1 || "MISSING").slice(0, 160));
 
-    const schema1 = JSON.parse((await opfsText("settings.schema.json")) || "{}");
-    check("MV3 folder sync: settings.schema.json exported (TangiTweak's own settings, no scripts)", !!schema1?.properties && !schema1.properties.scripts, JSON.stringify(Object.keys(schema1?.properties ?? {})).slice(0, 160));
+    check("MV3 folder sync: no settings.schema.json in the folder", (await opfsText("settings.schema.json")) == null);
     const tweakSettings1 = await opfsText("Sync guinea/.tweak/settings.json");
     check("MV3 folder sync: the tweak's .tweak/settings.json exported", JSON.parse(tweakSettings1 || "{}")?.enabled === true, tweakSettings1 || "MISSING");
 

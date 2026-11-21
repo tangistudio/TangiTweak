@@ -1,7 +1,7 @@
 /**
  * Support files folder sync keeps in the scripts folder for VS Code:
- * tt-api.d.ts (typings), tsconfig.json, package.json, eslint.config.mjs and
- * settings.schema.json, plus the package imports' and the built-in modules'
+ * tt-api.d.ts (typings), tsconfig.json, package.json and eslint.config.mjs,
+ * plus the package imports' and the built-in modules'
  * (valtio, React) typings under .tangitweak/types/, the SDK (the npm package
  * `tangitweak`, as this build made it) under .tangitweak/sdk/tangitweak/, and
  * the Editor's own checks as an ESLint plugin (.tangitweak/eslint-plugin.mjs).

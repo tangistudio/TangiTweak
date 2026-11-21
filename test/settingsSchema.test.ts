@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { settingsSchemaJson, SETTINGS_SCHEMA, tweakSettingsSchema } from "../src/shared/settingsSchema";
+import { SETTINGS_SCHEMA, tweakSettingsSchema } from "../src/shared/settingsSchema";
 
 describe("a tweak's settings.json schema", () => {
     const schema: any = tweakSettingsSchema({
@@ -28,6 +28,5 @@ describe("a tweak's settings.json schema", () => {
         expect(tweakSettingsSchema().properties.params.additionalProperties).toBe(true);
         expect((SETTINGS_SCHEMA.properties as any).scripts).toBeUndefined();
         expect(SETTINGS_SCHEMA.properties.dataFolder.default).toBe(".tweak");
-        expect(settingsSchemaJson()).toMatch(/\n$/);
     });
 });

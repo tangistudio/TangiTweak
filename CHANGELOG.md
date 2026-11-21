@@ -18,6 +18,7 @@ its section below.
 
 ### Changed
 
+- **No more `settings.schema.json`** in the synced folder. The one TangiTweak wrote is removed; `settings.json` still gets completions and validation in the Editor.
 - **The Explorer folds a tweak's stores** under one `.tweak/stores` row, closed until you open it (click, Enter or →); opening a store from elsewhere opens the row.
 
 ### Fixed

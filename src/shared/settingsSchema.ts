@@ -1,17 +1,14 @@
 /**
  * JSON schemas for settings.json — used by Monaco's built-in JSON worker in
- * the Editor and written into the synced folder as settings.schema.json for
- * external editors — and for a tweak's own data folder settings.json.
+ * the Editor — and for a tweak's own data folder settings.json.
  */
 import { LOG_LEVELS, DEFAULT_LOG_CAP, DEFAULT_LOG_LEVEL, TEXT_TYPES_DESC, DEFAULT_BODY_CAP, BODY_CAP_MIN, BODY_CAP_MAX } from "./settingsJson";
 import { DATA_FOLDER_DESC, DEFAULT_DATA_FOLDER } from "./tweakData";
 import { DEFAULT_TEXT_TYPES } from "./bodyKind";
 import { isParamDef, paramDefault, type ParamNode, type ParamTree } from "./scriptDef";
-import { GENERATED_NOTE } from "./generatedFiles";
 
 export const SETTINGS_SCHEMA = {
     $schema: "http://json-schema.org/draft-07/schema#",
-    $comment: GENERATED_NOTE,
     title: "TangiTweak settings",
     description: "Extension settings (settings.json). Omitted keys use their defaults. A tweak's enable switch and params are in its data folder's settings.json.",
     type: "object",
@@ -19,7 +16,7 @@ export const SETTINGS_SCHEMA = {
     properties: {
         $schema: {
             type: "string",
-            description: "Optional JSON Schema URI (e.g. ./settings.schema.json)",
+            description: "Optional JSON Schema URI",
         },
         logLevel: {
             type: "string",
@@ -100,4 +97,3 @@ export function tweakSettingsSchema(defs: ParamTree = {}): Record<string, any> {
 }
 
 /** pretty-printed, trailing newline — the exact bytes written to the synced folder */
-export const settingsSchemaJson = (): string => JSON.stringify(SETTINGS_SCHEMA, null, 2) + "\n";

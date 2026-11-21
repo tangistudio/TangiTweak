@@ -15,6 +15,7 @@ import { DEFAULT_TEXT_TYPES } from "./bodyKind";
 import { DEFAULT_DATA_FOLDER, dataFolderProblem } from "./tweakData";
 
 export const SETTINGS_FILE = "settings.json";
+/** written to the synced folder before 0.40.1-alpha; an old one is removed, and never read as a data file */
 export const SCHEMA_FILE = "settings.schema.json";
 export const LOG_LEVELS = ["debug", "info", "warn", "error"] as const;
 export const DEFAULT_LOG_LEVEL = "info";

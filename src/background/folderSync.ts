@@ -40,8 +40,7 @@ import { isBundlePackageJson, MANIFEST_FILE } from "../shared/packageMetadata";
 import { storeOwner } from "./engine/stores";
 import { jsonEqual } from "../shared/storeOps";
 import { SETTINGS_FILE, SCHEMA_FILE } from "../shared/settingsJson";
-import { settingsSchemaJson } from "../shared/settingsSchema";
-import { API_DTS_FILE, BUILTIN_TYPINGS_ROOT, ESLINT_CONFIG_FILE, ESLINT_PLUGIN_FILE, OLD_TEST_PKG_ROOT, PACKAGE_JSON_FILE, SDK_BUILTIN_TYPINGS, SDK_ROOT, TSCONFIG_FILE, apiDtsText, eslintConfigText, eslintPluginText, packageJsonText, tsconfigText } from "../shared/generatedFiles";
+import { API_DTS_FILE, BUILTIN_TYPINGS_ROOT, ESLINT_CONFIG_FILE, ESLINT_PLUGIN_FILE, GENERATED_NOTE, OLD_TEST_PKG_ROOT, PACKAGE_JSON_FILE, SDK_BUILTIN_TYPINGS, SDK_ROOT, TSCONFIG_FILE, apiDtsText, eslintConfigText, eslintPluginText, packageJsonText, tsconfigText } from "../shared/generatedFiles";
 import { broadcastToUi } from "./engine/logs";
 import { dlogLevel } from "../shared/debugLog";
 import { folderPathProblem, isConfigJsonPath, isGitignorePath, isScriptFilePath, scriptFileName, scriptNameFromFile } from "../shared/scriptName";
@@ -1197,7 +1196,6 @@ async function exportSettings(force = false): Promise<void> {
             await writeFile(SETTINGS_FILE, text);
             settingsSig = (await readSettingsFile())?.sig ?? null;
         }
-        await ensureSchemaFile();
     } catch (e: any) {
         dlogLevel("sync", "warn", `Folder sync: writing ${SETTINGS_FILE} failed: ${e?.message || e}`);
     }
@@ -1215,9 +1213,10 @@ async function ensureFile(fileName: string, content: string): Promise<void> {
     await writeFile(fileName, content);
 }
 
-/** the JSON schema the settings.json modeline points at (VS Code YAML extension) */
-async function ensureSchemaFile(): Promise<void> {
-    await ensureFile(SCHEMA_FILE, settingsSchemaJson());
+/** settings.schema.json isn't written since 0.40.1-alpha: the one TangiTweak wrote goes, a user's own stays */
+async function removeOldSchemaFile(): Promise<void> {
+    const text = await readTextOrNull(SCHEMA_FILE);
+    if (text?.includes(GENERATED_NOTE)) await removeFile(SCHEMA_FILE);
 }
 
 async function ensurePackageJsonFile(): Promise<void> {
@@ -1298,7 +1297,7 @@ async function ensureSupportFiles(): Promise<void> {
     await ensurePackageJsonFile();
     await ensureFile(ESLINT_CONFIG_FILE, eslintConfigText());
     await ensureEslintPlugin();
-    await ensureSchemaFile();
+    await removeOldSchemaFile();
     await ensureSdkFiles();
     await ensurePackageTypingsFiles();
 }

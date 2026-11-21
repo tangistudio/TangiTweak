@@ -58,8 +58,8 @@ export function scriptNameProblem(name: string): string {
 /**
  * JSON files that configure tooling rather than hold data: package-lock.json
  * and jsconfig.json anywhere; package.json and tsconfig*.json at the root
- * (Folder Sync writes those); and the settings.schema.json TangiTweak keeps
- * at the root of the synced folder. They are never data files (folder sync
+ * (Folder Sync writes those); and settings.schema.json at the root, which
+ * TangiTweak wrote before 0.40.1-alpha. They are never data files (folder sync
  * skips them). A tweak bundle's own package.json and tsconfig.json, in its
  * folder, are data files.
  */

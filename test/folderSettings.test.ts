@@ -46,7 +46,7 @@ describe("settings.json folder sync", () => {
         await sync.startFromStoredHandle();
         await sleep(600);
         expect(files.get("settings.json")!.text).toBe("{}\n");
-        expect(JSON.parse(files.get("settings.schema.json")!.text).properties.logLevel.enum).toEqual(["debug", "info", "warn", "error"]);
+        expect(files.has("settings.schema.json")).toBe(false);
 
         files.set("settings.json", { text: JSON.stringify({ logLevel: "warn" }, null, 2) + "\n", t: clock++ });
         await sleep(1500);

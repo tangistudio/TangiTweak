@@ -275,7 +275,7 @@ The two-way mirroring between the explorer (scripts, data files, folders) and th
 _Avoid_: export, backup
 
 **Managed files**:
-`tt-api.d.ts`, `tsconfig.json` and `settings.schema.json`: files TangiTweak writes into the synced folder and rewrites on every start, not meant to be edited.
+`tt-api.d.ts`, `tsconfig.json` and `eslint.config.mjs`: files TangiTweak writes into the synced folder and rewrites on every start, not meant to be edited.
 _Avoid_: generated files, owned files, support files, typings
 
 **SDK**:

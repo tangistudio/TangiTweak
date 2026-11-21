@@ -424,7 +424,7 @@ since the last sync wins, so a backup is made only when both changed.
 A slow drive (network share, cloud folder) that reports an earlier TangiTweak
 write back late isn't mistaken for an outside edit; the newer text is
 written again.
-`tt-api.d.ts`, `tsconfig.json`, `package.json`, `eslint.config.mjs` and `settings.schema.json` are written alongside. Edit in VS Code (or any editor) with full
+`tt-api.d.ts`, `tsconfig.json`, `package.json` and `eslint.config.mjs` are written alongside. Edit in VS Code (or any editor) with full
 TypeScript completions; saves hot apply instantly. The typings of
 [package imports](scripting.md#packages-from-unpkg) go to
 `.tangitweak/types/`, which TangiTweak owns: it rewrites and prunes them as
@@ -459,7 +459,7 @@ so a rare selector mistake can show there and not in ESLint.
 
 Those support files are refreshed on every browser start
 and extension update, so new APIs, settings, lint rules and test helpers reach an already-synced folder.
-`tt-api.d.ts`, `tsconfig.json`, `eslint.config.mjs` and `settings.schema.json` are owned by TangiTweak (edits there are overwritten); `package.json` keeps your own `scripts`, `dependencies` and `devDependencies` while maintaining `"type": "module"`, the `tangitweak` devDependency and the ESLint devDependencies. `settings.json` is yours: an
+`tt-api.d.ts`, `tsconfig.json` and `eslint.config.mjs` are owned by TangiTweak (edits there are overwritten); `package.json` keeps your own `scripts`, `dependencies` and `devDependencies` while maintaining `"type": "module"`, the `tangitweak` devDependency and the ESLint devDependencies. `settings.json` is yours: an
 update only adds documentation for settings it doesn't mention yet.
 
 Sync is two-way and watches the folder for **creates, renames/moves and
@@ -569,10 +569,8 @@ toggle, not deletable). Like VS Code's `settings.json`, it stores only
 non-default overrides of TangiTweak's global settings (`{}` when everything is
 at its default); each tweak's own settings are in its
 [data folder](#a-tweaks-data-folder). Omitting any key — or clearing the file to `{}` — resets it to its
-default. With a synced folder connected, `settings.json` syncs two-way on disk
-alongside a generated `settings.schema.json` (which Monaco's built-in JSON
-worker also uses in the Editor for completions, hover descriptions, and
-validation).
+default. With a synced folder connected, `settings.json` syncs two-way on disk.
+In the Editor it gets completions, hover descriptions and validation.
 
 ```json
 {
