@@ -30,6 +30,10 @@ its section below.
 - **Bare imports type-check in the Editor**: `import { zip } from "fflate"` in a tweak with `fflate` in its `package.json` `dependencies` gets the package's types instead of `Cannot find module 'fflate'`. Range dependencies like `^0.8.2` now get typings too.
 - **The Editor no longer checks a tweak's `.gitignore` as JSON** (`Expected a JSON object, array or literal`).
 
+### Removed
+
+- **URL imports** (`import x from "https://unpkg.com/x@1.2.3"`) are no longer supported: list packages in the tweak's `package.json` `dependencies` and import them by name. Such an import is now a compile error that the Editor and ESLint mark. The pin-the-version quick fix and Preact via `@jsxImportSource https://unpkg.com/preact@…` go with them.
+
 ## [0.40.1-alpha] - 2026-11-21
 
 ### Added

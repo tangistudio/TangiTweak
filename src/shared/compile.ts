@@ -16,7 +16,7 @@ import { storeRun, tweakHost, tweakStores, type NamedStores, type StoreRun, type
 import { inertRemote, NO_SITE_STORE, REMOTE_FROM_BACKGROUND, SITE_NO_HANDLES, SITE_NO_STORES, unusableStore } from "./remote";
 import { scriptEnv } from "./scriptEnv";
 import { dataFileValue, importLine, importPath, importResolver, isDataSpec } from "./scriptImports";
-import { builtinMessage, finalUrl, isNodeBuiltin, isUrlSpec, makePackageLoader, PackageImportError, type PackageModules } from "./packageImports";
+import { builtinMessage, finalUrl, isNodeBuiltin, isUrlSpec, makePackageLoader, PackageImportError, urlImportMessage, type PackageModules } from "./packageImports";
 import { bareImport, bundleOf, dataReader, dependenciesOf, type Bundle } from "./tweakBundle";
 import { builtinModule } from "./builtins";
 import { builtinSpec } from "./builtinSpecs";
@@ -384,9 +384,10 @@ function parseDataFile(spec: string, d: DataFileSource): any {
  * match the script named "x", "./a.json" the data file). Libs compile
  * lazily and memoize; circular imports get the partially-initialized
  * exports. `resolveFrom(name)` is the `require` of the script named
- * `name`; `resolve` resolves from the root. A URL imports a downloaded
- * package (shared/packageImports). `deps` collects the imported script
- * names, data file paths and package URLs.
+ * `name`; `resolve` resolves from the root. A bundle's bare import loads its
+ * dependency's downloaded package (shared/packageImports); a URL import
+ * fails. `deps` collects the imported script names, data file paths and
+ * package URLs.
  */
 export function makeModuleResolver(
     scripts: { id: string; name: string; code: string }[],
@@ -448,20 +449,14 @@ export function makeModuleResolver(
     const load = (importer: string, spec: string): any => {
         if (builtinSpec(spec) && (isUrlSpec(spec) || !lookup(importer, spec))) {
             try {
-                return builtinModule(spec, byName.get(importer)?.code, (url) => {
-                    addDep(url);
-                    return loadPackage(url);
-                });
+                return builtinModule(spec, byName.get(importer)?.code);
             } catch (e: any) {
                 if (isFatalImportError(e)) throw e;
                 if (opts?.stubUnresolved) return makeStubModule(); // meta-only, React not loaded
                 throw new PackageImportError(e?.message ?? String(e));
             }
         }
-        if (isUrlSpec(spec)) {
-            addDep(spec);
-            return loadPackage(spec);
-        }
+        if (isUrlSpec(spec)) throw new PackageImportError(urlImportMessage(spec));
         const bare = bareImport(importer, spec, read);
         if (bare) {
             addDep(bare.pkgPath);

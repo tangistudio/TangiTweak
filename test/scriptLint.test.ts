@@ -123,6 +123,7 @@ describe("ESLint plugin (.tangitweak/eslint-plugin.mjs)", () => {
             ["no-invalid-world-access", 2],
             ["valid-selectors-and-shortcuts", 3],
             ["valid-package-imports", 4],
+            ["valid-package-imports", 6],
             ["valid-package-imports", 7],
         ]);
     });

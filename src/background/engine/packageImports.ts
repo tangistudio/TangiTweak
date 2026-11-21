@@ -1,7 +1,7 @@
 /**
  * Package imports, background side: downloads the module graph of every
- * package URL a script imports (and its TypeScript declarations) from
- * unpkg and keeps them in chrome.storage.local, so compiles stay
+ * package a tweak imports by name (its package.json dependency's unpkg
+ * URL) and its TypeScript declarations, and keeps them in chrome.storage.local, so compiles stay
  * synchronous, offline and deterministic. Pinned versions are immutable:
  * a stored module is never re-fetched. A failed download isn't stored;
  * the next save (or a later compile) retries it.
@@ -15,7 +15,6 @@
  */
 import { transform } from "sucrase";
 import { importSpecs } from "../../shared/scriptImports";
-import { builtinDownloads, builtinSpec } from "../../shared/builtinSpecs";
 import { dlogLevel } from "../../shared/debugLog";
 import {
     PACKAGE_MODULES_KEY,
@@ -145,44 +144,33 @@ export function packagesSig(): string {
     return sig;
 }
 
-/** a script to scan for imports: its code, or its name and code (a bundle file: its bare imports name its package.json's dependencies) */
-export type ImportingScript = string | { name: string; code: string };
+/** a script to scan for imports (a bundle file: its bare imports name its package.json's dependencies) */
+export type ImportingScript = { name: string; code: string };
 
 /** the built-in fallbacks of the tweaks that import a package (see builtinFallbacks), by key */
 type Fallbacks = Map<string, Record<string, string>>;
 
 /**
- * The package URLs the code imports (valid or not; built-ins aside, plus a
- * Preact file's compat layer for them), each with whether a tweak imports
- * it bare and the built-in fallbacks of the tweaks that do (where a Node.js
- * built-in it needs comes from — per tweak: two tweaks may give `events`
- * different packages).
+ * The package URLs the scripts' bare imports go to (their package.json
+ * dependencies' ranges), each with the built-in fallbacks of the tweaks
+ * that import it (where a Node.js built-in it needs comes from — per
+ * tweak: two tweaks may give `events` different packages).
  */
-function packageTops(items: Iterable<ImportingScript>, extraData?: { path: string; text: string }[]): Map<string, { bare: boolean; fallbacks: Fallbacks }> {
-    const out = new Map<string, { bare: boolean; fallbacks: Fallbacks }>();
+function packageTops(items: Iterable<ImportingScript>, extraData?: { path: string; text: string }[]): Map<string, Fallbacks> {
+    const out = new Map<string, Fallbacks>();
     const read = dataReader([...(extraData ?? []), ...dataFilesSnapshot()]);
-    const add = (u: string) => {
-        if (!out.has(u)) out.set(u, { bare: false, fallbacks: new Map() });
-        return out.get(u)!;
-    };
     for (const item of items) {
-        const code = typeof item === "string" ? item : item.code;
-        const specs = importSpecs(code);
-        for (const s of specs) if (isUrlSpec(s) && !builtinSpec(s)) add(s);
-        for (const u of builtinDownloads(code, specs)) add(u);
-        if (typeof item === "string") continue;
-        const urls = bareImportUrls(item.name, specs, read);
+        const urls = bareImportUrls(item.name, importSpecs(item.code), read);
         const fb = urls.length ? builtinFallbacks(dependenciesOf(item.name, read)) : undefined;
         for (const u of urls) {
-            const top = add(u);
-            top.bare = true;
-            if (fb) top.fallbacks.set(JSON.stringify(fb), fb);
+            if (!out.has(u)) out.set(u, new Map());
+            if (fb) out.get(u)!.set(JSON.stringify(fb), fb);
         }
     }
     return out;
 }
 
-/** the package URLs the code imports (see packageTops) */
+/** the package URLs the scripts import (see packageTops) */
 export function packageUrlsIn(items: Iterable<ImportingScript>): Set<string> {
     return new Set(packageTops(items).keys());
 }
@@ -447,20 +435,15 @@ async function downloadGraph(top: string, into: { aliases: Record<string, string
 // ---- ensure / prune ----
 
 /**
- * Download every package URL the code imports that isn't stored yet (a
+ * Download every package the scripts import that isn't stored yet (a
  * no-op when all are). Failed downloads are retried when `retry` is set
  * (a save) or a minute later. Resolves to whether anything changed.
  */
 export async function ensurePackages(items: Iterable<ImportingScript>, opts?: { retry?: boolean; data?: { path: string; text: string }[] }): Promise<boolean> {
     await loadPackages();
-    const found = packageTops(items, opts?.data);
-    // a URL import must be pinned; a bare import's dependency range is pinned by its download (the alias it leaves)
-    const tops = [...found].filter(([u, t]) => typeof parsePackageUrl(u) !== "string" || (t.bare && u.startsWith(PACKAGE_ORIGIN)));
-    return ensureUrls(
-        tops.map(([u]) => u),
-        opts,
-        new Map(tops.map(([u, t]) => [u, t.fallbacks]))
-    );
+    // a dependency's range is pinned by its download (the alias it leaves)
+    const tops = packageTops(items, opts?.data);
+    return ensureUrls([...tops.keys()], opts, tops);
 }
 
 /** ensurePackages for valid package URLs (after loadPackages); what's due is `downloading` right away */
@@ -510,9 +493,9 @@ async function ensureUrls(tops: string[], opts?: { retry?: boolean }, fallbacks?
 }
 
 /**
- * The Editor's view of package URLs it shows: each one's status, after
- * starting the download (and typings) of those that need it — so a pinned
- * URL is fetched as it's typed, not only on save. Invalid URLs are left out.
+ * The install page's view of the package URLs a tweak imports: each one's
+ * status, after starting the download (and typings) of those that need
+ * it. URLs that aren't pinned are left out.
  */
 export async function requestPackages(urls: string[]): Promise<Record<string, PackageStatus>> {
     await loadPackages();

@@ -8,7 +8,7 @@ import * as vanilla from "valtio/vanilla";
 import "../src/shared/transpile";
 import { compileWithLibs, makeModuleResolver } from "../src/shared/compile";
 import { builtinModule, ensureBuiltins, needsReact, setBuiltinLoader } from "../src/shared/builtins";
-import { builtinDownloads, builtinSpec } from "../src/shared/builtinSpecs";
+import { builtinSpec } from "../src/shared/builtinSpecs";
 import { badPackageImports } from "../src/shared/scriptImports";
 import { endpointPair } from "../src/shared/wire";
 import { ReplicaHub } from "../src/shared/storeReplica";
@@ -17,8 +17,6 @@ import { StoreOwner } from "../src/background/engine/storeOwner";
 const settle = async () => {
     for (let i = 0; i < 20; i++) await new Promise((r) => setTimeout(r, 0));
 };
-
-const PREACT = "https://unpkg.com/preact@10.26.4";
 
 describe("built-in module specifiers", () => {
     it("maps bare and esm.sh react/valtio specifiers, not unpkg ones", () => {
@@ -44,13 +42,7 @@ describe("built-in module specifiers", () => {
         expect(needsReact([`import { proxy, useSnapshot } from "valtio";`])).toBe(true);
         expect(needsReact([`import { useSnapshot } from "valtio/react";`])).toBe(true);
         expect(needsReact([`import { useState } from "https://esm.sh/react@19";`])).toBe(true);
-        expect(needsReact([`/** @jsxImportSource ${PREACT} */\nimport { useState } from "react";`])).toBe(false);
         expect(needsReact([], { aliases: {}, modules: { u: { js: "", requires: { react: "x" } } } })).toBe(true);
-    });
-    it("downloads a Preact file's compat layer for its react imports", () => {
-        const code = `/** @jsxImportSource ${PREACT} */\nimport { useState } from "react";\nimport { createRoot } from "react-dom/client";\nimport { proxy } from "valtio";`;
-        expect(builtinDownloads(code, ["react", "react-dom/client", "valtio"]).sort()).toEqual([`${PREACT}/compat`, `${PREACT}/compat/client`]);
-        expect(builtinDownloads(`import "react";`, ["react"])).toEqual([]);
     });
 });
 
@@ -89,22 +81,6 @@ describe("built-in module resolution", () => {
         expect(c.exports.got).toBe("mine");
     });
 
-    it("maps a Preact file's react imports to preact/compat", () => {
-        const compat = { useState: "preact-useState", useSyncExternalStore: () => {} };
-        const packages = {
-            aliases: {},
-            modules: { [`${PREACT}/compat/dist/compat.js`]: { js: "module.exports = globalThis.__compat;", requires: {} } },
-        };
-        packages.aliases = { [`${PREACT}/compat`]: `${PREACT}/compat/dist/compat.js` };
-        (globalThis as any).__compat = compat;
-        const code = `/** @jsxImportSource ${PREACT} */\nimport { useState } from "react";\nexport const s = useState;`;
-        const c = compileWithLibs({ id: "m", name: "main", code }, [], {}, [], packages);
-        expect(c.error).toBeNull();
-        expect(c.exports.s).toBe("preact-useState");
-        expect(c.deps).toContain(`${PREACT}/compat`);
-        delete (globalThis as any).__compat;
-    });
-
     it("gives a downloaded package's require('react') the built-in, except inside React itself", () => {
         const packages = {
             aliases: {},
@@ -113,10 +89,12 @@ describe("built-in module resolution", () => {
                 "https://unpkg.com/react@19.0.0/index.js": { js: "module.exports = { own: true, inner: require('react') };", requires: { react: "!no" } },
             },
         };
-        const r = makeModuleResolver([], () => ({}), { packages });
-        expect(r.resolve("https://unpkg.com/uses-react@1.0.0/index.js")).toBe(React);
+        packages.aliases = { "https://unpkg.com/uses-react@1.0.0": "https://unpkg.com/uses-react@1.0.0/index.js", "https://unpkg.com/own-react@1.0.0": "https://unpkg.com/react@19.0.0/index.js" };
+        const pkg = { path: "t/package.json", text: JSON.stringify({ name: "t", tangitweak: {}, dependencies: { "uses-react": "1.0.0", "own-react": "1.0.0" } }) };
+        const r = makeModuleResolver([], () => ({}), { packages, dataFiles: [pkg] });
+        expect(r.resolveFrom("t/main")("uses-react")).toBe(React);
         // unpkg React's own require("react") isn't redirected
-        expect(() => r.resolve("https://unpkg.com/react@19.0.0/index.js")).toThrow(/no/);
+        expect(() => r.resolveFrom("t/main")("own-react")).toThrow(/no/);
     });
 
     it("useSnapshot from the resolved valtio/react re-renders only components that read a changed path", async () => {

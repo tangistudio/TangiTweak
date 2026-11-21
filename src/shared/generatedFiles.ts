@@ -10,7 +10,7 @@
  * extension update) if their content differs, so edits don't stick.
  */
 import { ALL_BUILTINS, builtinPaths, builtinSpecIn } from "./builtinSpecs";
-import { isUrlSpec, NAME, PACKAGE_ORIGIN, packagePaths, packageUrlCore, TYPINGS_ROOT } from "./packageImports";
+import { isUrlSpec, packagePaths, TYPINGS_ROOT, urlImportMessage } from "./packageImports";
 import { NO_SITE_STORE, SITE_NO_HANDLES, SITE_NO_STORES } from "./remote";
 import { scriptLintCore, shortcutKeyNames, shortcutShapeProblem, type LintRule } from "./scriptLint";
 
@@ -55,7 +55,7 @@ export function packageJsonText(existing?: Record<string, any>): string {
         JSON.stringify(
             {
                 ...prev,
-                $comment: `${GENERATED_NOTE} User scripts/devDependencies for local tests are kept; TangiTweak scripts import runtime packages by pinned unpkg URL (https://unpkg.com/pkg@x.y.z). Run \`npm install\` once to lint tweaks with ESLint (eslint.config.mjs); the workspaces link each tweak's \`tangitweak\` dependency to the SDK in ${SDK_ROOT}.`,
+                $comment: `${GENERATED_NOTE} User scripts/devDependencies for local tests are kept; runtime packages go in each tweak's package.json \`dependencies\` and are imported by name. Run \`npm install\` once to lint tweaks with ESLint (eslint.config.mjs); the workspaces link each tweak's \`tangitweak\` dependency to the SDK in ${SDK_ROOT}.`,
                 private: typeof prev.private === "boolean" ? prev.private : true,
                 type: "module",
                 workspaces,
@@ -113,7 +113,7 @@ export function tsconfigText(): string {
     const config = {
         compilerOptions: {
             ...baseCompilerOptions,
-            // the SDK's test API, package imports (`https://unpkg.com/x@1.2.3`) → their downloaded typings
+            // the SDK's test API, dependencies' package URLs (what bare imports resolve to) → their downloaded typings
             // and the built-ins (`valtio`, `react`, `react-dom/client`…) → the extension's typings of them
             paths: {
                 "tangitweak/test": [`./${SDK_ROOT}/test.d.ts`],
@@ -136,7 +136,7 @@ export const ESLINT_RULES = {
     "no-invalid-world-access": { level: "error", description: "onSite handlers can't use stores or handles; network handlers can't use tweak.siteStore" },
     "no-rules-side-effects": { level: "warn", description: 'code in strategy "rules" handlers runs once, not for each request' },
     "valid-selectors-and-shortcuts": { level: "error", description: "static selectors and shortcut keys must be valid" },
-    "valid-package-imports": { level: "error", description: "URL imports must be pinned unpkg URLs (or the built-in React and valtio)" },
+    "valid-package-imports": { level: "error", description: "URL imports aren't supported: import packages by name from package.json dependencies" },
 } satisfies Record<LintRule | "valid-package-imports", { level: "error" | "warn"; description: string }>;
 
 /** eslint.config.mjs: TangiTweak's checks on the scripts, parsed by typescript-eslint */
@@ -162,7 +162,7 @@ export default [
 
 /**
  * The Editor's checks as a self-contained ESLint (flat config) plugin for
- * external editors: the same rule code (scriptLintCore's, packageUrlCore's
+ * external editors: the same rule code (scriptLintCore's, urlImportMessage's
  * and builtinSpecIn's source), with shortcut keys checked by their shape
  * (shortcutShapeProblem) instead of parseShortcut.
  */
@@ -183,14 +183,12 @@ const core = (${scriptLintCore.toString()})(env);
 
 const isUrlSpec = ${isUrlSpec.toString()};
 const builtinSpecIn = ${builtinSpecIn.toString()};
-const packageUrlCore = ${packageUrlCore.toString()};
+const urlImportMessage = ${urlImportMessage.toString()};
 const BUILTINS = ${JSON.stringify(ALL_BUILTINS)};
 
 /** why a URL import can't load, or null (bare and relative imports are the TypeScript checker's) */
 function importProblem(spec) {
-    if (!isUrlSpec(spec) || builtinSpecIn(spec, BUILTINS)) return null;
-    const r = packageUrlCore(spec, ${JSON.stringify(PACKAGE_ORIGIN)}, ${JSON.stringify(NAME)});
-    return typeof r === "string" ? r : null;
+    return isUrlSpec(spec) && !builtinSpecIn(spec, BUILTINS) ? urlImportMessage(spec) : null;
 }
 
 const analyses = new WeakMap();

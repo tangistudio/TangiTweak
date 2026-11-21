@@ -84,9 +84,6 @@ setBuiltinLoader(async () => ({
 const packageRoots = new Set<string>();
 setPackageFetch(localUnpkg(() => [...packageRoots]));
 
-const MOCK_GLOBAL = "__ttTestMockRegistry";
-const mockRegistry: Map<string, any> = ((globalThis as any)[MOCK_GLOBAL] ??= new Map<string, any>());
-let nextMockSeq = 0;
 
 export interface InlineTweakSource {
     /** Entry script TypeScript / TSX source code (optional when `files["package.json"]` is provided: its entry runs). */
@@ -108,7 +105,7 @@ export interface LoadTweakOptions {
     storage?: Record<string, any>;
     /** Seed `tweak.globalStore` values by store name (`{ storeName: { ... } }`). */
     stores?: Record<string, Record<string, any>>;
-    /** Mock imported modules or URL packages (`{ "https://unpkg.com/...": mockExports, "./lib": mockExports }`). */
+    /** Mock imported modules by specifier (`{ "dayjs": mockExports, "./lib": mockExports }`). */
     mocks?: Record<string, any>;
     /** Custom upstream `fetch` used by `tweak.fetch` and as fallback upstream in `simulate()`. */
     fetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
@@ -614,28 +611,15 @@ export async function loadTweak(source: TweakSource, options: LoadTweakOptions =
     };
     if (options.params) applyParamInput(options.params);
 
-    // URL package resolution + mock module synthesis
-    const ownedMockKeys: string[] = [];
-    const mockCjsBySpec = new Map<string, string>();
     const mockObjs = new Map<string, any>();
-    if (options.mocks) {
-        for (const [spec, val] of Object.entries(options.mocks)) {
-            const cjs = asCjsExports(val);
-            mockObjs.set(spec, cjs);
-            const regKey = `m_${++nextMockSeq}`;
-            ownedMockKeys.push(regKey);
-            mockRegistry.set(regKey, cjs);
-            mockCjsBySpec.set(spec, `module.exports = globalThis.${MOCK_GLOBAL}.get(${JSON.stringify(regKey)});`);
-        }
-    }
+    for (const [spec, val] of Object.entries(options.mocks ?? {})) mockObjs.set(spec, asCjsExports(val));
 
-    // Load unmocked https://unpkg.com / esm.sh packages if any script uses them
+    // load the unmocked packages the scripts import by name
     const codesForPkgs = ws.scripts.map((s) => {
         if (!mockObjs.size) return { name: s.name, code: s.code };
         let filtered = s.code;
         for (const spec of mockObjs.keys()) {
-            if (isUrlSpec(spec)) filtered = filtered.split(spec).join("__tt_mocked_pkg__");
-            else if (!spec.startsWith(".")) for (const q of [`"`, `'`]) filtered = filtered.split(q + spec + q).join(`${q}./__tt_mocked_pkg__${q}`);
+            if (!spec.startsWith(".")) for (const q of [`"`, `'`]) filtered = filtered.split(q + spec + q).join(`${q}./__tt_mocked_pkg__${q}`);
         }
         return { name: s.name, code: filtered };
     });
@@ -646,12 +630,6 @@ export async function loadTweak(source: TweakSource, options: LoadTweakOptions =
         aliases: { ...basePkgs.aliases },
         modules: { ...basePkgs.modules },
     };
-    for (const [spec, code] of mockCjsBySpec) {
-        if (isUrlSpec(spec)) {
-            pkgs.aliases[spec] = spec;
-            pkgs.modules[spec] = { js: code, requires: {} };
-        }
-    }
     await ensureBuiltins(ws.scripts.map((s) => s.code), pkgs);
 
     // StoreOwner + background ReplicaHub
@@ -1651,7 +1629,7 @@ export async function loadTweak(source: TweakSource, options: LoadTweakOptions =
             return capabilitiesOf(
                 routes,
                 ws.manifest?.connect || [],
-                ws.scripts.map((s) => s.code)
+                ws.manifest?.dependencies
             );
         },
         get scripts() {
@@ -1725,7 +1703,6 @@ export async function loadTweak(source: TweakSource, options: LoadTweakOptions =
             for (const p of [...openPages]) await p.close();
             bgClientEp.close("disposed");
             bgOwnerEp.close("disposed");
-            for (const k of ownedMockKeys) mockRegistry.delete(k);
         },
         async [Symbol.asyncDispose](): Promise<void> {
             await tweak.dispose();

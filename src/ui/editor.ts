@@ -4,18 +4,17 @@
 
 import "./shell/mount";
 import { loadMonaco, STARTER_TEMPLATE, apiTypingsText, updateJsonSchemas } from "./monacoSetup";
-import { createMonacoTsWorkspace, IMPORT_OWNER, JSX_IN_TS, UNPINNED, type TsWorkspace } from "./tsWorkspace";
+import { createMonacoTsWorkspace, IMPORT_OWNER, JSX_IN_TS, type TsWorkspace } from "./tsWorkspace";
 import { API_TYPINGS_URI } from "./apiLinks";
 import { NavHistory } from "./navHistory";
 import type { SampleScript } from "./samples";
-import { badPackageImports, folderOf, imageDataUrlToBytes, isImageDataPath, isMarkdownPath, isSvgPath, missingImports } from "../shared/scriptImports";
+import { folderOf, imageDataUrlToBytes, isImageDataPath, isMarkdownPath, isSvgPath, missingImports } from "../shared/scriptImports";
 import { newTweakFiles } from "../shared/newTweak";
 import { highestVersion, isManifestPath, MANIFEST_FILE, minTangiTweakProblem, parseManifest } from "../shared/packageMetadata";
 import { bundleOf, dataReader, entryName } from "../shared/tweakBundle";
 import { localPackage } from "../shared/localPackage";
 import { writeZip } from "../shared/zip";
 import { buildExportZip, emptyFolders, EXPORT_ZIP_NAME, filesGoneFrom, readExportZip, type ExportContents } from "../shared/exportZip";
-import { PACKAGE_ORIGIN } from "../shared/packageImports";
 import { isInFolder, movedPath } from "../shared/folders";
 import { baseName, folderPathOfRowId, folderRowId, isFolderRowId, movedCollapsed, type TreeRow } from "./explorerTree";
 import { dataPathOfDecl } from "./jsonTypes";
@@ -623,48 +622,6 @@ function registerTsxFix(): void {
             if (!s) return { actions: [], dispose() {} };
             const title = `Rename to ${baseName(s.meta.name)}.tsx`;
             return { actions: [{ title, kind: "quickfix", isPreferred: true, diagnostics: [mk], command: { id: RENAME_TO_TSX, title, arguments: [s.id] } }], dispose() {} };
-        },
-    });
-}
-
-/** "<name>@<range>" → the exact version unpkg resolves it to */
-const resolvedVersions = new Map<string, Promise<string>>();
-function resolvePackageVersion(name: string, range: string): Promise<string> {
-    const key = `${name}@${range}`;
-    let v = resolvedVersions.get(key);
-    if (!v) {
-        v = send<{ version?: string; error?: string }>({ type: "resolvePackageVersion", name, range }).then((r) => (r?.version ? r.version : Promise.reject(new Error(r?.error || "no version"))));
-        resolvedVersions.set(key, v);
-        v.catch(() => resolvedVersions.delete(key));
-    }
-    return v;
-}
-
-function registerPinImportFix(): void {
-    const monaco = (window as any).monaco;
-    monaco.languages.registerCodeActionProvider("typescript", {
-        async provideCodeActions(model: any, _range: unknown, context: { markers: any[] }) {
-            const actions: any[] = [];
-            for (const mk of context.markers) {
-                if ((typeof mk.code === "object" ? mk.code?.value : mk.code) !== UNPINNED) continue;
-                const pin = badPackageImports(`import "${model.getValueInRange(mk)}"`)[0]?.pin;
-                if (!pin) continue;
-                let version: string;
-                try {
-                    version = await resolvePackageVersion(pin.name, pin.range);
-                } catch {
-                    continue;
-                }
-                if (model.isDisposed()) break;
-                actions.push({
-                    title: `Pin to ${pin.name}@${version}${pin.range === "latest" ? " (latest)" : ` (${pin.range})`}`,
-                    kind: "quickfix",
-                    isPreferred: true,
-                    diagnostics: [mk],
-                    edit: { edits: [{ resource: model.uri, versionId: model.getVersionId(), textEdit: { range: mk, text: `${PACKAGE_ORIGIN}${pin.name}@${version}${pin.sub ? `/${pin.sub}` : ""}` } }] },
-                });
-            }
-            return { actions, dispose() {} };
         },
     });
 }
@@ -1303,7 +1260,7 @@ function markProblems(): void {
     for (const s of scripts) {
         const m = models.get(s.id);
         if (!m || m.isDisposed() || m.getValue() !== s.code) continue;
-        // an import that can't load is already marked live (with its quick fix)
+        // an import that can't load is already marked live
         const live = monaco.editor.getModelMarkers({ resource: m.uri, owner: IMPORT_OWNER }).map((x: any) => String(x.message));
         const own = (byId.get(s.id) || []).filter((p) => p.kind !== "ts" && p.kind !== "settings" && p.line && !(p.kind === "compile" && live.some((t: string) => p.message.includes(t))));
         const key = JSON.stringify(own.map((p) => [p.severity, p.message, p.line, p.column, p.endLine, p.endColumn]));
@@ -2131,7 +2088,6 @@ async function main(): Promise<void> {
     tsWorkspace = createMonacoTsWorkspace({
         monaco: (window as any).monaco,
         getActiveModel: () => editor?.getModel() ?? null,
-        send,
         onChecked: () => {
             scheduleDiagnostics();
             scheduleProblems();
@@ -2147,7 +2103,6 @@ async function main(): Promise<void> {
         if ((problemMarkerKeys.get(m) ?? "[]") !== "[]") setProblemMarkers(m, []);
         scheduleProblems();
     });
-    registerPinImportFix();
     registerPlaceFixes();
     registerTsxFix();
     // VS Code shortcuts: ⌘P quick-open (scripts + settings.json), ⌘, opens

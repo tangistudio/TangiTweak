@@ -1,7 +1,8 @@
 /**
- * Package imports: a script imports an npm package straight from unpkg by
- * its pinned URL (`import dayjs from "https://unpkg.com/dayjs@1.11.13"`).
- * The background downloads the package's module graph (and its typings) at
+ * Package imports: a tweak imports an npm package by name
+ * (`import dayjs from "dayjs"`) from its package.json `dependencies`; the
+ * import goes to the package's unpkg URL (shared/tweakBundle.ts). The
+ * background downloads the package's module graph (and its typings) at
  * save time and stores it; this module holds the pure parts shared by the
  * background, the sandbox, the page hook and the Editor: URL validation,
  * nested specifier rules, typings paths and the runtime loader.
@@ -59,7 +60,7 @@ export interface StoredTypings {
 }
 
 /**
- * Where a script's package URL stands in the background, for the Editor:
+ * Where a tweak's package URL stands in the background, for the install page:
  * being downloaded, its types being fetched, ready, or failed (with why).
  * `missing`: not downloaded and nothing under way.
  */
@@ -77,6 +78,9 @@ export const NAME = "[a-z0-9~-][a-z0-9._~-]*";
 export function isUrlSpec(spec: string): boolean {
     return /^[a-z][a-z0-9+.-]*:\/\//i.test(spec);
 }
+
+/** why a URL import in a tweak's own code fails: packages are imported by name. Self-contained, the ESLint plugin embeds its source (generatedFiles) */
+export const urlImportMessage = (spec: string): string => `cannot import "${spec}": URL imports aren't supported — add the package to "dependencies" in package.json and import it by name`;
 
 /** parse a package URL, or say why it can't be imported (the message starts with `cannot import "<spec>"`) */
 export function parsePackageUrl(spec: string): PackageUrl | string {
@@ -406,7 +410,7 @@ export function relativePath(from: string, to: string): string {
 }
 
 /**
- * An import of a package URL failed (bad URL, download failure, the
+ * A package import failed (a URL import, a download failure, the
  * library threw while loading). Never stubbed: the importer fails to
  * compile, positioned at its import line — like a data file error.
  */

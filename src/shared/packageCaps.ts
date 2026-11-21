@@ -3,10 +3,9 @@
  * the install page shows it, and an update that can do more than the
  * installed version waits for approval instead of applying itself.
  */
+import { builtinSpec } from "./builtinSpecs";
 import type { ResMeta } from "./metaParser";
-import { isUrlSpec, parsePackageUrl } from "./packageImports";
 import { routePatterns } from "./route";
-import { importSpecs } from "./scriptImports";
 
 export interface Capabilities {
     /** URL patterns its handlers run on */
@@ -19,20 +18,14 @@ export interface Capabilities {
     overlay: boolean;
     /** hosts its tweak.fetch reaches, as its metadata declares (`connect`) */
     connect: string[];
-    /** unpkg packages it imports (names) */
+    /** npm packages it depends on (its package.json dependencies, built-ins aside), downloaded from unpkg */
     packages: string[];
 }
 
 const sorted = (xs: Iterable<string>) => [...new Set(xs)].sort();
 
-export function capabilitiesOf(routes: ResMeta["routes"], connect: string[], codes: string[]): Capabilities {
-    const packages: string[] = [];
-    for (const code of codes)
-        for (const spec of importSpecs(code)) {
-            if (!isUrlSpec(spec)) continue;
-            const p = parsePackageUrl(spec);
-            if (typeof p !== "string") packages.push(p.name);
-        }
+export function capabilitiesOf(routes: ResMeta["routes"], connect: string[], dependencies: Record<string, string> = {}): Capabilities {
+    const packages = Object.keys(dependencies).filter((n) => !builtinSpec(n));
     return {
         urls: sorted(routes.flatMap((r) => routePatterns(r.url))),
         strategies: sorted(routes.flatMap((r) => (r.strategy ? [r.strategy] : []))),
@@ -65,7 +58,7 @@ export function describeCapabilities(c: Capabilities): { text: string; risk: Ris
     if (nets.length) out.push({ text: `Intercepts requests (${nets.join(", ")})`, risk: "low" });
     if (c.overlay) out.push({ text: "Draws an overlay over pages", risk: "low" });
     if (c.connect.length) out.push({ text: `Connects to ${c.connect.join(", ")}`, risk: "low" });
-    if (c.packages.length) out.push({ text: `Imports ${c.packages.join(", ")} from unpkg`, risk: "low" });
+    if (c.packages.length) out.push({ text: `Imports ${c.packages.join(", ")} from npm`, risk: "low" });
     if (!out.length) out.push({ text: "Registers no handlers (a library)", risk: "low" });
     const rank: Record<Risk, number> = { high: 0, medium: 1, low: 2 };
     return out.sort((a, b) => rank[a.risk] - rank[b.risk]);

@@ -26,6 +26,7 @@ const store: Record<string, any> = {};
     runtime: { lastError: undefined, sendMessage: () => {} },
 };
 
+// SCRIPT imports the package URLs a bundle's bare imports resolve to (their typings through the `packagePaths` mapping)
 const SCRIPT = `import twice, { add } from "https://unpkg.com/esm-lib@1.0.0";
 import { add as add2 } from "https://unpkg.com/esm-lib@1.0.0/math.js";
 import { go } from "https://unpkg.com/exp-lib@1.0.0";
@@ -50,7 +51,9 @@ let p: typeof import("../src/background/engine/packageImports");
 beforeAll(async () => {
     (globalThis as any).fetch = fakeUnpkg(REGISTRY).fetch;
     p = await import("../src/background/engine/packageImports");
-    await p.ensurePackages([SCRIPT]);
+    const deps = { "esm-lib": "1.0.0", "exp-lib": "1.0.0", "cjs-lib": "2.0.0", "umd-lib": "1.0.0" };
+    const data = [{ path: "t/package.json", text: JSON.stringify({ name: "t", tangitweak: {}, dependencies: deps }) }];
+    await p.ensurePackages([{ name: "t/main", code: SCRIPT.replace(/https:\/\/unpkg\.com\/([^@"]+)@[^/"]+/g, "$1") }], { data });
     await p.packageTypingsIdle();
     typings = p.packageTypings();
     expect(Object.keys(typings.tops)).toHaveLength(6);

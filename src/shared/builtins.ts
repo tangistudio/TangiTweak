@@ -14,7 +14,7 @@
 import * as vanilla from "valtio/vanilla";
 import * as vanillaUtils from "valtio/vanilla/utils";
 import { createProxy, isChanged } from "proxy-compare";
-import { builtinNeedsReact, builtinSpec, preactRoot, preactTarget, REACT_BUILTINS } from "./builtinSpecs";
+import { builtinNeedsReact, builtinSpec, REACT_BUILTINS } from "./builtinSpecs";
 import { TWEAK_MODULE } from "./tweakApi";
 import { importSpecs, type ShippedLib } from "./scriptImports";
 import type { PackageModules } from "./packageImports";
@@ -86,7 +86,7 @@ export function needsReact(codes: Iterable<string>, packages?: PackageModules): 
     for (const code of codes)
         for (const spec of importSpecs(code)) {
             const b = builtinSpec(spec);
-            if (b && builtinNeedsReact(b, code) && !preactRoot(code)) return true;
+            if (b && builtinNeedsReact(b, code)) return true;
         }
     for (const mod of Object.values(packages?.modules ?? {})) for (const spec of Object.keys(mod.requires)) if (builtinSpec(spec)?.startsWith("react")) return true;
     return false;
@@ -174,24 +174,13 @@ function withHooks(base: object, hooks: () => { useSnapshot: any; useProxy: any 
     return out;
 }
 
-/**
- * The module a built-in specifier resolves to, for an importer whose
- * source is `code`. `loadUrl` loads a downloaded package (a Preact
- * file's `preact/compat`).
- */
-export function builtinModule(spec: string, code = "", loadUrl?: (url: string) => any, hot?: { compile: HotCompile; path: string }): any {
+/** the module a built-in specifier resolves to, for an importer whose source is `code` */
+export function builtinModule(spec: string, code = "", hot?: { compile: HotCompile; path: string }): any {
     const name = builtinSpec(spec);
     if (!name) throw new Error(`"${spec}" isn't a built-in module`);
     // each file's own `tweak` (scriptFunction's require); a package can't import it
     if (name === TWEAK_MODULE) throw new Error(`"${TWEAK_MODULE}" can only be imported by a tweak's own files`);
-    const root = preactRoot(code);
-    const mapped = root ? preactTarget(root, name) : null;
-    if (mapped) {
-        if (!loadUrl) throw new Error(`cannot import "${spec}": Preact isn't available here`);
-        return loadUrl(mapped);
-    }
-    const reactLib = () => (root ? loadUrl!(`${root}/compat`) : reactBuiltin("react"));
-    const hooks = () => valtioReact(reactLib());
+    const hooks = () => valtioReact(reactBuiltin("react"));
     switch (name) {
         case "valtio/vanilla":
             return vanilla;
@@ -207,7 +196,7 @@ export function builtinModule(spec: string, code = "", loadUrl?: (url: string) =
             return { useProxy: hooks().useProxy };
         default: {
             const mod = reactBuiltin(name);
-            return hot && !root ? hot.compile.wrap(name, mod, hot.path, code, reactBuiltin("react")) : mod;
+            return hot ? hot.compile.wrap(name, mod, hot.path, code, reactBuiltin("react")) : mod;
         }
     }
 }
@@ -217,9 +206,9 @@ export function builtinModule(spec: string, code = "", loadUrl?: (url: string) =
  * a script file's React is hot (shared/hotRefresh.ts) when `hot` is given;
  * a package's isn't.
  */
-export function scriptBuiltin(codeOf: (importer: string) => string | undefined, hot?: HotCompile): (spec: string, importer: string, loadUrl: (url: string) => any) => any {
-    return (spec, importer, loadUrl) => {
+export function scriptBuiltin(codeOf: (importer: string) => string | undefined, hot?: HotCompile): (spec: string, importer: string) => any {
+    return (spec, importer) => {
         const code = codeOf(importer);
-        return builtinModule(spec, code, loadUrl, hot && !/^[a-z][\w+.-]*:/i.test(importer) ? { compile: hot, path: importer } : undefined);
+        return builtinModule(spec, code, hot && !/^[a-z][\w+.-]*:/i.test(importer) ? { compile: hot, path: importer } : undefined);
     };
 }

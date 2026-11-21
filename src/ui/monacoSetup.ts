@@ -75,7 +75,7 @@ export function editorCompilerOptions(ts: { ScriptTarget: any; ModuleKind: any; 
         // scripts (e.g. two \`const cfg\`) must not collide as globals
         moduleDetection: 3, // ts.ModuleDetectionKind.Force
         noEmit: true,
-        // package imports (`https://unpkg.com/x@1.2.3`) → their typings
+        // dependencies' package URLs (what bare imports resolve to) → their typings
         // (setPackageTypings). Monaco passes options raw, so the target is an
         // absolute file:/// path rather than one relative to a baseUrl
         paths: { ...packagePaths(`file:///${TYPINGS_ROOT}`), ...BUILTIN_PATHS },

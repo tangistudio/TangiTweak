@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import type { PackageStatus } from "../src/shared/packageImports";
 import {
     createTsWorkspace,
     IMPORT_OWNER,
@@ -66,11 +65,9 @@ const flush = async (ticks = 10) => {
 
 function makeHarness(opts?: {
     editDebounceMs?: number;
-    statusPollMs?: number;
     builtinPromise?: Promise<Record<string, string>>;
     pkgTypingsPromise?: Promise<Record<string, string>>;
     diagnose?: (uri: string, state: { extraLibs: Map<string, string>; flushedLibs: Map<string, string>; syncedUris: string[] }) => Promise<TsDiagnosticLike[]> | TsDiagnosticLike[];
-    statuses?: (urls: string[]) => Promise<Record<string, PackageStatus> | undefined>;
 }) {
     const extraLibs = new Map<string, string>();
     let flushedLibs = new Map<string, string>();
@@ -87,7 +84,6 @@ function makeHarness(opts?: {
 
     const ws = createTsWorkspace({
         editDebounceMs: opts?.editDebounceMs ?? 10,
-        statusPollMs: opts?.statusPollMs ?? 30,
         addExtraLib(content, uri) {
             extraLibs.set(uri, content);
             return {
@@ -130,7 +126,6 @@ function makeHarness(opts?: {
             return opts?.builtinPromise ?? Promise.resolve({ "@types/react/index.d.ts": "export function useState<T>(v: T): [T, (v: T) => void];" });
         },
         loadPackageTypings: () => opts?.pkgTypingsPromise ?? Promise.resolve({}),
-        fetchPackageStatuses: (urls) => (opts?.statuses ? opts.statuses(urls) : Promise.resolve(Object.fromEntries(urls.map((u) => [u, { state: "ready" } as PackageStatus])))),
         subscribePackageStore(cb) {
             storeListener = cb;
             return { dispose: () => void (storeListener = null) };
@@ -168,19 +163,17 @@ describe("tsWorkspace", () => {
     it("stages built-in, package, and data-file typings plus sibling models before running a single prioritized check pass", async () => {
         const builtins = deferred<Record<string, string>>();
         const pkgTypes = deferred<Record<string, string>>();
-        const pkgStatuses = deferred<Record<string, PackageStatus> | undefined>();
 
         const h = makeHarness({
             builtinPromise: builtins.promise,
             pkgTypingsPromise: pkgTypes.promise,
-            statuses: () => pkgStatuses.promise,
             diagnose(uri, { flushedLibs, syncedUris }) {
                 const errs: TsDiagnosticLike[] = [];
                 if (!flushedLibs.has("file:///node_modules/@types/react/index.d.ts")) {
                     errs.push({ category: 1, code: 2307, messageText: "Cannot find module 'react' or its corresponding type declarations." });
                 }
                 if (!flushedLibs.has("file:///.tangitweak/types/unpkg.com/cmdk@1.1.1/index.d.ts")) {
-                    errs.push({ category: 1, code: 2307, messageText: "Cannot find module 'https://unpkg.com/cmdk@1.1.1' or its corresponding type declarations." });
+                    errs.push({ category: 1, code: 2307, messageText: "Cannot find module 'cmdk' or its corresponding type declarations." });
                 }
                 if (!flushedLibs.has("file:///cfg/limits.d.json.ts")) {
                     errs.push({ category: 1, code: 2307, messageText: "Cannot find module './limits.json' or its corresponding type declarations." });
@@ -194,7 +187,7 @@ describe("tsWorkspace", () => {
         });
 
         const lib = h.addModel("lib.ts", "export const x = 1;\n");
-        const app = h.addModel("app.tsx", 'import { useState } from "react";\nimport { Command } from "https://unpkg.com/cmdk@1.1.1";\nimport limits from "./cfg/limits.json";\nimport { x } from "./lib";\nexport const v = () => <div>{useState(x)[0]}{String(Command)}{limits.max}</div>;\n');
+        const app = h.addModel("app.tsx", 'import { useState } from "react";\nimport { Command } from "cmdk";\nimport limits from "./cfg/limits.json";\nimport { x } from "./lib";\nexport const v = () => <div>{useState(x)[0]}{String(Command)}{limits.max}</div>;\n');
         const other = h.addModel("other.ts", 'import { x } from "./lib";\nexport const y = x + 1;\n');
 
         const scripts: TsScriptEntry[] = [
@@ -209,7 +202,7 @@ describe("tsWorkspace", () => {
         h.setActive(app);
 
         await flush();
-        // Nothing checked yet while built-ins, package typings, and package statuses are still loading
+        // Nothing checked yet while built-ins and package typings are still loading
         expect(h.checkedOrder).toEqual([]);
         expect(h.ws.isChecked(app)).toBe(false);
 
@@ -218,10 +211,6 @@ describe("tsWorkspace", () => {
         expect(h.checkedOrder).toEqual([]);
 
         builtins.resolve({ "@types/react/index.d.ts": "export function useState<T>(v: T): [T, (v: T) => void];" });
-        await flush();
-        expect(h.checkedOrder).toEqual([]);
-
-        pkgStatuses.resolve({ "https://unpkg.com/cmdk@1.1.1": { state: "ready" } });
         await flush();
 
         // Active model (`app.tsx`) checked first, every script checked once, zero false errors written
@@ -308,11 +297,11 @@ describe("tsWorkspace", () => {
                 if (calls === 1) await firstCheckGate.promise;
                 return flushedLibs.has("file:///.tangitweak/types/unpkg.com/redux@5.0.1/index.d.ts")
                     ? []
-                    : [{ category: 1, code: 2307, messageText: "Cannot find module 'https://unpkg.com/redux@5.0.1' or its corresponding type declarations." }];
+                    : [{ category: 1, code: 2307, messageText: "Cannot find module 'redux' or its corresponding type declarations." }];
             },
         });
 
-        const s = h.addModel("store.ts", 'import { compose } from "https://unpkg.com/redux@5.0.1";\nexport const c = compose;\n');
+        const s = h.addModel("store.ts", 'import { compose } from "redux";\nexport const c = compose;\n');
         h.ws.sync(() => {}, () => [{ id: "1", name: "store", model: s }], () => []);
         await flush();
         expect(calls).toBe(1);
@@ -329,38 +318,28 @@ describe("tsWorkspace", () => {
         h.ws.dispose();
     });
 
-    it("suppresses TS2307 while a package downloads, shows tt-imports warning, and marks JSX in .ts files", async () => {
-        let state: PackageStatus = { state: "downloading" };
+    it("marks a URL import as unsupported (covering its TS2307) and JSX in .ts files", async () => {
+        const url = "https://unpkg.com/dayjs@1.11.13";
         const h = makeHarness({
-            statuses: async (urls) => Object.fromEntries(urls.map((u) => [u, state])),
             diagnose: () => [
-                { category: 1, code: 2307, messageText: "Cannot find module 'https://unpkg.com/dayjs@1.11.13' or its corresponding type declarations." },
+                { category: 1, code: 2307, messageText: `Cannot find module '${url}' or its corresponding type declarations.` },
                 { category: 1, code: 2322, messageText: "Type 'string' is not assignable to type 'number'." },
             ],
         });
 
-        const badJsx = h.addModel("ui.ts", 'import dayjs from "https://unpkg.com/dayjs@1.11.13";\nexport const el = <div>{String(dayjs)}</div>;\n');
+        const badJsx = h.addModel("ui.ts", `import dayjs from "${url}";\nexport const el = <div>{String(dayjs)}</div>;\n`);
         h.ws.sync(() => {}, () => [{ id: "1", name: "ui", model: badJsx }], () => []);
         await flush();
 
-        // JSX in a .ts file gets the rename-to-.tsx marker
         const jsxMarkers = h.markers.get(badJsx.uri.toString())?.get(JSX_OWNER) ?? [];
         expect(jsxMarkers).toHaveLength(1);
         expect(jsxMarkers[0].code).toBe(JSX_IN_TS);
 
-        // Downloading URL gets a tt-imports warning, and its TS2307 is suppressed while real TS2322 still shows
         const impMarkers = h.markers.get(badJsx.uri.toString())?.get(IMPORT_OWNER) ?? [];
         expect(impMarkers).toHaveLength(1);
-        expect(impMarkers[0].message).toContain("downloading");
+        expect(impMarkers[0].message).toBe(`cannot import "${url}": URL imports aren't supported — add the package to "dependencies" in package.json and import it by name`);
         const tsMarkers = h.markers.get(badJsx.uri.toString())?.get(TS_OWNER) ?? [];
         expect(tsMarkers.map((m) => m.code)).toEqual(["2322"]);
-
-        // Once the package becomes ready (if TS2307 remained for e.g. a bad subpath), tt-imports clears and TS2307 reveals
-        state = { state: "ready" };
-        h.emitPackageStore(undefined);
-        await flush();
-        expect(h.markers.get(badJsx.uri.toString())?.get(IMPORT_OWNER) ?? []).toEqual([]);
-        expect((h.markers.get(badJsx.uri.toString())?.get(TS_OWNER) ?? []).map((m) => m.code)).toEqual(["2307", "2322"]);
         h.ws.dispose();
     });
 

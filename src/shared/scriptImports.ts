@@ -5,12 +5,13 @@
  * (`utils`) resolves from the root. A specifier ending in `.json` or `.svg`
  * names a data file (its path, case-insensitive); anything else a script: the path
  * with an optional `.ts`/`.js`, matched case-insensitively against script
- * names (paths), else (as TypeScript) the .tsx script of that path (`./Panel` and `./Panel.tsx` find "Panel.tsx"). A URL (`https://unpkg.com/x@1.2.3`)
- * is a package import (shared/packageImports), never a script path.
+ * names (paths), else (as TypeScript) the .tsx script of that path (`./Panel` and `./Panel.tsx` find "Panel.tsx"). A URL is never
+ * a script path, and a tweak can't import one: it imports npm packages by name
+ * (its package.json `dependencies`, shared/tweakBundle.ts).
  */
 import { builtinSpec, jsxImportSource, usesJsx } from "./builtinSpecs";
 import { scriptFrame } from "./scriptError";
-import { isUrlSpec, makePackageLoader, PACKAGE_ORIGIN, parsePackageUrl, type PackageModule, type PackageModules, type PackageStatus } from "./packageImports";
+import { isUrlSpec, makePackageLoader, urlImportMessage, type PackageModule, type PackageModules } from "./packageImports";
 import type { PackageFn } from "./siteCode";
 import { bareImport, dataReader, dependenciesOf } from "./tweakBundle";
 
@@ -35,75 +36,29 @@ export function importSpecs(code: string): Set<string> {
     return out;
 }
 
-/** a URL import that can't load: where its specifier is (inside the quotes) and why */
+/** a URL import in code (they aren't supported): where its specifier is (inside the quotes) and why */
 export interface BadPackageImport {
     offset: number;
     length: number;
     spec: string;
     message: string;
-    /** unpkg package and requested range/tag ("latest" when none) when pinning the version fixes it */
-    pin?: { name: string; range: string; sub: string };
 }
 
-/** URL imports in code that can't load (unpinned, not unpkg, …) */
+/** URL imports in code, the built-ins' esm.sh URLs aside */
 export function badPackageImports(code: string): BadPackageImport[] {
     const out: BadPackageImport[] = [];
     for (const m of code.matchAll(IMPORT_RE)) {
         const spec = m[1];
         if (!isUrlSpec(spec) || builtinSpec(spec)) continue;
-        const message = parsePackageUrl(spec);
-        if (typeof message !== "string") continue;
-        const offset = m.index! + m[0].length - 1 - spec.length;
-        const p = spec.startsWith(PACKAGE_ORIGIN) && !/[?#]/.test(spec) ? /^((?:@[^/@]+\/)?[^/@]+)(?:@([^/]*))?(?:\/(.*))?$/.exec(spec.slice(PACKAGE_ORIGIN.length)) : null;
-        const pin = p && message.includes("pin an exact version") ? { name: p[1], range: p[2] || "latest", sub: p[3] ?? "" } : undefined;
-        out.push({ offset, length: spec.length, spec, message, pin });
+        out.push({ offset: m.index! + m[0].length - 1 - spec.length, length: spec.length, spec, message: urlImportMessage(spec) });
     }
     return out;
 }
 
-const isPackageUrl = (spec: string) => isUrlSpec(spec) && !builtinSpec(spec) && typeof parsePackageUrl(spec) !== "string";
-
-/** the valid package URLs code imports */
-export function packageUrls(code: string): string[] {
-    return [...new Set([...code.matchAll(IMPORT_RE)].map((m) => m[1]).filter(isPackageUrl))];
-}
-
-/** an Editor marker on a URL import: why it can't load, or that it's still on its way */
-export interface PackageImportMark extends BadPackageImport {
-    severity: "error" | "warning";
-}
-
-/**
- * The markers of code's URL imports: the bad ones (errors), and for valid
- * ones what the background says (`statusOf`, undefined: not asked yet) —
- * a download or types still under way is a warning, not a failure.
- */
-export function packageImportMarks(code: string, statusOf: (url: string) => PackageStatus | undefined): PackageImportMark[] {
-    const out: PackageImportMark[] = badPackageImports(code).map((b) => ({ ...b, severity: "error" }));
-    for (const m of code.matchAll(IMPORT_RE)) {
-        const spec = m[1];
-        if (!isPackageUrl(spec)) continue;
-        const st = statusOf(spec);
-        if (!st || st.state === "ready") continue;
-        const offset = m.index! + m[0].length - 1 - spec.length;
-        const mark = (severity: "error" | "warning", message: string) => out.push({ offset, length: spec.length, spec, severity, message });
-        if (st.state === "downloading") mark("warning", `downloading "${spec}" from unpkg… (its types follow)`);
-        else if (st.state === "typing") mark("warning", `fetching the types of "${spec}"…`);
-        else if (st.state === "missing") mark("warning", `cannot import "${spec}": not downloaded yet — save the script to download it`);
-        else if (st.state === "failed") mark("error", `cannot import "${spec}": ${st.reason}`);
-        else mark("warning", `couldn't fetch the types of "${spec}" (${st.reason}) — it still runs; they're retried in a minute`);
-    }
-    return out.sort((a, b) => a.offset - b.offset);
-}
-
-/**
- * Is a TypeScript "Cannot find module" error about a URL import whose
- * own marker (packageImportMarks) explains it better — one that can't
- * load, or whose package (and types) are still on their way?
- */
-export function coveredMissingModule(message: string, statusOf: (url: string) => PackageStatus | undefined): boolean {
+/** is a TypeScript "Cannot find module" error about a URL import, whose own marker (badPackageImports) explains it better? */
+export function coveredMissingModule(message: string): boolean {
     const spec = /^Cannot find module '([^']+)'/.exec(message)?.[1];
-    return !!spec && isUrlSpec(spec) && !builtinSpec(spec) && statusOf(spec)?.state !== "ready";
+    return !!spec && isUrlSpec(spec) && !builtinSpec(spec);
 }
 
 /** code with each import specifier replaced by what `to` returns for it (undefined: kept) */
@@ -375,7 +330,7 @@ function unusable(spec: string, why: string): any {
 
 export interface LibRequireOptions<L extends ShippedLib = ShippedLib> {
     /** a built-in import (`react`, `valtio`…) from `importer` (default: a module that throws when used) */
-    builtin?: (spec: string, importer: string, loadUrl: (url: string) => any) => any;
+    builtin?: (spec: string, importer: string) => any;
     /** a `.css` package import's text (the overlay adds a <style>; default: ignored) */
     style?: (css: string, url: string) => void;
     /**
@@ -408,7 +363,7 @@ export function makeLibRequire<L extends ShippedLib>(libs: L[], run: (lib: L, re
     // a downloaded package's own `require("react")` gets the built-in too (one React copy), unless it's React itself
     const loadPackage = makePackageLoader(
         pkgs,
-        builtin ? (spec, from) => (builtinSpec(spec) && !/^https:\/\/unpkg\.com\/(react|react-dom|scheduler|valtio)@/.test(from) ? { module: builtin(spec, from, (u) => loadPackage(u)) } : undefined) : undefined,
+        builtin ? (spec, from) => (builtinSpec(spec) && !/^https:\/\/unpkg\.com\/(react|react-dom|scheduler|valtio)@/.test(from) ? { module: builtin(spec, from) } : undefined) : undefined,
         { style: opts.style, shared: opts.onSite ? "site" : "page", compile: opts.packageFn ? (url) => opts.packageFn!(pkgLibs.get(url)!) : undefined }
     );
     const scriptLibs = libs.filter((l) => !l.pkg && l.alias === undefined);
@@ -421,14 +376,15 @@ export function makeLibRequire<L extends ShippedLib>(libs: L[], run: (lib: L, re
     const requireFrom =
         (importer: string) =>
         (spec: string): any => {
-            const r = isUrlSpec(spec) ? null : resolve(importer, spec);
-            if (!r && builtinSpec(spec)) return builtin ? builtin(spec, importer, loadPackage) : pageBuiltin(spec);
+            const r = resolve(importer, spec);
+            if (!r && builtinSpec(spec)) return builtin ? builtin(spec, importer) : pageBuiltin(spec);
+            if (isUrlSpec(spec)) throw new Error(urlImportMessage(spec));
             // a bundle's bare import: its package.json dependency's download
             const bare = r ? undefined : bareImport(importer, spec, read);
             if (bare && "error" in bare) throw new Error(bare.error);
-            if (bare || isUrlSpec(spec)) {
-                const deps = bare ? dependenciesOf(importer, read) : undefined;
-                if (bare) spec = bare.url;
+            if (bare) {
+                const deps = dependenciesOf(importer, read);
+                spec = bare.url;
                 if (!opts.onSite) return loadPackage(spec, deps);
                 try {
                     return loadPackage(spec, deps);

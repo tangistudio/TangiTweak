@@ -45,18 +45,7 @@ export function builtinNeedsReact(name: string, code = ""): boolean {
     return (name === "valtio" || name === "valtio/utils") && /\buse(?:Snapshot|Proxy)\b/.test(code);
 }
 
-/**
- * A file whose JSX import source is a pinned unpkg Preact
- * (`/** @jsxImportSource https://unpkg.com/preact@10.26.4 *\/`): its
- * `react` imports go to that Preact's compat layer. Returns the package
- * root URL, or null.
- */
-export function preactRoot(code: string): string | null {
-    const m = /@jsxImportSource\s+(https:\/\/unpkg\.com\/preact@\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)(?=[\s*/]|$)/.exec(code);
-    return m ? m[1] : null;
-}
-
-/** the file's `/** @jsxImportSource <url or name> *\/` pragma, or null */
+/** the file's `/** @jsxImportSource <name> *\/` pragma, or null */
 export function jsxPragma(code: string): string | null {
     const m = /@jsxImportSource\s+([^\s*]+)/.exec(code);
     return m ? m[1] : null;
@@ -78,26 +67,4 @@ export function usesJsx(code: string): boolean {
 export function jsxElementAt(code: string): number {
     const m = /(?:^|[=(,:?&|{}[;]|\breturn|=>)\s*(<)(?:[A-Za-z][\w.:-]*|>)/m.exec(code);
     return m && /<\/[\w.:-]*>|\/>/.test(code) ? m.index + m[0].lastIndexOf("<", m[0].length - 1) : -1;
-}
-
-/** what a Preact file's React built-in maps to */
-export function preactTarget(root: string, name: string): string | null {
-    if (name === "react" || name === "react-dom") return `${root}/compat`;
-    if (name === "react-dom/client") return `${root}/compat/client`;
-    if (name === "react/jsx-runtime" || name === "react/jsx-dev-runtime") return `${root}/jsx-runtime`;
-    return null;
-}
-
-/** package URLs a file's built-in imports need downloaded (a Preact file's compat layer) */
-export function builtinDownloads(code: string, specs: Iterable<string>): string[] {
-    const root = preactRoot(code);
-    if (!root) return [];
-    const out = new Set<string>();
-    for (const s of specs) {
-        const b = builtinSpec(s);
-        if (!b || !builtinNeedsReact(b, code)) continue;
-        // valtio/react under Preact runs on preact/compat
-        out.add(preactTarget(root, b) ?? `${root}/compat`);
-    }
-    return [...out];
 }

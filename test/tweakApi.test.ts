@@ -5,7 +5,7 @@ import { describe, it, expect } from "vitest";
 import "../src/shared/transpile";
 import { compileScript, makeModuleResolver, onSiteUses, rulesProblems, siteProblems, toRunnableJs } from "../src/shared/compile";
 import { makePageShim, type PageStores } from "../src/shared/pageShim";
-import { badPackageImports, makeLibRequire, packageUrls } from "../src/shared/scriptImports";
+import { badPackageImports, makeLibRequire } from "../src/shared/scriptImports";
 import { scriptFunction } from "../src/shared/scriptFn";
 import { formatScriptError, TT_REMOVED } from "../src/shared/scriptError";
 import { builtinModule } from "../src/shared/builtins";
@@ -198,7 +198,6 @@ describe("tweak: the API", () => {
 
     it("is never a package: no download, no typings to fetch; only a tweak's files import it", () => {
         const code = `import { tweak } from "tangitweak";`;
-        expect(packageUrls(code)).toEqual([]);
         expect(badPackageImports(code)).toEqual([]);
         expect(needsBuiltinTypings([code])).toBe(false);
         expect(() => builtinModule("tangitweak")).toThrow(/tweak's own files/);

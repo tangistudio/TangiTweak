@@ -10,7 +10,6 @@ import {
     PACKAGES_KEY,
     entryIds,
     entryStem,
-    isDataPath,
     modifiedFiles,
     naturalPackageFolder,
     packageFolder,
@@ -199,7 +198,7 @@ async function analyze(fetched: Pick<FetchedPackage, "entries" | "files">, pkg?:
     const caps = capabilitiesOf(
         compiled.flatMap(({ c }) => c.meta.routes ?? []),
         metadata.connect,
-        Object.keys(files).filter((rel) => !isDataPath(rel)).map((rel) => files[rel])
+        manifest.dependencies
     );
     const iconUrl = resolvePackageIcon({ entries, files, metadata }, dataFiles);
     return { name: packageName({ entries, metadata }), metadata, ...(iconUrl ? { iconUrl } : {}), bundle: true, caps, error, ...(versionWarning ? { versionWarning } : {}), folder, items };
@@ -236,12 +235,14 @@ async function synthesizeFolderTarget(
 
     let metadata: PackageMetadata = { connect: [] };
     let entries: string[] = [];
+    let dependencies: Record<string, string> = {};
     let hasValidManifest = false;
     const mf = dirData.find((d) => d.path.slice(dir.length + 1).toLowerCase() === MANIFEST_FILE);
     if (mf) {
         try {
-            const { scripts: sList, main: _main, packageName: _name, dependencies: _deps, ...rest } = parseManifest(mf.text);
+            const { scripts: sList, main: _main, packageName: _name, dependencies: deps, ...rest } = parseManifest(mf.text);
             entries = sList;
+            dependencies = deps;
             metadata = rest;
             hasValidManifest = true;
         } catch {
@@ -296,7 +297,7 @@ async function synthesizeFolderTarget(
     const caps = capabilitiesOf(
         pkgScripts.flatMap((s) => s.meta.routes ?? []),
         metadata.connect,
-        pkgScripts.map((s) => s.code)
+        dependencies
     );
     const now = Date.now();
     return {
@@ -316,7 +317,7 @@ async function synthesizeFolderTarget(
 
 async function synthesizeScriptTarget(s: Script, entryRel: string): Promise<InstalledPackage> {
     const metadata: PackageMetadata = { connect: [] };
-    const caps = capabilitiesOf(s.meta.routes ?? [], metadata.connect, [s.code]);
+    const caps = capabilitiesOf(s.meta.routes ?? [], metadata.connect);
     const now = Date.now();
     return {
         id: newId(),

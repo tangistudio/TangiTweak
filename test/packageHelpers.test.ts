@@ -16,7 +16,7 @@ describe("packageCaps", () => {
             { kind: "onDocument", url: ["*://c.com/*"], world: "isolated" },
             { kind: "onOverlay", url: ["*://a.com/*"] },
         ];
-        const c = capabilitiesOf(routes as never, ["api.x.com"], ['import confetti from "https://unpkg.com/canvas-confetti@1.9.3";', 'import "./lib";']);
+        const c = capabilitiesOf(routes as never, ["api.x.com"], { "canvas-confetti": "^1.9.3", valtio: "^2" });
         expect(c).toEqual({
             urls: ["*://a.com/*", "*://b.com/*", "*://c.com/*"],
             strategies: ["fetch"],
@@ -28,7 +28,7 @@ describe("packageCaps", () => {
     });
 
     it("an isolated onDocument doesn't touch the page's JavaScript", () => {
-        const c = capabilitiesOf([{ kind: "onDocument", url: ["*://a.com/*"], world: "isolated" }] as never, [], []);
+        const c = capabilitiesOf([{ kind: "onDocument", url: ["*://a.com/*"], world: "isolated" }] as never, []);
         expect(c.pageJs).toBe(false);
     });
 

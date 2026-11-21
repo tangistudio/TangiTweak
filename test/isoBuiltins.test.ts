@@ -19,7 +19,7 @@ describe("built-ins in isolated onPage code", () => {
         await ensureBuiltins(codes, packages);
         expect(asked).toBe(1);
         expect(builtinsReady(codes, packages)).toBe(true);
-        const req = makeLibRequire([], () => {}, { builtin: (spec, _i, loadUrl) => builtinModule(spec, "", loadUrl) })("main");
+        const req = makeLibRequire([], () => {}, { builtin: (spec) => builtinModule(spec) })("main");
         expect(req("react-dom/client").createRoot()).toBe("root");
         expect(typeof req("valtio").proxy).toBe("function");
     });

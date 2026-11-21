@@ -526,7 +526,7 @@ properties) and F12 on it opens the data file. Renaming or
 moving a script, data file or folder doesn't rewrite the import specifiers
 pointing at it.
 
-### Packages from unpkg
+### npm packages
 
 A **bare import** (`import dayjs from "dayjs"`) pulls in an npm package the
 tweak's `package.json` lists in `"dependencies"`. TangiTweak downloads it
@@ -546,32 +546,23 @@ package under another name, in the tweak's dependencies and in a package's
 own. A bare import its `dependencies` don't list is a compile error, as is a
 dependency that isn't an npm range (`file:`, a git URL).
 
-A file can also import a package by its unpkg URL, pinned to an exact
-version:
+Import packages by name only: a URL import
+(`import dayjs from "https://unpkg.com/dayjs@1.11.13"`) is a compile error,
+`cannot import "…": URL imports aren't supported — add the package to
+"dependencies" in package.json and import it by name`, and the Editor
+underlines it as you type. A path into a package works by name too:
 
 ```ts
-import dayjs from "https://unpkg.com/dayjs@1.11.13";
-import { addDays } from "https://unpkg.com/date-fns@4.1.0/addDays.js"; // a file inside the package
-import { chunk } from "https://unpkg.com/lodash-es@4.17.21";
+import dayjs from "dayjs";
+import { addDays } from "date-fns/addDays"; // a file inside the package
 
 tweak.onRequest({ url: "*://api.example.com/*", strategy: "helper" }, () => ({
     headers: { set: { "x-tomorrow": dayjs(addDays(new Date(), 1)).format("YYYY-MM-DD") } },
 }));
 ```
 
-The URL is `https://unpkg.com/<package>@<version>[/<path>]`. Scoped names
-(`@scope/name`) and prerelease versions (`1.0.0-beta.1`) work. The version
-must be exact: `dayjs`, `dayjs@1`, `dayjs@^1.11.0` or `dayjs@latest` are an
-error, because a range could change what the script runs. The Editor
-underlines such a URL as you type (`pin an exact version, e.g.
-https://unpkg.com/dayjs@1.2.3`), and its quick fix (**Ctrl+.** / **⌘.**,
-or the light bulb) rewrites it to the version unpkg serves now, e.g.
-`https://unpkg.com/dayjs` → `https://unpkg.com/dayjs@1.11.13`. Other
-hosts, `http://` URLs and query strings aren't allowed.
-
-**How it works.** The Editor downloads the package (or the file you
-named) as soon as you type a pinned URL, and saving a script downloads any
-it doesn't have yet. The download takes everything the package imports: relative files, and the package's own
+**How it works.** Saving the tweak downloads any dependency it imports
+that it doesn't have yet. The download takes everything the package imports: relative files, and the package's own
 dependencies at the versions its `package.json` asks for. A path into a
 package (`@radix-ui/primitive/is-development`) goes where the package's
 `exports` map sends it (the production browser build: conditions
@@ -580,14 +571,11 @@ the `main` of a folder's own `package.json`. ES modules are
 converted to CommonJS, and CommonJS/UMD files run as they are, like in
 Node.js (`process.env.NODE_ENV` is `"production"`). The download is kept in
 the extension's storage, so the script also runs offline and after a
-restart. A pinned npm version never changes, so it isn't downloaded again.
+restart. An npm version never changes, so it isn't downloaded again.
 Downloads no script imports any more are deleted when you save or delete
 scripts. If the download fails (offline, a typo, a missing file), the import
 line gets a compile error such as `cannot import "https://unpkg.com/…":
-download failed (HTTP 404 — no such package, version or file)`; save again to retry. While a package
-and its types are still downloading, the Editor shows a warning on the URL
-(`downloading "https://unpkg.com/…" from unpkg…`, then `fetching the types
-of …`) instead of TypeScript's `Cannot find module` error. A dependency of the
+download failed (HTTP 404 — no such package, version or file)`; save again to retry. A dependency of the
 package that fails to download isn't an error until the package `require`s
 it at runtime, so optional dependencies don't break anything; saving the
 script tries it again.
@@ -630,7 +618,7 @@ the matching `@types/<package>` major version. Packages with neither are
 typed `any`. In the Code view, hovers, completions and errors work as soon as
 the save that downloads them finishes. In the [synced
 folder](editor.md#synced-folder) they're written to `.tangitweak/types/`, and
-the generated `tsconfig.json` maps `https://unpkg.com/*` there (`paths`), so
+the generated `tsconfig.json` maps the packages there (`paths`), so
 VS Code and `tsc` type-check the same imports.
 
 **Limits.**
@@ -638,12 +626,12 @@ VS Code and `tsc` type-check the same imports.
 - Only npm packages (from unpkg.com) can be imported. Packages that need
   Node.js built-ins with no browser version, native code, WebAssembly fetched at runtime, or a bundler (`import.meta.url`
   assets, CSS imported from inside a package's JavaScript) don't work.
-- A `.css` file (`import "https://unpkg.com/daisyui@5.0.43/daisyui.css"`)
+- A `.css` file (`import "daisyui/daisyui.css"`)
   becomes a `<style>` in the script's [overlay](#overlays--wtonoverlay);
   everywhere else it's ignored (use [`ctx.style`](#hot-reload--runs-and-ctx)
   in `onPage` code).
 - Top-level `await` in a package isn't supported. A script's `import()` of a
-  package URL must be a string literal so the save finds and downloads it.
+  package must be a string literal so the save finds and downloads it.
 - Per import: at most 1000 files, 5 MB per file and 20 MB in total; typings
   stop at 500 files or 10 MB. A download times out after 15 s.
 - `typesVersions` in a package's `package.json` is ignored.
@@ -652,9 +640,9 @@ VS Code and `tsc` type-check the same imports.
 
 **Security.** A package is third-party code that runs with the same powers as
 your script: it sees and can change the requests and pages your handlers
-touch. Import only packages you trust. Pinning means the code can't change
-after you review it: npm versions are immutable, and the copy TangiTweak
-stored is the one that runs. Downloads come straight from unpkg.com over
+touch. Import only packages you trust. The code doesn't change after you
+review it: npm versions are immutable, and the copy TangiTweak stored is the
+one that runs. Downloads come straight from unpkg.com over
 HTTPS, so you trust unpkg to serve npm's files unaltered. Only the extension
 background downloads them (when scripts are saved, imported or compiled);
 pages never fetch them.
@@ -1714,14 +1702,10 @@ tweak.onOverlay("*://app.example.com/*", async () => {
 - **React and valtio** are [built in](#built-in-valtio-and-react). A `.tsx`
   script's JSX compiles with the automatic runtime against the built-in
   React; `ctx.mount` renders it.
-- **Another JSX runtime:** a `/** @jsxImportSource <url> */` comment at the
-  top switches the file to it, e.g. Preact from unpkg
-  (`/** @jsxImportSource https://unpkg.com/preact@10.26.4 */`, with hooks
-  from `https://unpkg.com/preact@10.26.4/hooks`). Lit, Solid or plain DOM by
-  [package import](#packages-from-unpkg) work too. Pin one version so
-  everything shares a single copy. `ctx.mount` is React's only: render
-  with the framework's own `render`, and undo it on `ctx.signal`.
-- **CSS:** a `.css` [package import](#packages-from-unpkg) becomes a
+- **Other frameworks:** Lit, Solid or plain DOM by
+  [package import](#npm-packages) work too. `ctx.mount` is React's only:
+  render with the framework's own `render`, and undo it on `ctx.signal`.
+- **CSS:** a `.css` [package import](#npm-packages) becomes a
   `<style>` in the overlay, added once; `ctx.style(css)` works in every
   place and reaches `ctx.mount`'s shadow roots; inline styles work as
   usual.
@@ -1730,11 +1714,11 @@ tweak.onOverlay("*://app.example.com/*", async () => {
   `import()` inside the handler so it only runs in the overlay:
 
   ```tsx
-  import "https://unpkg.com/daisyui@5.0.43/daisyui.css";
+  import "daisyui/daisyui.css"; // "daisyui" and "@tailwindcss/browser" in "dependencies"
   import { useState } from "react";
 
   tweak.onOverlay("*://app.example.com/*", async (ctx) => {
-      await import("https://unpkg.com/@tailwindcss/browser@4.1.11");
+      await import("@tailwindcss/browser");
       function Modal() {
           const [open, setOpen] = useState(true);
           return open ? (

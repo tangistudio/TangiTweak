@@ -62,7 +62,7 @@ adds one waits for your approval.
 installed from. It takes any URL the install page reads, as listed in the table under
 [Install a tweak](#install-a-tweak): a `package.json`, `.ts` or `.zip` URL, a GitHub
 file or folder, a gist, or a gist's raw file. See [Updates](#updates).
-`dependencies` also lists the [npm packages](scripting.md#packages-from-unpkg)
+`dependencies` also lists the [npm packages](scripting.md#npm-packages)
 the tweak imports by name.
 
 The Editor marks a `main` that names no file in the folder as an error.
@@ -125,7 +125,7 @@ Before anything is written, the page shows:
   - the other strategies;
   - overlays;
   - the hosts it fetches from (`connect`);
-  - the [unpkg packages](scripting.md#packages-from-unpkg) it imports;
+  - the [npm packages](scripting.md#npm-packages) it depends on;
 - warnings: a compile error (it can't be installed), a newer TangiTweak
   it needs, imports it couldn't find, and bare imports its `dependencies`
   don't list (below);
@@ -163,7 +163,7 @@ version and update state.
 
 Imports that don't start with `./` or `../` (bare imports like `"dayjs"`)
 resolve through the tweak's `dependencies` and are downloaded from unpkg
-([Packages from unpkg](scripting.md#packages-from-unpkg)). The install page
+([npm packages](scripting.md#npm-packages)). The install page
 warns about each bare import its `dependencies` don't list.
 
 ## Updates

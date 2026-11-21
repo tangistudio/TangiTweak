@@ -37,7 +37,7 @@ The folder inside a tweak (`.tweak` by default, the **Tweak data folder** settin
 _Avoid_: config folder, state folder, `stores.json` (the root file it replaced)
 
 **Package import**:
-An import of an npm package: by name, from the tweak's `package.json` `dependencies` (`import dayjs from "dayjs"`), or by its pinned unpkg.com URL (`https://unpkg.com/dayjs@1.11.13`); TangiTweak downloads the package, its dependencies and its typings from unpkg when the file is saved.
+An import of an npm package by name, from the tweak's `package.json` `dependencies` (`import dayjs from "dayjs"`); URL imports aren't supported. TangiTweak downloads the package, its dependencies and its typings from unpkg when the file is saved.
 _Avoid_: CDN import, remote import, external library
 
 **Folder**:

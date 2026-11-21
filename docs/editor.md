@@ -426,7 +426,7 @@ write back late isn't mistaken for an outside edit; the newer text is
 written again.
 `tsconfig.json`, `package.json` and `eslint.config.mjs` are written alongside, and the SDK (with the API typings) under `.tangitweak/sdk/tangitweak/`. Edit in VS Code (or any editor) with full
 TypeScript completions; saves hot apply instantly. The typings of
-[package imports](scripting.md#packages-from-unpkg) go to
+[package imports](scripting.md#npm-packages) go to
 `.tangitweak/types/`, which TangiTweak owns: it rewrites and prunes them as
 scripts change. The built-ins' (`valtio`, `react`, `react-dom`) go to
 `.tangitweak/types/builtin/`, so their imports resolve there too. The
@@ -452,8 +452,8 @@ The Editor's own checks come along as ESLint rules, in
   writes in `strategy: "rules"` handlers;
 - `tangitweak/valid-selectors-and-shortcuts`: bad CSS selectors and
   shortcut keys;
-- `tangitweak/valid-package-imports`: URL imports that aren't a pinned
-  `https://unpkg.com/<package>@<version>`.
+- `tangitweak/valid-package-imports`: URL imports (import packages by name
+  from the tweak's `package.json` `dependencies`).
 
 Run `npm install` once in the folder (the root `package.json` lists ESLint and
 typescript-eslint), then `npx eslint .` or VS Code's ESLint extension

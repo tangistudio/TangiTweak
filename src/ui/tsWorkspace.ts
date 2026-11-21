@@ -1,6 +1,6 @@
 /**
  * Single owner of the Editor's TypeScript workspace: stages all dynamic
- * typings (built-in React/valtio, unpkg package `.d.ts` files and statuses,
+ * typings (built-in React/valtio, downloaded packages' `.d.ts` files,
  * JSON data-file `.d.json.ts` declarations) and runs one epoch-stamped
  * diagnostic loop over script models so TypeScript never checks a
  * half-loaded project or flashes transient missing-module errors.
@@ -8,8 +8,8 @@
 
 import { builtinSpec, jsxElementAt } from "../shared/builtinSpecs";
 import { TWEAK_MODULE } from "../shared/tweakApi";
-import { declarationCandidates, normalizePath, PACKAGE_MODULES_KEY, PACKAGE_ORIGIN, PACKAGE_TYPINGS_KEY, relativePath, TYPINGS_ROOT, type PackageStatus, type StoredTypings } from "../shared/packageImports";
-import { coveredMissingModule, dependantsOf, importSpecs, isImageDataPath, isMarkdownPath, isSvgPath, packageImportMarks, packageUrls } from "../shared/scriptImports";
+import { declarationCandidates, normalizePath, PACKAGE_MODULES_KEY, PACKAGE_ORIGIN, PACKAGE_TYPINGS_KEY, relativePath, TYPINGS_ROOT, type StoredTypings } from "../shared/packageImports";
+import { badPackageImports, coveredMissingModule, dependantsOf, importSpecs, isImageDataPath, isMarkdownPath, isSvgPath } from "../shared/scriptImports";
 import { isGitignorePath, isTsxName } from "../shared/scriptName";
 import { scriptLint } from "../shared/scriptLint";
 import { bareImport, dataReader } from "../shared/tweakBundle";
@@ -18,7 +18,6 @@ import { jsonDeclPath, jsonModuleDts } from "./jsonTypes";
 import { BUILTIN_ROOT } from "./monacoSetup";
 
 export const IMPORT_OWNER = "tt-imports";
-export const UNPINNED = "unpinned-import";
 export const JSX_OWNER = "tt-jsx";
 export const JSX_IN_TS = "jsx-in-ts";
 export const TS_OWNER = "typescript";
@@ -107,14 +106,12 @@ export interface TsWorkspaceHost {
     setModelMarkers(model: TsModelLike, owner: string, markers: TsMarkerData[]): void;
     fetchBuiltinTypes(): Promise<Record<string, string>>;
     loadPackageTypings(): Promise<Record<string, string>>;
-    fetchPackageStatuses(urls: string[]): Promise<Record<string, PackageStatus> | undefined>;
     subscribePackageStore(onChange: (typings: Record<string, string> | undefined) => void): { dispose(): void };
     onChecked(): void;
     ignoredCodes?(): number[];
     severity?: { Hint: number; Info: number; Warning: number; Error: number };
     markerTag?: { Unnecessary: number; Deprecated: number };
     editDebounceMs?: number;
-    statusPollMs?: number;
 }
 
 export interface TsWorkspace {
@@ -151,7 +148,6 @@ export function createTsWorkspace(host: TsWorkspaceHost): TsWorkspace {
     const sev = host.severity ?? DEFAULT_SEVERITY;
     const tag = host.markerTag ?? DEFAULT_TAG;
     const editDebounceMs = host.editDebounceMs ?? 250;
-    const statusPollMs = host.statusPollMs ?? 1000;
 
     interface TrackedEntry {
         id: string;
@@ -181,8 +177,6 @@ export function createTsWorkspace(host: TsWorkspaceHost): TsWorkspace {
     const checkedVersion = new WeakMap<TsModelLike, number>();
     const rawMarkers = new WeakMap<TsModelLike, TsMarkerData[]>();
     const modelRetries = new WeakMap<TsModelLike, number>();
-    const packageStatuses = new Map<string, PackageStatus>();
-    const statusOf = (u: string): PackageStatus | undefined => packageStatuses.get(u);
 
     let epoch = 0;
     let extraLibsDirty = false;
@@ -195,8 +189,6 @@ export function createTsWorkspace(host: TsWorkspaceHost): TsWorkspace {
 
     let builtinLoaded = false;
     let builtinPromise: Promise<void> | null = null;
-    let pendingStatusRefresh: Promise<void> = Promise.resolve();
-    let pollTimer: ReturnType<typeof setTimeout> | null = null;
 
     function putLibs(slot: Map<string, ExtraLibSlot>, want: Map<string, string>): string[] {
         const changed: string[] = [];
@@ -235,10 +227,7 @@ export function createTsWorkspace(host: TsWorkspaceHost): TsWorkspace {
         .catch(() => {});
 
     const storeSub = host.subscribePackageStore((files) => {
-        const urls = allImportedPackageUrls();
-        if (urls.length) pendingStatusRefresh = fetchStatuses(urls);
         if (files !== undefined) applyPackageTypings(files, true);
-        if (urls.length) kickDrain();
     });
 
     function ensureBuiltins(codes: Iterable<string>): Promise<void> {
@@ -259,62 +248,19 @@ export function createTsWorkspace(host: TsWorkspaceHost): TsWorkspace {
         return builtinPromise;
     }
 
-    function allImportedPackageUrls(): string[] {
-        return [...new Set([...entries.values()].filter((e) => !e.model.isDisposed()).flatMap((e) => packageUrls(e.model.getValue())))];
-    }
-
-    function scheduleStatusPoll(urls: string[]): void {
-        if (pollTimer !== null || !urls.length || disposed) return;
-        pollTimer = setTimeout(() => {
-            pollTimer = null;
-            if (disposed) return;
-            const active = new Set(allImportedPackageUrls());
-            const wanted = urls.filter((u) => active.has(u));
-            if (wanted.length) void fetchStatuses(wanted);
-        }, statusPollMs);
-    }
-
-    async function fetchStatuses(urls: string[]): Promise<void> {
-        const unique = [...new Set(urls)];
-        if (!unique.length || disposed) return;
-        let statuses: Record<string, PackageStatus> | undefined;
-        try {
-            statuses = await host.fetchPackageStatuses(unique);
-        } catch {
-            return;
-        }
-        if (!statuses || disposed) return;
-        let changed = false;
-        for (const [u, st] of Object.entries(statuses)) {
-            if (JSON.stringify(packageStatuses.get(u)) !== JSON.stringify(st)) changed = true;
-            packageStatuses.set(u, st);
-        }
-        if (changed) {
-            let markersChanged = false;
-            for (const e of entries.values()) {
-                if (e.model.isDisposed()) continue;
-                updateImportMarkers(e.model);
-                const raw = rawMarkers.get(e.model);
-                if (raw && publishTypeScriptMarkers(e.model, raw)) markersChanged = true;
-            }
-            if (markersChanged) host.onChecked();
-        }
-        scheduleStatusPoll(Object.keys(statuses).filter((u) => /^(downloading|typing)$/.test(statuses![u].state)));
-    }
-
     function updateImportMarkers(m: TsModelLike): void {
         if (m.isDisposed()) return;
         const code = m.getValue();
-        const bad = packageImportMarks(code, statusOf);
+        const bad = badPackageImports(code);
         const had = host.getModelMarkers(m.uri, IMPORT_OWNER);
         if (!bad.length && !had.length) return;
         const markers: TsMarkerData[] = bad.map((b) => {
             const a = m.getPositionAt(b.offset);
             const e = m.getPositionAt(b.offset + b.length);
             return {
-                severity: b.severity === "error" ? sev.Error : sev.Warning,
+                severity: sev.Error,
                 source: "tangitweak",
-                code: b.pin ? UNPINNED : "package-import",
+                code: "package-import",
                 message: b.message,
                 startLineNumber: a.lineNumber,
                 startColumn: a.column,
@@ -376,7 +322,7 @@ export function createTsWorkspace(host: TsWorkspaceHost): TsWorkspace {
     }
 
     function filterCoveredMarkers(markers: TsMarkerData[]): TsMarkerData[] {
-        return markers.filter((mk) => !(mk.code === "2307" && coveredMissingModule(mk.message, statusOf)));
+        return markers.filter((mk) => !(mk.code === "2307" && coveredMissingModule(mk.message)));
     }
 
     /** Write visible TypeScript markers; returns true when the model's visible markers changed. */
@@ -472,8 +418,6 @@ export function createTsWorkspace(host: TsWorkspaceHost): TsWorkspace {
                 updateJsxMarker(m, entry.name);
                 updateImportMarkers(m);
                 updateLintMarkers(m);
-                const nonReady = packageUrls(m.getValue()).filter((u) => statusOf(u)?.state !== "ready");
-                if (nonReady.length) pendingStatusRefresh = fetchStatuses(nonReady);
                 const live = liveScripts();
                 dirty.add(m);
                 for (const depId of dependantsOf(entry.name, live, "script")) {
@@ -561,14 +505,8 @@ export function createTsWorkspace(host: TsWorkspaceHost): TsWorkspace {
 
                 const myEpoch = epoch;
                 const codes = [...entries.values()].filter((e) => !e.model.isDisposed()).map((e) => e.model.getValue());
-                const unknownUrls = [...new Set(codes.flatMap((c) => packageUrls(c)))].filter((u) => !packageStatuses.has(u));
 
-                await Promise.all([
-                    initialPkgTypings,
-                    pendingStatusRefresh,
-                    ensureBuiltins(codes),
-                    unknownUrls.length ? fetchStatuses(unknownUrls) : Promise.resolve(),
-                ]);
+                await Promise.all([initialPkgTypings, ensureBuiltins(codes)]);
 
                 if (disposed) return;
                 if (epoch !== myEpoch) continue;
@@ -723,16 +661,11 @@ export function createTsWorkspace(host: TsWorkspaceHost): TsWorkspace {
 
             const changedDeclUris = applyDataFilesInternal(getDataFiles(), live, toCheck);
 
-            const urlsToQuery = new Set<string>();
             for (const { model, name } of markerRefresh) {
                 updateJsxMarker(model, name);
                 updateImportMarkers(model);
                 updateLintMarkers(model);
-                for (const u of packageUrls(model.getValue())) {
-                    if (statusOf(u)?.state !== "ready") urlsToQuery.add(u);
-                }
             }
-            if (urlsToQuery.size) pendingStatusRefresh = fetchStatuses([...urlsToQuery]);
 
             if (structuralChange) epoch++;
             for (const m of toCheck) dirty.add(m);
@@ -758,7 +691,6 @@ export function createTsWorkspace(host: TsWorkspaceHost): TsWorkspace {
 
         dispose(): void {
             disposed = true;
-            if (pollTimer !== null) clearTimeout(pollTimer);
             for (const t of editTimers.values()) clearTimeout(t);
             editTimers.clear();
             for (const e of entries.values()) e.sub.dispose();
@@ -788,7 +720,7 @@ function typesEntry(files: Record<string, string>, url: string): string | undefi
 /**
  * `<bundle>/node_modules/<spec>/package.json` stubs (path → text) pointing
  * each bare import of a bundle file at its dependency's downloaded typings,
- * so `import { zip } from "fflate"` type-checks like its package URL does.
+ * so `import { zip } from "fflate"` type-checks.
  */
 export function bareImportStubs(scripts: Iterable<{ name: string; code: string }>, data: TsDataInput[], typings: Record<string, string>): Map<string, string> {
     const read = dataReader(data);
@@ -805,14 +737,13 @@ export function bareImportStubs(scripts: Iterable<{ name: string; code: string }
     return out;
 }
 
-/** Production adapter wiring `createTsWorkspace` to Monaco, `chrome.storage.local` and background IPC. */
+/** Production adapter wiring `createTsWorkspace` to Monaco and `chrome.storage.local`. */
 export function createMonacoTsWorkspace(opts: {
     monaco: any;
     getActiveModel: () => any;
-    send: <T = any>(msg: any) => Promise<T>;
     onChecked: () => void;
 }): TsWorkspace {
-    const { monaco, getActiveModel, send, onChecked } = opts;
+    const { monaco, getActiveModel, onChecked } = opts;
     const tsDefaults = monaco.languages.typescript.typescriptDefaults;
     return createTsWorkspace({
         addExtraLib: (content, uri) => tsDefaults.addExtraLib(content, uri),
@@ -831,7 +762,6 @@ export function createMonacoTsWorkspace(opts: {
                     resolve((d?.[PACKAGE_TYPINGS_KEY] as StoredTypings | undefined)?.files ?? {});
                 })
             ),
-        fetchPackageStatuses: async (urls) => (await send<{ statuses?: Record<string, PackageStatus> }>({ type: "packageStatus", urls }))?.statuses,
         subscribePackageStore: (onChange) => {
             const listener = (c: Record<string, chrome.storage.StorageChange>, area: string) => {
                 if (area !== "local" || !(c[PACKAGE_MODULES_KEY] || c[PACKAGE_TYPINGS_KEY])) return;

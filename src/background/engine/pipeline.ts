@@ -19,7 +19,7 @@ import {
 import { loadDataFiles } from "./dataFiles";
 import { analyzePackage, applyPending, checkPackages, dismissPending, forgetPackage, installPackage, listPackages, offerPackage, rollbackPackage, setAutoUpdate, upgradePackage } from "./packages";
 import { resolveWorkspaceIcons, singleScriptBundles } from "../../shared/packageModel";
-import { loadPackages, packagesSnapshot, requestPackages, resolveVersion } from "./packageImports";
+import { loadPackages, packagesSnapshot, requestPackages } from "./packageImports";
 import { isUrlSpec, packageClosure, type PackageModules } from "../../shared/packageImports";
 import { packageUnit, scriptUnit, siteKey } from "../../shared/siteCode";
 import { serveStore } from "./strategies/extensionStrategy";
@@ -773,15 +773,7 @@ export function createPipeline(
             });
             return true;
         }
-        // the Editor's "pin the version" quick fix: the exact version a range/tag resolves to on unpkg
-        if (msg && msg.type === "resolvePackageVersion") {
-            resolveVersion(String(msg.name), String(msg.range || "latest")).then(
-                (version) => sendResponse({ version }),
-                (e) => sendResponse({ error: String(e?.message ?? e) })
-            );
-            return true;
-        }
-        // the Editor's package import markers: where each URL stands (starting the downloads it needs)
+        // the install page's package downloads: where each URL stands (starting the downloads it needs)
         if (msg && msg.type === "packageStatus") {
             requestPackages(Array.isArray(msg.urls) ? msg.urls.map(String) : []).then(
                 (statuses) => sendResponse({ statuses }),

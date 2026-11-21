@@ -77,12 +77,12 @@ describe("tangitweak/test harness", () => {
         }
     });
 
-    it("simulates the full HTTP & DNR rules pipeline, params, storage, and mocked URL imports", async () => {
+    it("simulates the full HTTP & DNR rules pipeline, params, storage, and mocked package imports", async () => {
         const t = await loadTweak(
             {
                 name: "pipeline",
                 code: `import { tweak } from "tangitweak";
-                import { sign } from "https://unpkg.com/fake-signer@1.0.0/index.js";
+                import { sign } from "fake-signer";
 
                 const p = tweak.params({
                     env: { type: "string", default: "staging" },
@@ -142,7 +142,7 @@ describe("tangitweak/test harness", () => {
             },
             {
                 mocks: {
-                    "https://unpkg.com/fake-signer@1.0.0/index.js": {
+                    "fake-signer": {
                         sign: (s: string) => `sig:${s.length}`,
                     },
                 },

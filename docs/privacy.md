@@ -51,7 +51,7 @@ TangiTweak itself only contacts other servers when you ask it to:
 | When | Where | Why |
 | --- | --- | --- |
 | You install or update a script or package from a URL | the URL you gave, `github.com`, `api.github.com`, `raw.githubusercontent.com`, gists | download the script and the files it imports |
-| A script imports an npm package | `unpkg.com` | download the package |
+| A tweak's package.json lists an npm dependency | `unpkg.com` | download the package |
 | You open Settings → About | `api.github.com` | check for a newer TangiTweak release |
 | You install the local helper | `raw.githubusercontent.com`, GitHub releases (run by you in a terminal) | download the helper |
 | Your system proxy uses a PAC file and the local helper is on | your PAC file's URL | keep your proxy setup for traffic the helper forwards |

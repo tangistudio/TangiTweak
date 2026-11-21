@@ -13,7 +13,7 @@ import { entryIds, packageName, resolvePackageIcon, updateSource, type Installed
 import { compareVersions, MANIFEST_FILE } from "../../shared/packageMetadata";
 import { parseSource, readPackageBrowserFile, sourceLabel, sourcePageUrl, type DownloadProgress } from "../../shared/packageSource";
 import { isPackageFile, localPackage, startsIn, unzipPackage } from "../../shared/localPackage";
-import { importSpecs, isDataSpec, isImageDataPath, packageUrls } from "../../shared/scriptImports";
+import { importSpecs, isDataSpec, isImageDataPath } from "../../shared/scriptImports";
 import { bareImportUrls, dataReader } from "../../shared/tweakBundle";
 import { diffHunks, lineDiff } from "../../shared/lineDiff";
 import { fetchFrom, installedTexts, packagesApi, type Fetched } from "./api";
@@ -76,7 +76,7 @@ export function InstallFlow({ request, host }: { request: InstallRequest; host: 
     async function analyzeWithProgress(fetched: Fetched, myRun: number, updateOf?: string, wasDownloading = false): Promise<Analysis> {
         const read = dataReader(Object.entries(fetched.files).map(([path, text]) => ({ path, text })));
         const code = Object.entries(fetched.files).filter(([p]) => !isDataSpec(p));
-        const urls = [...new Set(code.flatMap(([p, text]) => [...packageUrls(text), ...bareImportUrls(p, importSpecs(text), read)]))];
+        const urls = [...new Set(code.flatMap(([p, text]) => bareImportUrls(p, importSpecs(text), read)))];
         let timer: ReturnType<typeof setInterval> | undefined;
         try {
             if (urls.length) {

@@ -1,5 +1,5 @@
-// Package imports: pinned unpkg URLs in scripts. URL validation, the
-// background download of a package's module graph (ESM / CJS / UMD,
+// Package imports: a tweak bundle's dependencies, imported by name. Package
+// URL parsing, the background download of a package's module graph (ESM / CJS / UMD,
 // dependency ranges, built-ins, failures, caching, pruning), the runtime
 // loader through the compilers and the page hook, and the typings crawl.
 import { describe, it, expect, beforeEach, vi } from "vitest";
@@ -46,6 +46,25 @@ let current: typeof import("../src/background/engine/packageImports") | undefine
 async function bg() {
     vi.resetModules();
     return (current = await import("../src/background/engine/packageImports"));
+}
+
+/** the tweak bundle `dir` whose main file imports `pkgs` ("name@version" or "name@version/sub") by name: each import goes to that package URL */
+function tweakImporting(pkgs: string[], dir = "t") {
+    const deps: Record<string, string> = {};
+    const code = pkgs
+        .map((spec) => {
+            const [, name, version, sub = ""] = /^((?:@[^/]+\/)?[^/@]+)@([^/]+)(\/.*)?$/.exec(spec)!;
+            deps[name] = version;
+            return `import "${name}${sub}";`;
+        })
+        .join("\n");
+    return { script: { name: `${dir}/main`, code }, data: { path: `${dir}/package.json`, text: JSON.stringify({ name: dir, tangitweak: {}, dependencies: deps }) } };
+}
+
+/** ensurePackages over a tweak importing `pkgs` */
+function ensure(p: Awaited<ReturnType<typeof bg>>, pkgs: string[], opts?: { retry?: boolean }) {
+    const t = tweakImporting(pkgs);
+    return p.ensurePackages([t.script], { ...opts, data: [t.data] });
 }
 
 beforeEach(async () => {
@@ -119,7 +138,7 @@ describe("downloading a package's module graph", () => {
     it("ESM (relative imports, import.meta), CJS with dependency ranges, UMD in sloppy mode", async () => {
         const p = await bg();
         const urls = ["https://unpkg.com/esm-lib@1.0.0", "https://unpkg.com/cjs-lib@2.0.0", "https://unpkg.com/umd-lib@1.0.0"];
-        expect(await p.ensurePackages([urls.map((u, i) => `import m${i} from "${u}";`).join("\n")])).toBe(true);
+        expect(await ensure(p, ["esm-lib@1.0.0", "cjs-lib@2.0.0", "umd-lib@1.0.0"])).toBe(true);
         const pkgs = p.packagesSnapshot();
         expect(pkgs.aliases["https://unpkg.com/esm-lib@1.0.0"]).toBe("https://unpkg.com/esm-lib@1.0.0/index.js");
         expect(pkgs.modules["https://unpkg.com/esm-lib@1.0.0/index.js"].requires["./math.js"]).toBe("https://unpkg.com/esm-lib@1.0.0/math.js");
@@ -144,7 +163,7 @@ describe("downloading a package's module graph", () => {
     it("a subpath only package.json `exports` maps, or a folder's own package.json, resolves through it (production, ES module first)", async () => {
         const p = await bg();
         const sub = "https://unpkg.com/cond-lib@1.0.0/is-dev";
-        await p.ensurePackages([`import u from "https://unpkg.com/cond-user@1.0.0"; import { IS_DEV } from "${sub}";`]);
+        await ensure(p, ["cond-user@1.0.0", "cond-lib@1.0.0/is-dev"]);
         const pkgs = p.packagesSnapshot();
         expect(pkgs.modules["https://unpkg.com/cond-user@1.0.0/index.js"].requires["cond-lib/is-dev"]).toBe("https://unpkg.com/cond-lib@1.0.0/prod.mjs");
         expect(pkgs.aliases[sub]).toBe("https://unpkg.com/cond-lib@1.0.0/prod.mjs");
@@ -159,17 +178,17 @@ describe("downloading a package's module graph", () => {
 
     it("a save retries a stored package's failed nested requires (a download from before a fix, a flaky one)", async () => {
         const top = "https://unpkg.com/cond-user@1.0.0";
-        const code = `import u from "${top}";`;
-        await (await bg()).ensurePackages([code]);
+        const code = ["cond-user@1.0.0"];
+        await ensure(await bg(), code);
         const user = "https://unpkg.com/cond-user@1.0.0/index.js";
         // as an older version stored it: the nested require failed, a built-in too
         store[PACKAGE_MODULES_KEY].modules[user].requires["cond-lib/is-dev"] = `!cannot import "cond-lib/is-dev" (required by ${user}): HTTP 404`;
         store[PACKAGE_MODULES_KEY].modules[user].requires["fs"] = `!"fs" is a Node.js built-in — not available in TangiTweak scripts`;
         let p = await bg();
-        expect(await p.ensurePackages([code])).toBe(false); // not on a plain ensure (startup, page loads)
+        expect(await ensure(p, code)).toBe(false); // not on a plain ensure (startup, page loads)
         expect(p.packagesSnapshot().modules[user].requires["cond-lib/is-dev"]).toMatch(/^!/);
         unpkg.calls.length = 0;
-        expect(await p.ensurePackages([code], { retry: true })).toBe(true);
+        expect(await ensure(p, code, { retry: true })).toBe(true);
         expect(p.packagesSnapshot().modules[user].requires["cond-lib/is-dev"]).toBe("https://unpkg.com/cond-lib@1.0.0/prod.mjs");
         expect(p.packagesSnapshot().modules[user].requires["fs"]).toMatch(/Node\.js built-in/);
         expect(unpkg.calls.filter((u) => u.includes("cond-user") && !u.endsWith("/package.json"))).toEqual([]); // the stored module isn't downloaded again
@@ -177,13 +196,13 @@ describe("downloading a package's module graph", () => {
         await p.loadPackages();
         expect(makePackageLoader(p.packagesSnapshot())(top).dev).toBe(false); // stored
         unpkg.calls.length = 0;
-        expect(await p.ensurePackages([code], { retry: true })).toBe(false); // nothing left to retry
+        expect(await ensure(p, code, { retry: true })).toBe(false); // nothing left to retry
         expect(unpkg.calls).toEqual([]);
     });
 
     it("a library's require of a Node.js built-in or a missing file throws a clear error only when run", async () => {
         const p = await bg();
-        await p.ensurePackages([`import a from "https://unpkg.com/builtin-lib@1.0.0"; import b from "https://unpkg.com/nested-fail@1.0.0";`]);
+        await ensure(p, ["builtin-lib@1.0.0", "nested-fail@1.0.0"]);
         const load = makePackageLoader(p.packagesSnapshot());
         expect(load("https://unpkg.com/builtin-lib@1.0.0")).toEqual({
             ok: true,
@@ -198,7 +217,7 @@ describe("downloading a package's module graph", () => {
 
     it("a package's npm: alias dependency downloads the package it names", async () => {
         const p = await bg();
-        await p.ensurePackages([`import a from "https://unpkg.com/alias-user@1.0.0";`]);
+        await ensure(p, ["alias-user@1.0.0"]);
         const pkgs = p.packagesSnapshot();
         expect(pkgs.modules["https://unpkg.com/alias-user@1.0.0/index.js"].requires.evt).toBe("https://unpkg.com/tiny-events@1.0.0/index.js");
         expect(makePackageLoader(pkgs)("https://unpkg.com/alias-user@1.0.0")).toEqual({ evt: "tiny-events" });
@@ -255,7 +274,7 @@ describe("downloading a package's module graph", () => {
 
     it("cycles get partial exports; JSON modules export their data", async () => {
         const p = await bg();
-        await p.ensurePackages([`import a from "https://unpkg.com/cycle-lib@1.0.0"; import n from "https://unpkg.com/json-lib@1.0.0";`]);
+        await ensure(p, ["cycle-lib@1.0.0", "json-lib@1.0.0"]);
         const load = makePackageLoader(p.packagesSnapshot());
         expect(load("https://unpkg.com/cycle-lib@1.0.0")).toEqual({ a: 1, fromB: 1 });
         expect(load("https://unpkg.com/json-lib@1.0.0")).toBe(5);
@@ -264,26 +283,27 @@ describe("downloading a package's module graph", () => {
     it("a .css module adds a <style> through the loader's `style` (elsewhere it's ignored)", async () => {
         const p = await bg();
         const url = "https://unpkg.com/css-lib@1.0.0/dist/theme.css";
-        await p.ensurePackages([`import "${url}";`]);
+        await ensure(p, ["css-lib@1.0.0/dist/theme.css"]);
         const styles: [string, string][] = [];
         expect(() => makePackageLoader(p.packagesSnapshot())(url)).not.toThrow();
         makePackageLoader(p.packagesSnapshot(), undefined, { style: (css, from) => styles.push([css, from]) })(url);
         expect(styles).toEqual([[".btn { color: red; }\n", url]]);
-        const shipped = Object.entries(p.packagesSnapshot().modules).map(([name, pkg]) => ({ name, pkg }));
+        const pkgs = p.packagesSnapshot();
+        const shipped = [...Object.entries(pkgs.modules).map(([name, pkg]) => ({ name, pkg })), ...Object.entries(pkgs.aliases).map(([name, alias]) => ({ name, alias })), { name: "t/package.json", json: tweakImporting(["css-lib@1.0.0"]).data.text }];
         const seen: string[] = [];
-        makeLibRequire(shipped, () => {}, { style: (css) => seen.push(css) })("main")(url);
+        makeLibRequire(shipped, () => {}, { style: (css) => seen.push(css) })("t/main")("css-lib/dist/theme.css");
         expect(seen).toEqual([".btn { color: red; }\n"]);
     });
 
     it("is cached: a second ensure (and a fresh background) fetches nothing", async () => {
         let p = await bg();
-        const code = `import x from "https://unpkg.com/cjs-lib@2.0.0";`;
-        await p.ensurePackages([code]);
+        const code = ["cjs-lib@2.0.0"];
+        await ensure(p, code);
         await p.packageTypingsIdle();
         const n = unpkg.calls.length;
-        expect(await p.ensurePackages([code])).toBe(false);
+        expect(await ensure(p, code)).toBe(false);
         p = await bg();
-        expect(await p.ensurePackages([code])).toBe(false);
+        expect(await ensure(p, code)).toBe(false);
         await p.packageTypingsIdle();
         expect(unpkg.calls.length).toBe(n);
         expect(makePackageLoader(p.packagesSnapshot())("https://unpkg.com/cjs-lib@2.0.0").shout("a")).toBe("A!");
@@ -291,23 +311,23 @@ describe("downloading a package's module graph", () => {
 
     it("a failed download isn't stored and is retried on the next save", async () => {
         const p = await bg();
-        const code = `import x from "https://unpkg.com/esm-lib@1.0.0";`;
+        const code = ["esm-lib@1.0.0"];
         unpkg.setOffline(true);
-        await p.ensurePackages([code], { retry: true });
+        await ensure(p, code, { retry: true });
         expect(p.packagesSnapshot().failed).toEqual({ "https://unpkg.com/esm-lib@1.0.0": "download failed (Failed to fetch)" });
         expect(store[PACKAGE_MODULES_KEY]).toBeUndefined();
         const sig = p.packagesSig();
         // a compile (no retry) right after doesn't hammer the network
         const n = unpkg.calls.length;
-        await p.ensurePackages([code]);
+        await ensure(p, code);
         expect(unpkg.calls.length).toBe(n);
         unpkg.setOffline(false);
-        expect(await p.ensurePackages([code], { retry: true })).toBe(true);
+        expect(await ensure(p, code, { retry: true })).toBe(true);
         expect(p.packagesSnapshot().failed).toEqual({});
         expect(p.packagesSig()).not.toBe(sig);
     });
 
-    it("the Editor's status request starts the download: downloading → typing → ready, or failed with why", async () => {
+    it("the install page's status request starts the download: downloading → typing → ready, or failed with why", async () => {
         const p = await bg();
         const u = "https://unpkg.com/esm-lib@1.0.0";
         expect(await p.requestPackages([u, "https://unpkg.com/esm-lib@1", "./x"])).toEqual({ [u]: { state: "downloading" } });
@@ -328,15 +348,15 @@ describe("downloading a package's module graph", () => {
 
     it("prunes modules and typings no script imports any more", async () => {
         const p = await bg();
-        const a = `import x from "https://unpkg.com/esm-lib@1.0.0";`;
-        const b = `import x from "https://unpkg.com/cjs-lib@2.0.0";`;
-        await p.ensurePackages([a, b]);
+        await ensure(p, ["esm-lib@1.0.0", "cjs-lib@2.0.0"]);
         await p.packageTypingsIdle();
         expect(Object.keys(p.packageTypings().tops).sort()).toEqual(["https://unpkg.com/cjs-lib@2.0.0", "https://unpkg.com/esm-lib@1.0.0"]);
         vi.useFakeTimers({ toFake: ["Date"] });
         vi.setSystemTime(Date.now() + 120_000); // past the guard for just-saved imports
         try {
-            await p.prunePackages([a]);
+            const a = tweakImporting(["esm-lib@1.0.0"]);
+            (await import("../src/background/engine/dataFiles")).setDataFilesSnapshot({ d: { id: "d", ...a.data, savedAt: 0 } });
+            await p.prunePackages([a.script]);
         } finally {
             vi.useRealTimers();
         }
@@ -348,99 +368,102 @@ describe("downloading a package's module graph", () => {
 
     it("a prune racing a save keeps what was just ensured", async () => {
         const p = await bg();
-        const a = `import x from "https://unpkg.com/esm-lib@1.0.0";`;
-        await p.ensurePackages([a]);
+        await ensure(p, ["esm-lib@1.0.0"]);
         await p.prunePackages([]);
         expect(Object.keys(store[PACKAGE_MODULES_KEY].modules)).toHaveLength(2);
     });
 });
 
 describe("package imports in scripts", () => {
-    const SCRIPT = `import { tweak } from "tangitweak"; import twice from "https://unpkg.com/esm-lib@1.0.0";
-import { shout } from "https://unpkg.com/cjs-lib@2.0.0";
+    const PKG = { path: "t/package.json", text: JSON.stringify({ name: "t", tangitweak: {}, dependencies: { "esm-lib": "1.0.0", "cjs-lib": "2.0.0", "umd-lib": "1.0.0", nope: "1.0.0" } }) };
+    const SCRIPT = `import { tweak } from "tangitweak"; import twice from "esm-lib";
+import { shout } from "cjs-lib";
 export const run = () => shout(String(twice(21)) + "x");
 tweak.params({ n: { type: "number", default: twice(2) } });
 tweak.onRequest({ url: "*://a.test/*", strategy: "helper" }, () => {});`;
+    const main = (code: string) => ({ id: "m", name: "t/main", code });
 
     it("compile and run through the background resolver", async () => {
         const p = await bg();
-        await p.ensurePackages([SCRIPT]);
-        const c = compileWithLibs({ id: "m", name: "main", code: SCRIPT }, [], {}, [], p.packagesSnapshot());
+        await p.ensurePackages([main(SCRIPT)], { data: [PKG] });
+        const c = compileWithLibs(main(SCRIPT), [], {}, [PKG], p.packagesSnapshot());
         expect(c.error).toBeNull();
         expect(c.paramDefs?.n.default).toBe(4);
         expect(c.exports.run()).toBe("42X!");
-        expect(c.deps.sort()).toEqual(["https://unpkg.com/cjs-lib@2.0.0", "https://unpkg.com/esm-lib@1.0.0"]);
+        expect(c.deps.filter((d) => d.startsWith("https:")).sort()).toEqual(["https://unpkg.com/cjs-lib@2.0.0", "https://unpkg.com/esm-lib@1.0.0"]);
     });
 
     it("a library script's package import works for its importers; each module runs once per registry", async () => {
         const p = await bg();
-        const lib = { id: "l", name: "lib/util", code: `import twice from "https://unpkg.com/esm-lib@1.0.0";\nexport const four = twice(2);` };
-        const main = { id: "m", name: "main", code: `import { four } from "./lib/util";\nimport twice from "https://unpkg.com/esm-lib@1.0.0";\nexport const same = [four, twice(2)];` };
-        await p.ensurePackages([lib.code, main.code]);
-        const r = makeModuleResolver([lib, main], () => ({}), { packages: p.packagesSnapshot() });
-        const a = r.resolveFrom("main")("https://unpkg.com/esm-lib@1.0.0");
-        expect(r.resolveFrom("lib/util")("https://unpkg.com/esm-lib@1.0.0")).toBe(a);
-        const c = compileWithLibs(main, [lib], {}, [], p.packagesSnapshot());
+        const lib = { id: "l", name: "t/lib/util", code: `import twice from "esm-lib";\nexport const four = twice(2);` };
+        const m = main(`import { four } from "./lib/util";\nimport twice from "esm-lib";\nexport const same = [four, twice(2)];`);
+        await p.ensurePackages([lib, m], { data: [PKG] });
+        const r = makeModuleResolver([lib, m], () => ({}), { packages: p.packagesSnapshot(), dataFiles: [PKG] });
+        const a = r.resolveFrom("t/main")("esm-lib");
+        expect(r.resolveFrom("t/lib/util")("esm-lib")).toBe(a);
+        const c = compileWithLibs(m, [lib], {}, [PKG], p.packagesSnapshot());
         expect(c.error).toBeNull();
         expect(c.exports.same).toEqual([4, 4]);
     });
 
-    it("a bad, missing or failed package URL is the importer's compile error at the import line, never a stub", async () => {
+    it("a URL import, or a missing or failed package, is the importer's compile error at the import line, never a stub", async () => {
         const p = await bg();
         const at = (code: string, pkgs = p.packagesSnapshot()) => {
-            const c = compileWithLibs({ id: "m", name: "main", code }, [], {}, [], pkgs);
+            const c = compileWithLibs(main(code), [], {}, [PKG], pkgs);
             return { error: c.error, line: c.error ? errorPosition(c.error)?.line : undefined };
         };
-        const unpinned = at(`import { tweak } from "tangitweak"; // x\n\nimport d from "https://unpkg.com/dayjs";\ntweak.onRequest({ url: "*://a/*", strategy: "helper" }, () => d());`);
-        expect(unpinned.error).toMatch(/cannot import "https:\/\/unpkg\.com\/dayjs": pin an exact version, e\.g\. https:\/\/unpkg\.com\/dayjs@1\.2\.3/);
-        expect(unpinned.line).toBe(3);
-        expect(at(`import d from "https://example.com/x.js";\nd();`).error).toMatch(/only pinned https:\/\/unpkg\.com/);
-        expect(at(`\nimport d from "https://unpkg.com/esm-lib@1.0.0";\nd();`)).toEqual({
-            error: expect.stringMatching(/not downloaded yet — save the script to download it/),
+        expect(at(`import { tweak } from "tangitweak"; // x\n\nimport d from "https://unpkg.com/esm-lib@1.0.0";\ntweak.onRequest({ url: "*://a/*", strategy: "helper" }, () => d());`)).toEqual({
+            error: expect.stringContaining(`cannot import "https://unpkg.com/esm-lib@1.0.0": URL imports aren't supported — add the package to "dependencies" in package.json and import it by name`),
+            line: 3,
+        });
+        expect(at(`import d from "https://example.com/x.js";\nd();`).error).toMatch(/URL imports aren't supported/);
+        expect(at(`\nimport d from "esm-lib";\nd();`)).toEqual({
+            error: expect.stringMatching(/cannot import "esm-lib": not downloaded yet — save the tweak to download it/),
             line: 2,
         });
 
-        const missing = `import { tweak } from "tangitweak"; \nimport x from "https://unpkg.com/nope@1.0.0";\ntweak.onRequest({ url: "*://a/*", strategy: "helper" }, () => x());`;
-        await p.ensurePackages([missing], { retry: true });
+        const missing = `import { tweak } from "tangitweak"; \nimport x from "nope";\ntweak.onRequest({ url: "*://a/*", strategy: "helper" }, () => x());`;
+        await p.ensurePackages([main(missing)], { retry: true, data: [PKG] });
         expect(at(missing)).toEqual({ error: expect.stringMatching(/cannot import "https:\/\/unpkg\.com\/nope@1\.0\.0": download failed \(HTTP 404 — no such package, version or file\)/), line: 2 });
 
         unpkg.setOffline(true);
-        const offline = `import x from "https://unpkg.com/umd-lib@1.0.0";\nx();`;
-        await p.ensurePackages([offline], { retry: true });
+        const offline = `import x from "umd-lib";\nx();`;
+        await p.ensurePackages([main(offline)], { retry: true, data: [PKG] });
         expect(at(offline).error).toMatch(/cannot import "https:\/\/unpkg\.com\/umd-lib@1\.0\.0": download failed \(Failed to fetch\)/);
     });
 
-    it("the page hook's require resolves package URLs and libraries' nested requires", async () => {
+    it("the page hook's require resolves bare imports and libraries' nested requires, and refuses URL imports", async () => {
         const p = await bg();
-        await p.ensurePackages([SCRIPT]);
+        await p.ensurePackages([main(SCRIPT)], { data: [PKG] });
         const pkgs = p.packagesSnapshot();
         const libs = [
             ...Object.entries(pkgs.aliases).map(([name, alias]) => ({ name, alias, src: "" })),
             ...[...packageClosure(pkgs, Object.keys(pkgs.aliases))].map((name) => ({ name, pkg: pkgs.modules[name], src: "" })),
-            { name: "util", src: "" },
+            { name: "t/util", src: "" },
+            { name: "t/package.json", json: PKG.text },
         ];
         const ran: string[] = [];
         const requireFrom = makeLibRequire(libs, (lib, require, m) => {
             ran.push(lib.name);
-            m.exports.v = require("https://unpkg.com/esm-lib@1.0.0").default(5);
+            m.exports.v = require("esm-lib").default(5);
         });
-        expect(requireFrom("main")("https://unpkg.com/cjs-lib@2.0.0").shout("ok")).toBe("OK!");
-        expect(requireFrom("main")("./util").v).toBe(10);
-        expect(ran).toEqual(["util"]);
-        expect(() => requireFrom("main")("https://unpkg.com/other@1.0.0")).toThrow(/not downloaded yet/);
+        expect(requireFrom("t/main")("cjs-lib").shout("ok")).toBe("OK!");
+        expect(requireFrom("t/main")("./util").v).toBe(10);
+        expect(ran).toEqual(["t/util"]);
+        expect(() => requireFrom("t/main")("https://unpkg.com/esm-lib@1.0.0")).toThrow(/URL imports aren't supported/);
     });
 });
 
 describe("package typings", () => {
     async function typingsOf(...urls: string[]) {
         const p = await bg();
-        await p.ensurePackages([urls.map((u) => `import "${u}";`).join("\n")]);
+        await ensure(p, urls);
         await p.packageTypingsIdle();
         return p.packageTypings();
     }
 
     it("a package's own types: entry, relative references and a pointer package.json", async () => {
-        const t = await typingsOf("https://unpkg.com/esm-lib@1.0.0", "https://unpkg.com/esm-lib@1.0.0/math.js");
+        const t = await typingsOf("esm-lib@1.0.0", "esm-lib@1.0.0/math.js");
         expect(Object.keys(t.files).sort()).toEqual(["unpkg.com/esm-lib@1.0.0/index.d.ts", "unpkg.com/esm-lib@1.0.0/math.d.ts", "unpkg.com/esm-lib@1.0.0/package.json"]);
         expect(JSON.parse(t.files["unpkg.com/esm-lib@1.0.0/package.json"])).toEqual({ name: "esm-lib", version: "1.0.0", types: "./index.d.ts" });
         expect(t.tops["https://unpkg.com/esm-lib@1.0.0/math.js"]).toEqual(["unpkg.com/esm-lib@1.0.0/math.d.ts"]);
@@ -448,7 +471,7 @@ describe("package typings", () => {
     });
 
     it("`exports` types, a subpath, `/// <reference path>` and a bare type dependency under node_modules", async () => {
-        const t = await typingsOf("https://unpkg.com/exp-lib@1.0.0", "https://unpkg.com/exp-lib@1.0.0/sub");
+        const t = await typingsOf("exp-lib@1.0.0", "exp-lib@1.0.0/sub");
         expect(JSON.parse(t.files["unpkg.com/exp-lib@1.0.0/package.json"]).types).toBe("./dist/index.d.mts");
         expect(t.files["unpkg.com/exp-lib@1.0.0/dist/globals.d.ts"]).toContain("EXP_LIB_GLOBAL");
         expect(JSON.parse(t.files["unpkg.com/exp-lib@1.0.0/sub/package.json"])).toEqual({ types: "../dist/sub.d.ts" });
@@ -458,7 +481,7 @@ describe("package typings", () => {
     });
 
     it("no declarations: @types at the same major, else a stub", async () => {
-        const t = await typingsOf("https://unpkg.com/cjs-lib@2.0.0", "https://unpkg.com/umd-lib@1.0.0");
+        const t = await typingsOf("cjs-lib@2.0.0", "umd-lib@1.0.0");
         expect(t.files["unpkg.com/@types/cjs-lib@2.0.1/index.d.ts"]).toContain("shout(s: string): string");
         expect(JSON.parse(t.files["unpkg.com/cjs-lib@2.0.0/package.json"]).types).toBe("../@types/cjs-lib@2.0.1/index.d.ts");
         expect(t.files["unpkg.com/umd-lib@1.0.0/index.d.ts"]).toMatch(/no TypeScript declarations[\s\S]*export = mod/);
@@ -469,7 +492,7 @@ describe("package typings", () => {
         const p = await bg();
         const real = unpkg.fetch;
         (globalThis as any).fetch = async (u: string) => (/\.d\.|@types/.test(u) ? Promise.reject(new TypeError("Failed to fetch")) : real(u));
-        await p.ensurePackages([`import "https://unpkg.com/esm-lib@1.0.0";`]);
+        await ensure(p, ["esm-lib@1.0.0"]);
         await p.packageTypingsIdle();
         expect(p.packagesSnapshot().failed).toEqual({});
         expect(p.packageTypings().tops).toEqual({});
