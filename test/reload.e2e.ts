@@ -15,6 +15,7 @@ import path from "node:path";
 import http from "node:http";
 import { chromium } from "playwright-core";
 import { resolveBrowser } from "./browserSetup";
+import { saveTweak } from "./e2eTweak";
 
 const EXT_ROOT = path.join(new URL("..", import.meta.url).pathname, "dist");
 
@@ -60,10 +61,8 @@ try {
     // a hook-tier script: transform /data responses
     const seed = await ctx.newPage();
     await seed.goto(`chrome-extension://${extId}/editor.html`);
-    await seed.evaluate(() => new Promise((r) => chrome.runtime.sendMessage({
-        type: "saveScript", id: "s_h", name: "Hooked.tangitweak",
-        code: `import { tweak } from "tangitweak"; tweak.onResponseBody({ url: "*://*:*/*", strategy: "page" }, (ctx, body) => body.replace("ORIGINAL", "HOOKED"));`,
-    }, r)));
+    const seedSend = (msg: any): Promise<any> => seed.evaluate((m: any) => new Promise((r) => chrome.runtime.sendMessage(m, r)), msg);
+    await saveTweak(seedSend, "s_h", "Hooked", `import { tweak } from "tangitweak"; tweak.onResponseBody({ url: "*://*:*/*", strategy: "page" }, (ctx, body) => body.replace("ORIGINAL", "HOOKED"));`);
     await seed.close();
 
     // the long-lived page whose content scripts survive the reload

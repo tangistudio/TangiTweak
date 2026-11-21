@@ -15,6 +15,7 @@ import path from "node:path";
 import http from "node:http";
 import { chromium } from "playwright-core";
 import { resolveBrowser } from "./browserSetup";
+import { saveTweak } from "./e2eTweak";
 
 const EXT_ROOT = path.join(new URL("..", import.meta.url).pathname, "dist");
 const PORT = 8913;
@@ -61,10 +62,8 @@ try {
 
     const seed = await ctx.newPage();
     await seed.goto(`chrome-extension://${extId}/editor.html`);
-    await seed.evaluate(() => new Promise((r) => chrome.runtime.sendMessage({
-        type: "saveScript", id: "s_shim", name: "Shim probe.tangitweak",
-        code: `import { tweak } from "tangitweak"; tweak.onResponseBody({ url: "*://*:*/*", strategy: "page" }, (ctx, body) => body);`, // pass-through shim
-    }, r)));
+    const seedSend = (msg: any): Promise<any> => seed.evaluate((m: any) => new Promise((r) => chrome.runtime.sendMessage(m, r)), msg);
+    await saveTweak(seedSend, "s_shim", "Shim probe", `import { tweak } from "tangitweak"; tweak.onResponseBody({ url: "*://*:*/*", strategy: "page" }, (ctx, body) => body);`); // pass-through shim
     await seed.close();
 
     const page = await ctx.newPage();

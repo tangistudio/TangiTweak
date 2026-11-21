@@ -8,6 +8,7 @@
  * `rulesServerRoute` serves the endpoints; call it first in the suite's
  * test server.
  */
+import { deleteTweak, saveTweak } from "./e2eTweak";
 import type http from "node:http";
 
 type Check = (name: string, ok: boolean, extra?: string) => void;
@@ -43,14 +44,14 @@ export async function checkRulesStrategy(ctx: any, mgr: any, origin: string, che
         `tweak.onResponseHeaders({ url: ${O} + "/rules-api", strategy: "rules" }, () => ({ headers: { set: { "x-tt-rules-res": "res" } } }));`,
         `tweak.onRequest({ url: ${O} + "/rr{/v:ver}?/:name", strategy: "rules" }, (ctx) => ({ redirect: ${O} + "/rules-echo?name=" + ctx.groups.name + "&ver=" + (ctx.groups.ver ?? "") }));`,
     ].join("\n");
-    const saved = await send({ type: "saveScript", id: "s_rules", name: "rules probe.tangitweak", code });
+    const saved = await saveTweak(send, "s_rules", "rules probe", code);
     check(t("script saves (one handler is not a rule, the script still loads)"), !!saved && !saved.error && saved.meta?.active === true, JSON.stringify({ error: saved?.error?.split("\n")[0], active: saved?.meta?.active }));
 
     const hasDnr: boolean = await mgr.evaluate(() => !!(chrome as any).declarativeNetRequest);
     if (!hasDnr) {
         const warned = await mgr.waitForFunction(() => [...document.querySelectorAll("#problems-list .pb-item.warn")].some((l) => /rules.*not available in this browser \(no declarativeNetRequest\)/.test(l.textContent || "")), null, { timeout: 8000 }).then(() => true, () => false);
         check(t("no declarativeNetRequest here → the unavailable warning in Problems"), warned);
-        await send({ type: "deleteScript", id: "s_rules" });
+        await deleteTweak(send, "rules probe");
         return;
     }
 
@@ -71,7 +72,7 @@ export async function checkRulesStrategy(ctx: any, mgr: any, origin: string, che
     // a URL pattern too complex for a rule: the problem points at the pattern
     // itself (line 3, where the string starts), and the editor squiggles it
     const cx = `https://cx{-(dev)}.example.test/{mms/}?static/:path+/:a/:b/:c/:d/:e/:f/:g/:h/:i/:j/:k/:name{.:hash([0-9a-f]{20,})}?{.min}?.:ext(js|css|json)`;
-    await send({ type: "saveScript", id: "s_rules_cx", name: "rules complex.tangitweak", code: ["// too complex", "import { tweak } from 'tangitweak'; tweak.onRequest({", `    url: ${JSON.stringify(cx)},`, '    strategy: "rules",', `}, (ctx) => ({ redirect: ${O} + "/rules-echo?" + ctx.groups.k + ctx.groups.name + ctx.groups.ext }));`].join("\n") });
+    await saveTweak(send, "s_rules_cx", "rules complex", ["// too complex", "import { tweak } from 'tangitweak'; tweak.onRequest({", `    url: ${JSON.stringify(cx)},`, '    strategy: "rules",', `}, (ctx) => ({ redirect: ${O} + "/rules-echo?" + ctx.groups.k + ctx.groups.name + ctx.groups.ext }));`].join("\n"));
     const cxProblem = await mgr.waitForFunction(() => [...document.querySelectorAll("#problems-list .pb-item.error")].map((l) => l.textContent || "").find((t) => t.includes("too complex for a rule")), null, { timeout: 10000 }).then((h: any) => h.jsonValue(), () => null);
     check(t("a too-complex pattern → a problem at the pattern's line and column"), !!cxProblem && /\[Ln 3, Col 11\]/.test(cxProblem), String(cxProblem).slice(-80));
     await mgr.evaluate(() => (document.querySelector('#script-list li[data-id="s_rules_cx"]') as HTMLElement).click());
@@ -94,7 +95,7 @@ export async function checkRulesStrategy(ctx: any, mgr: any, origin: string, che
         return { line: p.lineNumber, column: p.column, shown: /too complex/.test(widget) };
     });
     check(t("Go to Next Problem (F8) lands on it"), nextProblem.line === 3 && nextProblem.column === 11 && nextProblem.shown, JSON.stringify(nextProblem));
-    await send({ type: "deleteScript", id: "s_rules_cx" });
+    await deleteTweak(send, "rules complex");
 
     const page = await ctx.newPage();
     await page.goto(`${origin}/rules-page`, { waitUntil: "domcontentloaded" });
@@ -137,7 +138,7 @@ export async function checkRulesStrategy(ctx: any, mgr: any, origin: string, che
     check(t("Network: a blocked request is marked Modified (rules: block)"), marked.length > 0, JSON.stringify(net.filter((e) => e.url?.includes("/rules-")).map((e) => [e.url.replace(origin, ""), e.outcomes?.map((i: any) => [i.kind, i.action])])).slice(0, 400));
 
     // saving a fixed script clears the error
-    await send({ type: "saveScript", id: "s_rules", name: "rules probe.tangitweak", code: code.replace(`(ctx) => (ctx.method === "POST" ? { block: true } : undefined)`, `() => ({ block: true })`) });
+    await saveTweak(send, "s_rules", "rules probe", code.replace(`(ctx) => (ctx.method === "POST" ? { block: true } : undefined)`, `() => ({ block: true })`));
     const cleared = await mgr.waitForFunction(() => !document.querySelector('#script-list li[data-id="s_rules"] .err-ind'), null, { timeout: 8000 }).then(() => true, () => false);
     check(t("saving the fixed script clears the ⚠"), cleared);
 
@@ -153,7 +154,7 @@ export async function checkRulesStrategy(ctx: any, mgr: any, origin: string, che
     }
     check(t("disabling the script removes its rules"), after === "reached", after);
     await page2.close();
-    await send({ type: "deleteScript", id: "s_rules" });
+    await deleteTweak(send, "rules probe");
 
     // a regex near the browser's memory limit: a many-group capturing route
     // fits; a far bigger one is reported per handler, not silently dropped
@@ -162,7 +163,7 @@ export async function checkRulesStrategy(ctx: any, mgr: any, origin: string, che
         `tweak.onRequest({ url: ${O} + "/huge/:a/:b/:c/:d/:e/:f/:g/:h/:i/:j/:k/:l/:m/:n/:o/:p/:q/:r", strategy: "rules" }, () => ({ block: true }));`,
         `tweak.onRequest({ url: ${O} + "/cap/:a/:b/:c/:d/:e/:f/:g/:h/:i/:j/:k", strategy: "rules" }, (ctx) => ({ redirect: ${O} + "/rules-echo?v=" + ctx.groups.a + ctx.groups.b + ctx.groups.c + ctx.groups.d + ctx.groups.e + ctx.groups.f + ctx.groups.g + ctx.groups.h + ctx.groups.i }));`,
     ].join("\n");
-    await send({ type: "saveScript", id: "s_rules_deep", name: "rules deep.tangitweak", code: deep });
+    await saveTweak(send, "s_rules_deep", "rules deep", deep);
     const page3 = await ctx.newPage();
     await page3.goto(`${origin}/rules-page`, { waitUntil: "domcontentloaded" });
     let q: any = {};
@@ -176,7 +177,7 @@ export async function checkRulesStrategy(ctx: any, mgr: any, origin: string, che
     const deepErrors = (await send({ type: "listScripts" })).find((s: any) => s.id === "s_rules_deep")?.ruleErrors;
     check(t("an over-limit route → its handler's error says it's too complex, with the regex and its size"), deepErrors?.length === 2 && /^onRequest #2: .*too complex.*Regex: \^http.*\(\d+ chars, \d+ character classes, \d+ groups\) — use fewer groups/.test(deepErrors[0]), JSON.stringify(deepErrors));
     check(t("a route that only overflows with the redirect's captures → the error says so"), /^onRequest #3: .*9 captured for the redirect\) — it fits without captures/.test(deepErrors?.[1] ?? ""), JSON.stringify(deepErrors));
-    await send({ type: "deleteScript", id: "s_rules_deep" });
+    await deleteTweak(send, "rules deep");
 
     // tweak.tabStore + strategy: "rules": setting tab.staging in Tab A's overlay
     // redirects Tab A's very first main_frame request on navigation/reload
@@ -188,7 +189,7 @@ export async function checkRulesStrategy(ctx: any, mgr: any, origin: string, che
         `});`,
         `tweak.onRequest({ url: ${O} + "/rules-page", strategy: "rules" }, () => (tab.staging ? { redirect: ${O} + "/rules-echo?from=tabstore" } : undefined));`,
     ].join("\n");
-    await send({ type: "saveScript", id: "s_rules_tab", name: "rules tabStore.tangitweak", code: tabCode });
+    await saveTweak(send, "s_rules_tab", "rules tabStore", tabCode);
     const tabErrs = (await send({ type: "listScripts" })).find((s: any) => s.id === "s_rules_tab")?.ruleErrors;
     check(t("tweak.tabStore conditional handler starting off → 0 ruleErrors"), !tabErrs?.length, JSON.stringify(tabErrs));
 
@@ -209,5 +210,5 @@ export async function checkRulesStrategy(ctx: any, mgr: any, origin: string, che
     check(t("tweak.tabStore OFF in Tab B → Tab B reload stays unredirected"), tabB.url() === `${origin}/rules-page`, tabB.url());
     await tabA.close();
     await tabB.close();
-    await send({ type: "deleteScript", id: "s_rules_tab" });
+    await deleteTweak(send, "rules tabStore");
 }

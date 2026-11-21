@@ -189,6 +189,8 @@ export async function checkPackages(ctx: any, mgr: any, origin: string, check: C
 
     // Explorer → New Tweak…: a folder with a package.json, tsconfig.json, .gitignore and an index.ts
     await mgr.bringToFront();
+    // at the root: the focused row is the root settings.json (not a file inside another tweak)
+    await mgr.click('#script-list li.script-item[data-id="__settings__"] .script-name');
     await mgr.hover("#explorer-section");
     await mgr.click("#btn-new");
     await mgr.fill("#script-list li.creating input.script-rename", "mkpkg");

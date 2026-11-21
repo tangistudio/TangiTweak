@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { chromium } from "playwright-core";
 import { resolveBrowser } from "./browserSetup";
+import { saveTweak } from "./e2eTweak";
 
 const EXT_ROOT = path.join(new URL("..", import.meta.url).pathname, "dist");
 const profile = mkdtempSync(path.join(tmpdir(), "reso-defnav-"));
@@ -52,10 +53,10 @@ const openManager = async (): Promise<any> => {
 
 // seed through a throwaway manager page, then cold-load a fresh one
 const seed = await openManager();
-const save = (id: string, name: string, code: string) =>
-    seed.evaluate(({ id, name, code }: any) => new Promise((r) => chrome.runtime.sendMessage({ type: "saveScript", id, name, code }, r)), { id, name, code });
-await save("s_main", "main script", 'import { tweak } from "tangitweak"; import { helper } from "./utilities";\ntweak.onRequest({ url: "*://example.invalid/*", strategy: "page" }, () => {});\nfunction local() {}\nhelper(1);\nlocal();\n');
-await save("u_util", "utilities", "export function helper(x: number) {\n    return x + 1;\n}\n");
+const seedSend = (msg: any): Promise<any> => seed.evaluate((m: any) => new Promise((r) => chrome.runtime.sendMessage(m, r)), msg);
+// the tweak "main script": its entry (index.ts) imports its module utilities.ts
+await saveTweak(seedSend, "s_main", "main script", 'import { tweak } from "tangitweak"; import { helper } from "./utilities";\ntweak.onRequest({ url: "*://example.invalid/*", strategy: "page" }, () => {});\nfunction local() {}\nhelper(1);\nlocal();\n');
+await saveTweak(seedSend, "u_util", "main script", "export function helper(x: number) {\n    return x + 1;\n}\n", { file: "utilities" });
 await seed.close();
 
 let dialogs = 0;
@@ -73,8 +74,17 @@ const state = () => mgr.evaluate(() => {
         selected: document.querySelector(".script-item.selected")?.textContent ?? "",
     };
 });
+// a script's row by its id, its tweak's folder expanded first
+const IDS: Record<string, [string, string]> = {
+    "main script": ["s_main", "main script"], utilities: ["u_util", "main script"],
+    "uses lib": ["s_sp", "uses-lib"], "my lib (v2)": ["u_sp", "uses-lib"],
+};
 const clickScript = async (name: string) => {
-    await mgr.locator(".script-item", { hasText: name }).click();
+    const [id, dir] = IDS[name];
+    const dirRow = `#script-list li.script-item[data-id="dir:${dir}"]`;
+    await mgr.waitForSelector(dirRow, { timeout: 8000 });
+    if ((await mgr.getAttribute(dirRow, "aria-expanded")) === "false") await mgr.click(dirRow);
+    await mgr.click(`#script-list li.script-item[data-id="${id}"]`);
     await mgr.waitForTimeout(300);
 };
 const setCursor = (line: number, column: number) => mgr.evaluate(([l, c]: number[]) => {
@@ -87,7 +97,7 @@ const goToDefinition = () => mgr.keyboard.press("F12");
 
 // cold: main is the initially auto-selected script; utilities was never displayed
 const initial = await state();
-check("cold: initial model is main (utilities never opened)", initial.uri === "file:///main%20script.ts" && initial.selected.includes("main script"), JSON.stringify(initial));
+check("cold: initial model is main (utilities never opened)", initial.uri === "file:///main%20script/index.ts" && initial.selected.includes("index"), JSON.stringify(initial));
 await setCursor(4, 2);
 // on `helper(1)`
 const deadline = Date.now() + 15000;
@@ -108,10 +118,10 @@ await clickScript("utilities");
 await setCursor(2, 1);
 await clickScript("main script");
 const vsRestored = await state();
-check("view state: cursor restored after switching back", vsRestored.uri === "file:///main%20script.ts" && JSON.stringify(vsRestored.sel) === "[5,2,5,2]", JSON.stringify(vsRestored));
+check("view state: cursor restored after switching back", vsRestored.uri === "file:///main%20script/index.ts" && JSON.stringify(vsRestored.sel) === "[5,2,5,2]", JSON.stringify(vsRestored));
 await clickScript("utilities");
 const vsUtil = await state();
-check("view state: utilities cursor restored too", vsUtil.uri === "file:///utilities.ts" && JSON.stringify(vsUtil.sel) === "[2,1,2,1]", JSON.stringify(vsUtil));
+check("view state: utilities cursor restored too", vsUtil.uri === "file:///main%20script/utilities.ts" && JSON.stringify(vsUtil.sel) === "[2,1,2,1]", JSON.stringify(vsUtil));
 
 // unsaved edit in utilities, then navigate to main: canceled confirm keeps everything
 await clickScript("main script");
@@ -146,7 +156,7 @@ await goToDefinition();
 await mgr.waitForTimeout(1000);
 const same = await state();
 const sameText = await mgr.evaluate(() => (window as any).monaco.editor.getEditors()[0].getValue());
-check("same-file: stays, selects local, no dialog, edit kept", dialogs === 0 && !!same.uri?.endsWith("/main%20script.ts") && JSON.stringify(same.sel) === "[4,10,4,10]" && sameText.includes("// dirty"), JSON.stringify(same) + ` dialogs=${dialogs}`);
+check("same-file: stays, selects local, no dialog, edit kept", dialogs === 0 && !!same.uri?.endsWith("/main%20script/index.ts") && JSON.stringify(same.sel) === "[4,10,4,10]" && sameText.includes("// dirty"), JSON.stringify(same) + ` dialogs=${dialogs}`);
 
 // view-state restore must not litter the log with Monaco's benign Canceled
 // rejections — filter proof first (a real rejection must still be logged)
@@ -160,8 +170,8 @@ check("real rejections still log", (await logHas("real boom")) === true);
 
 // rapid switching (as with quick Cmd+P jumps): no Canceled litter surfaces
 await mgr.evaluate(() => {
-    const items = [...document.querySelectorAll(".script-item")];
-    for (let i = 0; i < 12; i++) items[i % items.length].dispatchEvent(new MouseEvent("click"));
+    const items = [...document.querySelectorAll('.script-item[data-id="s_main"], .script-item[data-id="u_util"]')];
+    for (let i = 0; i < 12; i++) items[i % items.length].dispatchEvent(new MouseEvent("click", { bubbles: true }));
 });
 await mgr.waitForTimeout(1500);
 check("rapid switching: no Canceled litter", !(await logHas("Canceled")));
@@ -192,15 +202,15 @@ await mgr.evaluate(() => {
     label.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
 });
 await mgr.waitForSelector(".script-rename");
-await mgr.fill(".script-rename", "utils renamed");
+await mgr.fill(".script-rename", "main script/utils renamed"); // the input holds its path: a / moves it
 await mgr.press(".script-rename", "Enter");
 await mgr.waitForTimeout(1500);
 const renamedText = await mgr.evaluate(() => (window as any).monaco.editor.getEditors()[0].getValue());
 const util = (await listScripts()).find((s: any) => s.id === "u_util");
 check("rename: editor keeps content", renamedText === utilText && utilText.length > 0, JSON.stringify(renamedText.slice(0, 40)));
-check("rename: stored name changed, code intact", util?.meta.name === "utils renamed" && util?.code === savedCode, `${util?.meta.name}`);
+check("rename: stored name changed, code intact", util?.meta.name === "main script/utils renamed" && util?.code === savedCode, `${util?.meta.name}`);
 await mgr.evaluate(() => (window as any).monaco.editor.getEditors()[0].focus());
-await mgr.keyboard.press("Control+s");
+await mgr.keyboard.press("ControlOrMeta+s");
 await mgr.waitForTimeout(800);
 check("rename then save: editor content saved", (await listScripts()).find((s: any) => s.id === "u_util")?.code === utilText);
 
@@ -216,16 +226,18 @@ const renameTo = async (from: string, typed: string): Promise<void> => {
     await mgr.press(".script-rename", "Enter");
     await mgr.waitForTimeout(1200);
 };
-await renameTo("utils renamed", "my/util: v2.x (beta) é_1");
-check("rename: only forbidden characters dropped", (await listScripts()).find((s: any) => s.id === "u_util")?.meta.name === "myutil v2.x (beta) é_1", (await listScripts()).find((s: any) => s.id === "u_util")?.meta.name);
-await renameTo("myutil v2.x", "Main Script");
-check("rename: clashing name refused", (await listScripts()).find((s: any) => s.id === "u_util")?.meta.name === "myutil v2.x (beta) é_1");
-await renameTo("myutil v2.x", "con");
-check("rename: reserved name refused", (await listScripts()).find((s: any) => s.id === "u_util")?.meta.name === "myutil v2.x (beta) é_1");
+await renameTo("utils renamed", "main script/myutil: v2.x (beta) é_1");
+check("rename: only forbidden characters dropped", (await listScripts()).find((s: any) => s.id === "u_util")?.meta.name === "main script/myutil v2.x (beta) é_1", (await listScripts()).find((s: any) => s.id === "u_util")?.meta.name);
+await renameTo("myutil v2.x", "main script/Index");
+check("rename: clashing name refused", (await listScripts()).find((s: any) => s.id === "u_util")?.meta.name === "main script/myutil v2.x (beta) é_1");
+await renameTo("myutil v2.x", "main script/con");
+check("rename: reserved name refused", (await listScripts()).find((s: any) => s.id === "u_util")?.meta.name === "main script/myutil v2.x (beta) é_1");
 
 // an import by the exact (spaced) name resolves in the editor
-await mgr.evaluate(() => new Promise((r) => chrome.runtime.sendMessage({ type: "saveScript", id: "u_sp", name: "my lib (v2)", code: "export const answer = 42;\n" }, r)));
-await mgr.evaluate(() => new Promise((r) => chrome.runtime.sendMessage({ type: "saveScript", id: "s_sp", name: "uses lib.tangitweak", code: 'import { answer } from "./my lib (v2)";\nexport const n: number = answer;\n' }, r)));
+const mgrSend = (msg: any): Promise<any> => mgr.evaluate((m: any) => new Promise((r) => chrome.runtime.sendMessage(m, r)), msg);
+await saveTweak(mgrSend, "u_sp", "uses-lib", "export const answer = 42;\n", { file: "my lib (v2)" });
+// (a module with a space in a folder with one does not resolve in the editor yet)
+await saveTweak(mgrSend, "s_sp", "uses-lib", 'import { answer } from "./my lib (v2)";\nexport const n: number = answer;\n');
 answer = true;
 await mgr.reload();
 await mgr.waitForFunction(() => (window as any).monaco?.editor?.getEditors?.().length);
@@ -240,7 +252,7 @@ check("spaced import resolves (no diagnostics)", markers.length === 0, JSON.stri
 // breaking the library flags its importer; fixing it clears the importer
 const usesLibMarkers = () => mgr.evaluate(() => {
     const m = (window as any).monaco;
-    const u = m.editor.getModels().find((x: any) => x.uri.toString().includes("uses"));
+    const u = m.editor.getModels().find((x: any) => x.uri.toString().includes("uses-lib/index"));
     return m.editor.getModelMarkers({ resource: u.uri }).length;
 });
 const setLib = async (code: string) => {

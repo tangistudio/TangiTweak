@@ -28,6 +28,8 @@ import { resolveBrowser } from "./browserSetup";
 import { checkApiTypingsNav } from "./apiTypingsNav";
 import { checkRulesStrategy, rulesServerRoute } from "./rulesE2e";
 import { checkFoldersAndDataFiles, foldersServerRoute } from "./foldersE2e";
+import { deleteTweak, saveTweak } from "./e2eTweak";
+import { bundlePkg } from "./bundleHelper";
 import { checkPlaces, checkOverlayPreview, checkOverlays, checkEarlyRequests, checkHotReload, checkOverlayShortcuts, checkPageShortcuts, checkPageStores, checkIsoStores, checkSiteHandles, checkSiteStores, overlayServerRoute } from "./overlayE2e";
 import { checkPackages, packagesServerRoute } from "./packagesE2e";
 import { readExportZip } from "../src/shared/exportZip";
@@ -136,6 +138,14 @@ try {
     // registers and answers via a manager-page round-trip below
     const mgr = await ctx.newPage();
     await mgr.goto(`chrome-extension://${extId}/editor.html`);
+    const mgrSend = (msg: any): Promise<any> => mgr.evaluate((m: any) => new Promise((r) => chrome.runtime.sendMessage(m, (x: any) => r(x ?? null))), msg);
+    /** opens a tweak's script in the Editor: its folder expanded, then its row */
+    const openScript = async (id: string, dir: string): Promise<void> => {
+        const dirRow = `#script-list li.script-item[data-id="dir:${dir}"]`;
+        await mgr.waitForSelector(dirRow, { timeout: 8000 });
+        if ((await mgr.getAttribute(dirRow, "aria-expanded")) === "false") await mgr.click(dirRow);
+        await mgr.click(`#script-list li.script-item[data-id="${id}"]`);
+    };
     await mgr.waitForFunction(() => (window as any).monaco?.editor.getEditors().length === 1, null, { timeout: 20000 }).catch((e: any) => console.log("waitForFunction editor failed:", e.message.slice(0, 100)));
     check("manager opens", true);
     const contexts = await mgr.evaluate(() => new Promise<any>((r) => (chrome.runtime as any).getContexts({}, (cs: any[]) => r(cs?.map((c: any) => c.contextType) ?? []))));
@@ -143,52 +153,36 @@ try {
     check("extension service worker registered", contexts.includes("BACKGROUND") || contexts.includes("SERVICE_WORKER"), JSON.stringify(contexts));
     check("offscreen document hostable (offscreen permission granted)", !contexts.includes("OFFSCREEN_DOCUMENT") || true); // created lazily on first compile
     // 2. script saves/lists (SW → offscreen → sandbox analyze round-trip)
-    const saveResult = await mgr.evaluate(() => new Promise<any>((r) => chrome.runtime.sendMessage({
-        type: "saveScript",
-        id: "s_mv3",
-        name: "MV3 hook.tangitweak",
-        code: `import { tweak } from "tangitweak"; tweak.onResponseBody({ url: "*://*:*/*", strategy: "page" }, (ctx, body) => body.replace("ORIGINAL", "MV3"));`,
-    }, r)));
+    const saveResult = await saveTweak(mgrSend, "s_mv3", "MV3 hook", `import { tweak } from "tangitweak"; tweak.onResponseBody({ url: "*://*:*/*", strategy: "page" }, (ctx, body) => body.replace("ORIGINAL", "MV3"));`);
     check("saveScript round-trips through the sandbox (meta extracted)", saveResult?.meta?.active === true, JSON.stringify(saveResult?.meta));
     const listResult = await mgr.evaluate(() => new Promise<any>((r) => chrome.runtime.sendMessage({ type: "listScripts" }, r)));
-    check("script listed with stored name + paramDefs", listResult?.length === 1 && listResult[0].meta.name === "MV3 hook.tangitweak" && !!listResult[0].paramDefs, JSON.stringify(listResult?.map((s: any) => s.meta.name)));
+    check("script listed with stored name + paramDefs", listResult?.length === 1 && listResult[0].meta.name === "MV3 hook/index" && !!listResult[0].paramDefs, JSON.stringify(listResult?.map((s: any) => s.meta.name)));
 
     // regression (𝑓-icon bug): a script that IMPORTS another script must
     // still capture its routes at save time — a failed import resolves
     // to a silent stub, never aborting the body before its handlers register
-    await mgr.evaluate(() => new Promise<any>((r) => chrome.runtime.sendMessage({
-        type: "saveScript",
-        id: "s_lib",
-        name: "api-lib",
-        code: `export function tag(x: string) { return x; }`,
-    }, r)));
-    const importSave = await mgr.evaluate(() => new Promise<any>((r) => chrome.runtime.sendMessage({
-        type: "saveScript",
-        id: "s_importer",
-        name: "api-interceptor.tangitweak",
-        code: `import { tweak } from "tangitweak"; import { tag } from "./api-lib";\ntweak.params({ label: { type: "string", default: "x" } });\ntweak.onResponseBody({ url: "*://*:*/*", strategy: "page" }, (ctx, body) => tag(body));`,
-    }, r)));
+    await saveTweak(mgrSend, "s_lib", "api-interceptor", `export function tag(x: string) { return x; }`, { file: "api-lib" });
+    const importSave = await saveTweak(mgrSend, "s_importer", "api-interceptor", `import { tweak } from "tangitweak"; import { tag } from "./api-lib";\ntweak.params({ label: { type: "string", default: "x" } });\ntweak.onResponseBody({ url: "*://*:*/*", strategy: "page" }, (ctx, body) => tag(body));`);
     check("importing script captures its routes (not a library)",
         importSave?.meta?.active === true && importSave?.meta?.match?.includes("*://*:*/*") && !importSave.error,
         JSON.stringify(importSave?.meta));
     const list2 = await mgr.evaluate(() => new Promise<any>((r) => chrome.runtime.sendMessage({ type: "listScripts" }, r)));
-    const importer = list2.find((s: any) => s.meta.name === "api-interceptor.tangitweak");
+    const importer = list2.find((s: any) => s.meta.name === "api-interceptor/index");
     check("importing script listed as active with params", importer?.meta?.active === true && !!importer?.paramDefs?.label, JSON.stringify(list2?.map((s: any) => [s.meta.name, s.meta.active])));
 
     // imported param definitions resolve at save time (sandbox compileOne);
-    // a param-gated library turns into a script when its param flips
+    // a param-gated module is inert: its params belong to the tweak's entry
     {
         const send = (msg: any): Promise<any> => mgr.evaluate((m: any) => new Promise((r) => chrome.runtime.sendMessage(m, (x: any) => r(x ?? null))), msg);
-        await send({ type: "saveScript", id: "s_plib", name: "param-lib", code: `import { tweak } from "tangitweak"; export const envParam = { type: "stringList", default: ["dev"] } as const;\nconst p = tweak.params({ on: { type: "boolean", default: false } });\nif (p.on) tweak.onRequest({ url: "*://never.invalid/*", strategy: "page" }, () => {});` });
-        const user = await send({ type: "saveScript", id: "s_puser", name: "param-user.tangitweak", code: `import { tweak } from "tangitweak"; import { envParam } from "./param-lib";\ntweak.params({ intercept_environments: envParam });\ntweak.onRequest({ url: "*://never.invalid/*", strategy: "page" }, () => {});` });
+        await saveTweak(send, "s_plib", "param-user", `import { tweak } from "tangitweak"; export const envParam = { type: "stringList", default: ["dev"] } as const;\nconst p = tweak.params({ on: { type: "boolean", default: false } });\nif (p.on) tweak.onRequest({ url: "*://gated.invalid/*", strategy: "page" }, () => {});`, { file: "param-lib" });
+        const user = await saveTweak(send, "s_puser", "param-user", `import { tweak } from "tangitweak"; import { envParam } from "./param-lib";\ntweak.params({ intercept_environments: envParam });\ntweak.onRequest({ url: "*://never.invalid/*", strategy: "page" }, () => {});`);
         check("imported param def: no bogus compile error, def captured", !user?.error && user?.paramDefs?.intercept_environments?.type === "stringList", JSON.stringify({ error: user?.error?.split("\n")[0], defs: user?.paramDefs }));
         const lib = (await send({ type: "listScripts" })).find((s: any) => s.id === "s_plib");
-        check("param-gated library stored as a library with params", lib?.meta?.active === false && lib?.paramDefs?.on?.type === "boolean", JSON.stringify(lib?.meta));
-        await send({ type: "setScriptParam", scriptId: "s_plib", key: "on", value: true });
-        const flipped = (await send({ type: "listScripts" })).find((s: any) => s.id === "s_plib");
-        check("library param on → it becomes a script", flipped?.meta?.active === true, JSON.stringify(flipped?.meta));
-        await send({ type: "deleteScript", id: "s_puser" });
-        await send({ type: "deleteScript", id: "s_plib" });
+        check("param-gated module is inert; its params belong to the entry", lib?.meta?.active === false && user?.paramDefs?.on?.type === "boolean", JSON.stringify({ lib: lib?.meta, defs: user?.paramDefs }));
+        await send({ type: "setScriptParam", scriptId: "s_puser", key: "on", value: true });
+        const flipped = (await send({ type: "listScripts" })).find((s: any) => s.id === "s_puser");
+        check("entry param on → the module's gated route registers", !!flipped?.meta?.match?.includes("*://gated.invalid/*"), JSON.stringify(flipped?.meta));
+        await deleteTweak(send, "param-user");
     }
 
     // 3. settings.json round-trip
@@ -220,14 +214,13 @@ try {
 
     // popup lists the declared scripts (libraries filtered)
     const popupItems = await popup.evaluate(() => [...document.querySelectorAll("#script-list .script-name")].map((e) => e.textContent));
-    check("popup lists declared scripts (libraries filtered)", popupItems.includes("MV3 hook.tangitweak") && !popupItems.includes("api-lib"), JSON.stringify(popupItems));
+    check("popup lists declared scripts (libraries filtered)", popupItems.includes("mv3-hook") && !popupItems.some((n: any) => n?.includes("api-lib")), JSON.stringify(popupItems));
 
     // the compile/run diagnostics surface in the Editor's Log view —
     // success-path lines are debug-level: set the panel filter to Debug+.
     // (Save is dim/disabled while clean — dirty the editor to enable it.)
+    await openScript("s_importer", "api-interceptor");
     await mgr.evaluate(() => {
-        const item = [...document.querySelectorAll(".script-item")].find((e) => e.textContent?.includes("api-interceptor.tangitweak")) as HTMLElement;
-        item?.click();
         const sel = document.querySelector("#log-level") as HTMLSelectElement;
         sel.value = "debug";
         sel.dispatchEvent(new Event("change"));
@@ -260,7 +253,7 @@ try {
         const prev = ed.getModel();
         const model = m.editor.createModel('import { tweak } from "tangitweak"; tweak.onPage({ url: "*", when: "document_idle" }, () => {});\n', "typescript", m.Uri.parse("file:///hover-probe.ts"));
         ed.setModel(model);
-        ed.setPosition({ lineNumber: 1, column: 24 }); // on `when`
+        ed.setPosition({ lineNumber: 1, column: 62 }); // on `when`
         ed.focus();
         let html = "";
         for (let i = 0; i < 40 && !html.includes("<li"); i++) {
@@ -283,7 +276,7 @@ try {
         const prev = ed.getModel();
         const model = m.editor.createModel("import { tweak } from 'tangitweak'; tweak.params", "typescript", m.Uri.parse("file:///suggest-probe.ts"));
         ed.setModel(model);
-        ed.setPosition({ lineNumber: 1, column: 10 });
+        ed.setPosition({ lineNumber: 1, column: 49 });
         ed.focus();
         let details = "";
         for (let i = 0; i < 40 && !details.includes("<li") && !details.includes("@param"); i++) {
@@ -295,7 +288,7 @@ try {
         }
         ed.trigger("t", "hideSuggestWidget", {});
         model.setValue('import { tweak } from "tangitweak"; tweak.onPage("*", ');
-        ed.setPosition({ lineNumber: 1, column: 16 }); // on the handler argument
+        ed.setPosition({ lineNumber: 1, column: 55 }); // on the handler argument
         let hints = "";
         for (let i = 0; i < 40 && !hints.includes("Receives the same"); i++) {
             ed.trigger("t", "editor.action.triggerParameterHints", {});
@@ -359,10 +352,7 @@ try {
     // sandbox used to compile with defaults → handlers did nothing) and
     // its decision must be honored by the hook tier ----
     // (with `parse`: the sandbox runs the parsers; the defs it posts back are stripped of them)
-    const pgSaved: any = await mgr.evaluate((origin: string) => new Promise((r) => chrome.runtime.sendMessage({
-        type: "saveScript", id: "s_pg", name: "Param gated.tangitweak",
-        code: `import { tweak } from "tangitweak"; const cfg = tweak.params({ intercept: { type: "boolean", default: false, description: "Intercept", parse: (on) => (on ? "PARAM-GATED" : null) }, tags: { type: "stringList", default: ["a", "b"], parse: (l) => new Set(l) } });\ntweak.onRequest({ url: "${origin}/*", strategy: "page" }, (ctx) => { if (cfg.intercept) return { replaceResponse: { status: 200, body: { value: cfg.intercept, tags: cfg.tags.size } } }; });`,
-    }, r)), ORIGIN);
+    const pgSaved: any = await saveTweak(mgrSend, "s_pg", "Param gated", `import { tweak } from "tangitweak"; const cfg = tweak.params({ intercept: { type: "boolean", default: false, description: "Intercept", parse: (on) => (on ? "PARAM-GATED" : null) }, tags: { type: "stringList", default: ["a", "b"], parse: (l) => new Set(l) } });\ntweak.onRequest({ url: "${ORIGIN}/*", strategy: "page" }, (ctx) => { if (cfg.intercept) return { replaceResponse: { status: 200, body: { value: cfg.intercept, tags: cfg.tags.size } } }; });`);
     check("param parse: saved without error, defs stored raw (no parse)", !pgSaved?.error && pgSaved?.paramDefs?.tags?.type === "stringList" && !JSON.stringify(pgSaved?.paramDefs).includes("parse"), JSON.stringify({ error: pgSaved?.error, defs: pgSaved?.paramDefs }));
     await mgr.evaluate(() => new Promise((r) => chrome.runtime.sendMessage({ type: "setScriptParam", scriptId: "s_pg", key: "intercept", value: true }, r)));
     await mgr.waitForTimeout(1500); // pipeline reload + analyze-cache warm with the new params
@@ -376,15 +366,12 @@ try {
     {
         const send = (msg: any): Promise<any> => mgr.evaluate((m: any) => new Promise((r) => chrome.runtime.sendMessage(m, (x: any) => r(x ?? null))), msg);
         await send({ type: "setEnabled", id: "s_pg", enabled: false });
-        await send({
-            type: "saveScript", id: "s_sf", name: "Store fetch.tangitweak",
-            code: `import { tweak } from "tangitweak"; const st = tweak.globalStore("st", { n: 0 });
+        await saveTweak(send, "s_sf", "Store fetch", `import { tweak } from "tangitweak"; const st = tweak.globalStore("st", { n: 0 });
 tweak.replaceResponse({ url: "${ORIGIN}/sf-data", strategy: "page" }, async () => {
     st.n++;
     const real = await (await tweak.fetch("${ORIGIN}/data", { bypass: true })).json();
     return JSON.stringify({ n: st.n, real: real.value });
-});`,
-        });
+});`);
         await mgr.waitForTimeout(1500);
         const sfPage = await ctx.newPage();
         await sfPage.goto(`${ORIGIN}/data`);
@@ -393,11 +380,11 @@ tweak.replaceResponse({ url: "${ORIGIN}/sf-data", strategy: "page" }, async () =
         const second = await get();
         let a: any = {}, b: any = {};
         try { a = JSON.parse(first); b = JSON.parse(second); } catch {}
-        check("import { tweak } from 'tangitweak'; tweak.fetch from the sandbox runs in the service worker (MV3)", a.real === "ORIGINAL", first);
+        check("tweak.fetch from the sandbox runs in the service worker (MV3)", a.real === "ORIGINAL", first);
         check("tweak.globalStore keeps its value across requests (MV3 sandbox)", a.n >= 1 && b.n === a.n + 1, `${first} ${second}`);
         await sfPage.close();
         // deleted: later checks count and lay out the script list
-        await send({ type: "deleteScript", id: "s_sf" });
+        await deleteTweak(send, "Store fetch");
         await send({ type: "setEnabled", id: "s_pg", enabled: true });
     }
 
@@ -408,13 +395,10 @@ tweak.replaceResponse({ url: "${ORIGIN}/sf-data", strategy: "page" }, async () =
         const slowMs = Number(process.env.TT_SLOW_MS) || 30000; // TT_SLOW_MS=330000 probes Chrome's 5-minute limit
         const send = (msg: any): Promise<any> => mgr.evaluate((m: any) => new Promise((r) => chrome.runtime.sendMessage(m, (x: any) => r(x ?? null))), msg);
         await send({ type: "setEnabled", id: "s_pg", enabled: false });
-        await send({
-            type: "saveScript", id: "s_slow", name: "Slow handler.tangitweak",
-            code: `import { tweak } from "tangitweak"; tweak.replaceResponse({ url: "${ORIGIN}/slow-data", strategy: "page" }, async () => {
+        await saveTweak(send, "s_slow", "Slow handler", `import { tweak } from "tangitweak"; tweak.replaceResponse({ url: "${ORIGIN}/slow-data", strategy: "page" }, async () => {
     await new Promise((r) => setTimeout(r, ${slowMs}));
     return "SLOW-REPLACED";
-});`,
-        });
+});`);
         await mgr.waitForTimeout(1500);
         const slowPage = await ctx.newPage();
         await slowPage.goto(`${ORIGIN}/data`);
@@ -422,7 +406,7 @@ tweak.replaceResponse({ url: "${ORIGIN}/sf-data", strategy: "page" }, async () =
         const got = await slowPage.evaluate((origin: string) => fetch(`${origin}/slow-data`).then((r: any) => r.text()), ORIGIN).catch((e: any) => String(e));
         check(`a ${slowMs / 1000}-second page handler still applies its result (MV3)`, got === "SLOW-REPLACED", `${got.slice(0, 80)} after ${Math.round((Date.now() - t0) / 1000)} s`);
         await slowPage.close();
-        await send({ type: "deleteScript", id: "s_slow" });
+        await deleteTweak(send, "Slow handler");
         await send({ type: "setEnabled", id: "s_pg", enabled: true });
     }
 
@@ -432,32 +416,17 @@ tweak.replaceResponse({ url: "${ORIGIN}/sf-data", strategy: "page" }, async () =
     // one origin, CDN script on another, strategy "debugger" ----
     const CDN = `http://localhost:${PORT}`;
     if (process.env.DBG) await mgr.evaluate(() => { const sel = document.querySelector("#log-level") as HTMLSelectElement; sel.value = "debug"; sel.dispatchEvent(new Event("change")); });
-    await mgr.evaluate((cdn: string) => new Promise((r) => chrome.runtime.sendMessage({
-        type: "saveScript", id: "s_respond", name: "Respond script.tangitweak",
-        code: `import { tweak } from "tangitweak"; tweak.onRequest({ url: "${cdn}/app.js*", strategy: "debugger" }, (ctx) => ({ replaceResponse: { status: 200, mime: "text/javascript", body: 'window.__marker = "RESPONDED:' + ctx.resourceType + '";' } }));`,
-    }, r)), CDN);
-    await mgr.evaluate((cdn: string) => new Promise((r) => chrome.runtime.sendMessage({
-        type: "saveScript", id: "s_cdpx", name: "Cdp transform.tangitweak",
-        code: `import { tweak } from "tangitweak"; tweak.onResponseBody({ url: ["${cdn}/gz.js", "${cdn}/lazy.js"], strategy: "debugger" }, (ctx, body) => body.replace("ORIGINAL", "MODIFIED"));`,
-    }, r)), CDN);
-    await mgr.evaluate((cdn: string) => new Promise((r) => chrome.runtime.sendMessage({
-        type: "saveScript", id: "s_auto", name: "Auto script.tangitweak",
-        code: `import { tweak } from "tangitweak"; tweak.onResponseBody({ url: "${cdn}/auto.js", strategy: "page" }, (ctx, body) => body.replace("ORIGINAL", "MODIFIED"));`,
-    }, r)), CDN);
+    await saveTweak(mgrSend, "s_respond", "Respond script", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "${CDN}/app.js*", strategy: "debugger" }, (ctx) => ({ replaceResponse: { status: 200, mime: "text/javascript", body: 'window.__marker = "RESPONDED:' + ctx.resourceType + '";' } }));`);
+    await saveTweak(mgrSend, "s_cdpx", "Cdp transform", `import { tweak } from "tangitweak"; tweak.onResponseBody({ url: ["${CDN}/gz.js", "${CDN}/lazy.js"], strategy: "debugger" }, (ctx, body) => body.replace("ORIGINAL", "MODIFIED"));`);
+    await saveTweak(mgrSend, "s_auto", "Auto script", `import { tweak } from "tangitweak"; tweak.onResponseBody({ url: "${CDN}/auto.js", strategy: "page" }, (ctx, body) => body.replace("ORIGINAL", "MODIFIED"));`);
     // a handler that runs but changes nothing: the request is "observed", not "modified"
-    await mgr.evaluate((cdn: string) => new Promise((r) => chrome.runtime.sendMessage({
-        type: "saveScript", id: "s_watch", name: "Watcher.tangitweak",
-        code: `import { tweak } from "tangitweak"; tweak.onRequest({ url: "${cdn}/auto.js", strategy: "debugger" }, () => undefined);`,
-    }, r)), CDN);
-    await mgr.evaluate(() => new Promise((r) => chrome.runtime.sendMessage({
-        type: "saveScript", id: "s_procx", name: "Process listed.tangitweak",
-        code: `import { tweak } from "tangitweak"; tweak.onResponseBody({ url: "*://process-listed.invalid/*", strategy: "helper" }, (ctx, body) => body);`,
-    }, r)));
+    await saveTweak(mgrSend, "s_watch", "Watcher", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "${CDN}/auto.js", strategy: "debugger" }, () => undefined);`);
+    await saveTweak(mgrSend, "s_procx", "Process listed", `import { tweak } from "tangitweak"; tweak.onResponseBody({ url: "*://process-listed.invalid/*", strategy: "helper" }, (ctx, body) => body);`);
     await mgr.waitForTimeout(1500); // pipeline reload → debugger tier armed
     const helperWarned = await mgr.waitForFunction(() => [...document.querySelectorAll("#problems-list .pb-item.warn")].some((l) => /onResponseBody #1: strategy "helper"/.test(l.textContent || "") && /\[Ln 1\b/.test(l.textContent || "")), null, { timeout: 8000 }).then(() => true, () => false);
     check("process routes warn while the helper is down (no fallback) — in Problems, at the handler's line", helperWarned);
     // its squiggle's hover: the warning comes before the API docs, like a TypeScript error's
-    await mgr.evaluate(() => (document.querySelector('#script-list li[data-id="s_procx"]') as HTMLElement).click());
+    await openScript("s_procx", "Process listed");
     const hoverRows = await mgr.waitForFunction(() => {
         const ed = (window as any).monaco?.editor.getEditors().find((e: any) => e.getModel()?.getValue().includes("process-listed.invalid"));
         if (!ed) return false;
@@ -466,12 +435,15 @@ tweak.replaceResponse({ url: "${ORIGIN}/sf-data", strategy: "page" }, async () =
         const docs = rows.findIndex((r) => /onResponseBody\(/.test(r) && !/strategy "helper"/.test(r));
         if (warn >= 0 && docs >= 0) return { warn, docs };
         ed.focus();
-        ed.setPosition({ lineNumber: 1, column: 6 });
+        ed.setPosition({ lineNumber: 1, column: 45 });
         ed.trigger("e2e", "editor.action.showHover", {});
         return false;
     }, null, { timeout: 8000, polling: 500 }).then((h: any) => h.jsonValue(), () => null);
     check("a problem's hover comes before the API docs hover", !!hoverRows && hoverRows.warn < hoverRows.docs, JSON.stringify(hoverRows));
+    await mgr.evaluate(() => (window as any).monaco.editor.getEditors()[0].focus());
     await mgr.keyboard.press("Escape");
+    await mgr.mouse.move(2, 2);
+    await mgr.waitForFunction(() => ![...document.querySelectorAll(".monaco-hover")].some((h) => (h as HTMLElement).offsetHeight > 0 && !h.classList.contains("hidden")), null, { timeout: 3000 }).catch(() => {});
     // Network tab records from now on (listeners attach when it opens)
     await mgr.click("#network-tab");
     await mgr.waitForSelector("#net-filter-host .net-toolbar", { timeout: 5000 });
@@ -502,7 +474,7 @@ tweak.replaceResponse({ url: "${ORIGIN}/sf-data", strategy: "page" }, async () =
         })),
     );
     check("Network tab lists the page's requests", net.some((r) => r.name.startsWith("page-xo") && r.status === "200") && net.some((r) => r.name.startsWith("auto.js")), JSON.stringify(net.map((r) => r.name)));
-    check("Network tab shows which script modified a request", net.some((r) => r.name.startsWith("gz.js") && r.scripts.includes("Cdp transform.tangitweak")), JSON.stringify(net.filter((r) => r.scripts.length)));
+    check("Network tab shows which script modified a request", net.some((r) => r.name.startsWith("gz.js") && r.scripts.includes("Cdp transform/index")), JSON.stringify(net.filter((r) => r.scripts.length)));
     const marks: Record<string, string> = await mgr.evaluate(() =>
         Object.fromEntries([...document.querySelectorAll("#network-view tbody tr")].map((tr) => [tr.querySelector(".net-name")?.textContent || "", tr.classList.contains("modified") ? "modified" : tr.classList.contains("observed") ? "observed" : "none"])),
     );
@@ -517,8 +489,8 @@ tweak.replaceResponse({ url: "${ORIGIN}/sf-data", strategy: "page" }, async () =
         sel.dispatchEvent(new Event("change"));
         return prev;
     });
-    const observedLog = await mgr.evaluate(() => [...document.querySelectorAll("#log-entries .log-line.debug")].map((l) => l.textContent || "").find((t) => t.includes("[Watcher.tangitweak] onRequest → observed (no change)")) || "");
-    check("observed handler logs a DEBUG 'observed (no change)' line ending with the URL", /\[Watcher\.tangitweak\] onRequest → observed \(no change\) http:\/\/localhost:\d+\/auto\.js$/.test(observedLog), observedLog || "(none)");
+    const observedLog = await mgr.evaluate(() => [...document.querySelectorAll("#log-entries .log-line.debug")].map((l) => l.textContent || "").find((t) => t.includes("[Watcher/index] onRequest → observed (no change)")) || "");
+    check("observed handler logs a DEBUG 'observed (no change)' line ending with the URL", /\[Watcher\/index\] onRequest → observed \(no change\) http:\/\/localhost:\d+\/auto\.js$/.test(observedLog), observedLog || "(none)");
     await mgr.evaluate((prev: string) => {
         const sel = document.querySelector("#log-level") as HTMLSelectElement;
         sel.value = prev;
@@ -606,11 +578,8 @@ tweak.replaceResponse({ url: "${ORIGIN}/sf-data", strategy: "page" }, async () =
     await mgr.click("#log-header-title");
 
     // ---- script error indicators: compile error + runtime error ----
-    await mgr.evaluate((origin: string) => new Promise((r) => chrome.runtime.sendMessage({
-        type: "saveScript", id: "s_throws", name: "Thrower.tangitweak",
-        code: `import { tweak } from "tangitweak"; tweak.onRequest({ url: "${origin}/kaboom*", strategy: "page" }, () => { throw new Error("kaboom"); });`,
-    }, r)), "http://localhost:8909");
-    await mgr.evaluate(() => new Promise((r) => chrome.runtime.sendMessage({ type: "saveScript", id: "s_broken", name: "Broken", code: "import { tweak } from 'tangitweak'; tweak.onRequest([ ;" }, r)));
+    await saveTweak(mgrSend, "s_throws", "Thrower", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "http://localhost:8909/kaboom*", strategy: "page" }, () => { throw new Error("kaboom"); });`);
+    await saveTweak(mgrSend, "s_broken", "Broken", "import { tweak } from 'tangitweak'; tweak.onRequest([ ;");
     await mgr.waitForTimeout(1200);
     const errPage = await ctx.newPage();
     await errPage.goto(`${ORIGIN}/page`);
@@ -637,7 +606,7 @@ tweak.replaceResponse({ url: "${ORIGIN}/sf-data", strategy: "page" }, async () =
     await errPopup.goto(`chrome-extension://${extId}/popup.html`);
     await errPopup.waitForSelector("#script-list li.script-item", { timeout: 8000 });
     const popupInd = await errPopup.evaluate(() => [...document.querySelectorAll("li.script-item")].filter((li) => li.querySelector(".err-ind")).map((li) => li.querySelector(".script-name")?.textContent));
-    check("popup shows error indicators", popupInd.includes("Thrower.tangitweak"), JSON.stringify(popupInd));
+    check("popup shows error indicators", popupInd.includes("thrower"), JSON.stringify(popupInd));
     await mgr.click('#script-list li[data-id="s_throws"] .err-ind.runtime');
     await mgr.waitForTimeout(500);
     check("clicking the runtime indicator dismisses it", !(await mgr.$('#script-list li[data-id="s_throws"] .err-ind')));
@@ -645,14 +614,14 @@ tweak.replaceResponse({ url: "${ORIGIN}/sf-data", strategy: "page" }, async () =
     // TypeScript errors (editor squiggles) → a Problem + "types" badge, not a Log line; two
     // scripts declaring the same top-level name must not collide
     for (const [id, name, code] of [
-        ["s_typed", "Typed.tangitweak", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*://typed.invalid/*", strategy: "page" }, () => {});\nconst cfg = 1;\nconst n: number = "not a number";`],
-        ["s_typed2", "Typed2.tangitweak", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*://typed2.invalid/*", strategy: "page" }, () => {});\nconst cfg = 2;\nexport function never() { console.log(new TextDecoder().decode(new Uint8Array()), new URL("x"), fetch, cfg); }`],
-    ]) await mgr.evaluate((m: any) => new Promise((r) => chrome.runtime.sendMessage({ type: "saveScript", ...m }, r)), { id, name, code });
+        ["s_typed", "Typed", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*://typed.invalid/*", strategy: "page" }, () => {});\nconst cfg = 1;\nconst n: number = "not a number";`],
+        ["s_typed2", "Typed2", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*://typed2.invalid/*", strategy: "page" }, () => {});\nconst cfg = 2;\nexport function never() { console.log(new TextDecoder().decode(new Uint8Array()), new URL("x"), fetch, cfg); }`],
+    ]) await saveTweak(mgrSend, id, name, code);
     await mgr.waitForSelector('#script-list li[data-id="s_typed"] .err-ind.types', { timeout: 15000 }).catch(() => {});
     const typed = await mgr.evaluate(() => ({
         badge: document.querySelector('#script-list li[data-id="s_typed"] .err-ind.types')?.getAttribute("title") || "",
         clean: !document.querySelector('#script-list li[data-id="s_typed2"] .err-ind'),
-        logged: [...document.querySelectorAll("#log-entries .log-line")].map((l) => (l as HTMLElement).dataset.text || l.textContent || "").filter((t) => t.includes("Typed.tangitweak")),
+        logged: [...document.querySelectorAll("#log-entries .log-line")].map((l) => (l as HTMLElement).dataset.text || l.textContent || "").filter((t) => t.includes("Typed/index")),
         problem: [...document.querySelectorAll("#problems-list .pb-item.error")].map((l) => l.textContent || "").filter((t) => t.includes("not assignable")),
     }));
     check("TypeScript error → types indicator in the manager list", typed.badge.includes("line 3:") && !typed.badge.includes("cfg"), JSON.stringify(typed));
@@ -701,7 +670,7 @@ tweak.replaceResponse({ url: "${ORIGIN}/sf-data", strategy: "page" }, async () =
     // Monaco hovers: click copies the hover text; links inside keep navigating
     const acceptDialog = (d: any) => void d.accept().catch(() => {});
     mgr.on("dialog", acceptDialog);
-    await mgr.evaluate(() => (document.querySelector('#script-list li[data-id="s_typed"]') as HTMLElement).click());
+    await openScript("s_typed", "Typed");
     mgr.off("dialog", acceptDialog);
     await mgr.waitForFunction(() => (window as any).monaco.editor.getEditors()[0].getValue().includes("not a number"), null, { timeout: 8000 }).catch(() => {});
     await mgr.waitForSelector("#monaco-host .squiggly-error", { timeout: 15000 }).catch(() => {});
@@ -723,7 +692,7 @@ tweak.replaceResponse({ url: "${ORIGIN}/sf-data", strategy: "page" }, async () =
     check("Monaco error hover: click copies its text (not the action bar) + toast", /not assignable/.test(monacoCopy.copied.at(-1) || "") && !/Quick Fix|View Problem/.test(monacoCopy.copied.at(-1) || "") && monacoCopy.toast === "Copied to clipboard", JSON.stringify(monacoCopy));
     await mgr.evaluate(() => (window as any).monaco.editor.getEditors()[0].focus());
     await mgr.keyboard.press("Escape"); // the error hover may sit over line 1
-    const fn = await at(1, 6); // `onRequest`
+    const fn = await at(1, 45); // `onRequest`
     await mgr.mouse.move(fn.x - 30, fn.y + 10);
     await mgr.mouse.move(fn.x, fn.y, { steps: 3 });
     const typeLink = ".monaco-hover:not(.hidden) .monaco-hover-content pre a";
@@ -741,7 +710,7 @@ tweak.replaceResponse({ url: "${ORIGIN}/sf-data", strategy: "page" }, async () =
     await typedPopup.goto(`chrome-extension://${extId}/popup.html`);
     await typedPopup.waitForSelector("#script-list li.script-item", { timeout: 8000 });
     const typedInd = await typedPopup.evaluate(() => [...document.querySelectorAll("li.script-item")].filter((li) => li.querySelector(".err-ind.types")).map((li) => li.querySelector(".script-name")?.textContent));
-    check("popup shows the TypeScript error indicator", typedInd.includes("Typed.tangitweak"), JSON.stringify(typedInd));
+    check("popup shows the TypeScript error indicator", typedInd.includes("typed"), JSON.stringify(typedInd));
     await tipFlow(typedPopup, "li.script-item .err-ind.types", "popup", { x: 600, y: 400 });
     await typedPopup.close();
     // Problems view: current problems (live TS markers), gone once fixed; a click jumps to the line
@@ -762,7 +731,7 @@ tweak.replaceResponse({ url: "${ORIGIN}/sf-data", strategy: "page" }, async () =
         typed: [...document.querySelectorAll("#problems-list .pb-item")].map((e) => e.textContent || "").filter((t: string) => /not assignable/.test(t)),
     }));
     const before = await sbProblems();
-    check("Problems view lists the TypeScript error with its line; counts at the far left of the status bar", pb0.tab === "problems" && pb0.heads.includes("Typed.tangitweak.ts") && pb0.typed.some((t: string) => /\bts\b/.test(t) && t.includes("Ln 3")) && before.errors >= 1 && (await mgr.evaluate(() => document.querySelector("#status-bar .sb-item")?.id)) === "sb-problems", JSON.stringify({ pb0, before }));
+    check("Problems view lists the TypeScript error with its line; counts at the far left of the status bar", pb0.tab === "problems" && pb0.heads.includes("Typed/index.ts") && pb0.typed.some((t: string) => /\bts\b/.test(t) && t.includes("Ln 3")) && before.errors >= 1 && (await mgr.evaluate(() => document.querySelector("#status-bar .sb-item")?.id)) === "sb-problems", JSON.stringify({ pb0, before }));
     const typedCode = await mgr.evaluate(() => (window as any).monaco.editor.getEditors()[0].getValue());
     await mgr.evaluate(() => {
         const m = (window as any).monaco.editor.getEditors()[0].getModel();
@@ -774,15 +743,15 @@ tweak.replaceResponse({ url: "${ORIGIN}/sf-data", strategy: "page" }, async () =
     await mgr.evaluate((code: string) => (window as any).monaco.editor.getEditors()[0].getModel().setValue(code), typedCode);
     const gone = await mgr.waitForFunction((n: number) => Number(document.querySelector('#sb-problems .sb-n[data-k="error"]')?.textContent) === n, before.errors, { timeout: 8000 }).then(() => true, () => false);
     check("fixing it removes the problem (no clearing needed)", gone, JSON.stringify({ before, now: await sbProblems() }));
-    await mgr.evaluate(() => (document.querySelector('#script-list li[data-id="s_typed2"]') as HTMLElement).click());
-    await mgr.waitForFunction(() => (window as any).monaco.editor.getEditors()[0].getModel()?.uri.path === "/Typed2.tangitweak.ts", null, { timeout: 8000 }).catch(() => {});
+    await openScript("s_typed2", "Typed2");
+    await mgr.waitForFunction(() => (window as any).monaco.editor.getEditors()[0].getModel()?.uri.path === "/Typed2/index.ts", null, { timeout: 8000 }).catch(() => {});
     await mgr.locator("#problems-list .pb-item", { hasText: "Type 'string' is not assignable to type 'number'" }).first().click();
     await mgr.waitForTimeout(300);
     const jumped = await mgr.evaluate(() => {
         const ed = (window as any).monaco.editor.getEditors()[0];
         return { file: ed.getModel()?.uri.path, pos: ed.getPosition(), focused: ed.hasTextFocus() };
     });
-    check("clicking a problem opens its script with the cursor on its line", jumped.file === "/Typed.tangitweak.ts" && jumped.pos?.lineNumber === 3 && jumped.pos?.column === 7 && jumped.focused, JSON.stringify(jumped));
+    check("clicking a problem opens its script with the cursor on its line", jumped.file === "/Typed/index.ts" && jumped.pos?.lineNumber === 3 && jumped.pos?.column === 7 && jumped.focused, JSON.stringify(jumped));
     await mgr.keyboard.press("Control+Shift+KeyM");
     await mgr.waitForTimeout(200);
     const pFocused = await mgr.evaluate(() => document.activeElement?.id);
@@ -815,13 +784,12 @@ tweak.replaceResponse({ url: "${ORIGIN}/sf-data", strategy: "page" }, async () =
     await mgr.locator("#log-header-title").click();
     // save conflict: the stored copy changes while the editor holds unsaved edits
     await mgr.bringToFront();
-    await mgr.evaluate(() => new Promise((r) => chrome.runtime.sendMessage({ type: "saveScript", id: "s_conf", name: "Conflicted", code: "// v1\n" }, r)));
-    await mgr.waitForSelector('#script-list li[data-id="s_conf"]', { timeout: 8000 });
+    await saveTweak(mgrSend, "s_conf", "Conflicted", "// v1\n");
     mgr.once("dialog", (d: any) => void d.accept()); // earlier probes may leave the open buffer dirty
-    await mgr.evaluate(() => (document.querySelector('#script-list li[data-id="s_conf"]') as HTMLElement).click());
+    await openScript("s_conf", "Conflicted");
     await mgr.waitForFunction(() => (window as any).monaco.editor.getEditors()[0].getValue() === "// v1\n", null, { timeout: 8000 }).catch(() => {});
     await mgr.evaluate(() => (window as any).monaco.editor.getEditors()[0].trigger("t", "type", { text: "// mine\n" }));
-    await mgr.evaluate(() => new Promise((r) => chrome.runtime.sendMessage({ type: "saveScript", id: "s_conf", name: "Conflicted", code: "// theirs\n" }, r)));
+    await saveTweak(mgrSend, "s_conf", "Conflicted", "// theirs\n");
     await mgr.waitForTimeout(500);
     await mgr.locator("#btn-save").click();
     const conflictShown = await mgr.waitForSelector("#conflict-dialog .conflict-diff", { timeout: 8000 }).then(() => true, () => false);
@@ -864,17 +832,13 @@ tweak.replaceResponse({ url: "${ORIGIN}/sf-data", strategy: "page" }, async () =
     }));
     if (fixed.dialog) await mgr.keyboard.press("Escape");
     check("fixing a compile error and saving again doesn't raise a conflict", !fixed.dialog && fixed.stored?.includes("// fixed"), JSON.stringify(fixed));
-    await mgr.evaluate(() => new Promise((r) => chrome.runtime.sendMessage({ type: "deleteScript", id: "s_conf" }, r)));
-    for (const id of ["s_throws", "s_broken", "s_typed", "s_typed2"]) await mgr.evaluate((id: string) => new Promise((r) => chrome.runtime.sendMessage({ type: "deleteScript", id }, r)), id);
+    for (const dir of ["Conflicted", "Thrower", "Broken", "Typed", "Typed2"]) await deleteTweak(mgrSend, dir);
     // a reload in the already-attached tab (no first-navigation race)
     await xoPage.reload();
     await xoPage.waitForFunction(() => (window as any).__gz !== undefined, null, { timeout: 15000 }).catch(() => {});
     check("reload in an attached tab intercepted too", (await xoPage.evaluate(() => (window as any).__marker)) === "RESPONDED:script");
     // same-origin script on the debugger tier
-    await mgr.evaluate((origin: string) => new Promise((r) => chrome.runtime.sendMessage({
-        type: "saveScript", id: "s_proxy2", name: "Proxy same-origin.tangitweak",
-        code: `import { tweak } from "tangitweak"; tweak.onResponseBody({ url: "${origin}/app.js", strategy: "debugger" }, (ctx, body) => body.replace("ORIGINAL-MARKER", "PROXY-MARKER"));`,
-    }, r)), ORIGIN);
+    await saveTweak(mgrSend, "s_proxy2", "Proxy same-origin", `import { tweak } from "tangitweak"; tweak.onResponseBody({ url: "${ORIGIN}/app.js", strategy: "debugger" }, (ctx, body) => body.replace("ORIGINAL-MARKER", "PROXY-MARKER"));`);
     await mgr.waitForTimeout(1500);
     const scriptPage = await ctx.newPage();
     await scriptPage.goto(`${ORIGIN}/page-script`);
@@ -882,10 +846,7 @@ tweak.replaceResponse({ url: "${ORIGIN}/sf-data", strategy: "page" }, async () =
     check("same-origin <script src> onResponseBody (strategy cdp)", (await scriptPage.evaluate(() => (window as any).__marker)) === "PROXY-MARKER", JSON.stringify(await scriptPage.evaluate(() => (window as any).__marker)));
     // zero-latency first navigation: may beat the attach — must then be
     // WARNED (never silent), and a reload must intercept
-    await mgr.evaluate((origin: string) => new Promise((r) => chrome.runtime.sendMessage({
-        type: "saveScript", id: "s_race", name: "Race script.tangitweak",
-        code: `import { tweak } from "tangitweak"; tweak.onResponseBody({ url: "${origin}/race.js", strategy: "debugger" }, (ctx, body) => body.replace("ORIGINAL", "MODIFIED"));`,
-    }, r)), ORIGIN);
+    await saveTweak(mgrSend, "s_race", "Race script", `import { tweak } from "tangitweak"; tweak.onResponseBody({ url: "${ORIGIN}/race.js", strategy: "debugger" }, (ctx, body) => body.replace("ORIGINAL", "MODIFIED"));`);
     await mgr.waitForTimeout(1500);
     const racePage = await ctx.newPage();
     await racePage.goto(`${ORIGIN}/page-race`);
@@ -901,10 +862,7 @@ tweak.replaceResponse({ url: "${ORIGIN}/sf-data", strategy: "page" }, async () =
     await racePage.close();
     // a page whose own html is rewritten: a cold first load that beats the
     // attach is re-issued through the debugger, so it IS intercepted
-    await mgr.evaluate((origin: string) => new Promise((r) => chrome.runtime.sendMessage({
-        type: "saveScript", id: "s_doccold", name: "Doc cold.tangitweak",
-        code: `import { tweak } from "tangitweak"; tweak.onResponseBody({ url: "${origin}/doc-cold*", strategy: "debugger" }, (ctx, body) => body.replaceAll("DOC-ORIGINAL", "DOC-MODIFIED"));`,
-    }, r)), ORIGIN);
+    await saveTweak(mgrSend, "s_doccold", "Doc cold", `import { tweak } from "tangitweak"; tweak.onResponseBody({ url: "${ORIGIN}/doc-cold*", strategy: "debugger" }, (ctx, body) => body.replaceAll("DOC-ORIGINAL", "DOC-MODIFIED"));`);
     await mgr.waitForTimeout(1500);
     const docPage = await ctx.newPage();
     await docPage.goto(`${ORIGIN}/doc-cold`).catch(() => {});
@@ -915,13 +873,11 @@ tweak.replaceResponse({ url: "${ORIGIN}/sf-data", strategy: "page" }, async () =
     check("cold first page load is intercepted (re-issued if it beat the attach)", docTitle === "DOC-MODIFIED", `title=${docTitle} renav=${docLog.includes("re-loaded it through the debugger")}`);
     check("no miss warning for the re-issued page load", !/doc-cold was NOT intercepted/.test(docLog));
     await docPage.close();
-    await mgr.evaluate(() => new Promise((r) => chrome.runtime.sendMessage({ type: "deleteScript", id: "s_doccold" }, r)));
+    await deleteTweak(mgrSend, "Doc cold");
     const logText = await mgr.evaluate(() => [...document.querySelectorAll("#log-entries .log-line")].map((l) => l.textContent || "").join("\n"));
     if (process.env.DBG) console.log(logText.split("\n").filter((l: string) => /Tier C|cdp|debugger|attach|requestPaused/i.test(l)).slice(-40).join("\n"));
     check("debugger strategy activation is logged", logText.includes("debugger strategy active"));
-    for (const id of ["s_respond", "s_cdpx", "s_auto", "s_procx", "s_proxy2", "s_race"]) {
-        await mgr.evaluate((id: string) => new Promise((r) => chrome.runtime.sendMessage({ type: "deleteScript", id }, r)), id);
-    }
+    for (const dir of ["Respond script", "Cdp transform", "Auto script", "Process listed", "Proxy same-origin", "Race script"]) await deleteTweak(mgrSend, dir);
     await xoPage.close();
     await scriptPage.close();
 
@@ -970,10 +926,10 @@ tweak.replaceResponse({ url: "${ORIGIN}/sf-data", strategy: "page" }, async () =
     await mgr.evaluate(() => { (document.querySelector("#btn-export") as HTMLElement).click(); });
     await mgr.waitForSelector("#bundle-picker .picker-row", { timeout: 5000 });
     const exportRows: string[] = await mgr.evaluate(() => [...document.querySelectorAll<HTMLElement>("#bundle-picker .picker-row")].map((e) => e.dataset.path!));
-    check("export picker lists every script and settings.json", ["MV3 hook.tangitweak.ts", "api-interceptor.tangitweak.ts", "api-lib.ts", "settings.json"].every((p) => exportRows.includes(p)), JSON.stringify(exportRows));
+    check("export picker lists every script and settings.json", ["MV3 hook/index.ts", "api-interceptor/index.ts", "api-interceptor/api-lib.ts", "settings.json"].every((p) => exportRows.includes(p)), JSON.stringify(exportRows));
     const pickerWarn = await mgr.evaluate(() => {
-        const hook = document.querySelector<HTMLInputElement>('#bundle-picker .picker-row[data-path="MV3 hook.tangitweak.ts"] input')!;
-        const lib = document.querySelector<HTMLInputElement>('#bundle-picker .picker-row[data-path="api-lib.ts"] input')!;
+        const hook = document.querySelector<HTMLInputElement>('#bundle-picker .picker-row[data-path="MV3 hook/index.ts"] input')!;
+        const lib = document.querySelector<HTMLInputElement>('#bundle-picker .picker-row[data-path="api-interceptor/api-lib.ts"] input')!;
         hook.click();
         lib.click();
         const warn = document.querySelector<HTMLElement>("#bundle-picker .picker-warn")!;
@@ -992,12 +948,12 @@ tweak.replaceResponse({ url: "${ORIGIN}/sf-data", strategy: "page" }, async () =
         input.dispatchEvent(new Event("input", { bubbles: true }));
         return rows;
     });
-    check("picker filter narrows the tree by path", filtered.length > 0 && filtered.every((p: string | undefined) => /api-/i.test(p || "")) && filtered.includes("api-lib.ts"), JSON.stringify(filtered));
+    check("picker filter narrows the tree by path", filtered.length > 0 && filtered.every((p: string | undefined) => /api-/i.test(p || "")) && filtered.includes("api-interceptor/api-lib.ts"), JSON.stringify(filtered));
     await mgr.evaluate(() => (document.querySelector('#bundle-picker [data-act="ok"]') as HTMLElement).click());
     await mgr.waitForTimeout(800);
     const partial = await zipOf(await mgr.evaluate(() => (window as any).__captured));
     const partialFiles = partial ? partial.scripts.map((s) => s.file) : [];
-    check("partial export leaves out the unticked script", partialFiles.includes("api-interceptor.tangitweak.ts") && !partialFiles.includes("MV3 hook.tangitweak.ts"), JSON.stringify(partialFiles));
+    check("partial export leaves out the unticked script", partialFiles.includes("api-interceptor/index.ts") && !partialFiles.includes("MV3 hook/index.ts"), JSON.stringify(partialFiles));
     await mgr.evaluate(() => { (window as any).__captured = null; (document.querySelector("#btn-export") as HTMLElement).click(); });
     await mgr.waitForSelector("#bundle-picker .picker-row", { timeout: 5000 });
     await mgr.evaluate(() => (document.querySelector('#bundle-picker [data-act="ok"]') as HTMLElement).click());
@@ -1005,24 +961,24 @@ tweak.replaceResponse({ url: "${ORIGIN}/sf-data", strategy: "page" }, async () =
     const zipBytes: number[] | null = await mgr.evaluate(() => (window as any).__captured);
     const full = await zipOf(zipBytes);
     const fullFiles = full ? full.scripts.map((s) => s.file) : [];
-    check("export produces a zip (settings.json + scripts)", !!full?.settings && fullFiles.includes("api-interceptor.tangitweak.ts") && fullFiles.includes("MV3 hook.tangitweak.ts"), JSON.stringify(fullFiles));
+    check("export produces a zip (settings.json + scripts)", !!full?.settings && fullFiles.includes("api-interceptor/index.ts") && fullFiles.includes("MV3 hook/index.ts"), JSON.stringify(fullFiles));
     // Collect diagnostics… opens the same picker: sections, and the scripts under "Scripts"
     await mgr.evaluate(() => { (window as any).__captured = null; (document.querySelector("#btn-diagnostics") as HTMLElement).click(); });
     await mgr.waitForSelector("#bundle-picker .picker-row", { timeout: 5000 });
     const diagRows: string[] = await mgr.evaluate(() => [...document.querySelectorAll<HTMLElement>("#bundle-picker .picker-row")].map((e) => e.dataset.path!));
-    check("diagnostics picker lists the report's sections and every script", ["Environment", "Network", "settings.json", "Scripts", "Scripts/MV3 hook.tangitweak.ts", "Scripts/api-interceptor.tangitweak.ts"].every((p) => diagRows.includes(p)), JSON.stringify(diagRows));
+    check("diagnostics picker lists the report's sections and every script", ["Environment", "Network", "settings.json", "Scripts", "Scripts/MV3 hook/index.ts", "Scripts/api-interceptor/index.ts"].every((p) => diagRows.includes(p)), JSON.stringify(diagRows));
     await mgr.evaluate(() => {
-        for (const p of ["Network", "Other installed extensions", "Scripts/api-interceptor.tangitweak.ts"]) document.querySelector<HTMLInputElement>(`#bundle-picker .picker-row[data-path="${p}"] input`)!.click();
+        for (const p of ["Network", "Other installed extensions", "Scripts/api-interceptor/index.ts"]) document.querySelector<HTMLInputElement>(`#bundle-picker .picker-row[data-path="${p}"] input`)!.click();
         (document.querySelector('#bundle-picker [data-act="ok"]') as HTMLElement).click();
     });
     await mgr.waitForFunction(() => Array.isArray((window as any).__captured), null, { timeout: 10000 }).catch(() => {});
     const diagReport: string = await mgr.evaluate(() => new TextDecoder().decode(new Uint8Array((window as any).__captured || [])));
     check(
         "diagnostics report holds only what was picked and says what was left out",
-        diagReport.includes("### MV3 hook.tangitweak.ts") && !diagReport.includes("### api-interceptor.tangitweak.ts") && !diagReport.includes("## Network") && !diagReport.includes("## Other installed extensions") && diagReport.includes("## Log (") && /Left out by the sender: Other installed extensions, Network, 1 of \d+ scripts/.test(diagReport),
+        diagReport.includes("### MV3 hook/index.ts") && !diagReport.includes("### api-interceptor/index.ts") && !diagReport.includes("## Network") && !diagReport.includes("## Other installed extensions") && diagReport.includes("## Log (") && /Left out by the sender: Other installed extensions, Network, 1 of \d+ scripts/.test(diagReport),
         diagReport.slice(0, 600)
     );
-    const skipPath = exportRows.find((p) => /\.tsx?$/.test(p) && !["MV3 hook.tangitweak.ts", "api-interceptor.tangitweak.ts", "api-lib.ts"].includes(p));
+    const skipPath = exportRows.find((p) => /\.tsx?$/.test(p) && !["MV3 hook/index.ts", "api-interceptor/index.ts", "api-interceptor/api-lib.ts"].includes(p));
     const skipName = skipPath?.replace(/\.ts$/, "");
     await mgr.evaluate(() => new Promise((r) => chrome.storage.local.clear(() => r(null))));
     await mgr.reload();
@@ -1059,22 +1015,23 @@ tweak.replaceResponse({ url: "${ORIGIN}/sf-data", strategy: "page" }, async () =
     await mgr.waitForFunction(() => (document.querySelector("#editor-status")?.textContent ?? "").includes("imported"), null, { timeout: 20000 }).catch(() => {});
     const imported = await mgr.evaluate(() => new Promise<any>((r) => chrome.runtime.sendMessage({ type: "listScripts" }, r)));
     const byName = new Map<string, any>((imported || []).map((s: any) => [s.meta.name, s]));
-    check("import re-detects routes (MV3 hook + api-interceptor active)", byName.get("MV3 hook.tangitweak")?.meta?.active === true && byName.get("api-interceptor.tangitweak")?.meta?.active === true, JSON.stringify((imported || []).map((s: any) => [s.meta.name, s.meta.active])));
-    check("import restores params (api-interceptor.label)", !!byName.get("api-interceptor.tangitweak")?.paramDefs?.label);
-    check("import keeps libraries as libraries (api-lib)", byName.get("api-lib")?.meta?.active === false);
-    check("import restores enabled state", byName.get("MV3 hook.tangitweak")?.enabled === true && byName.get("api-interceptor.tangitweak")?.enabled === true);
+    check("import re-detects routes (MV3 hook + api-interceptor active)", byName.get("MV3 hook/index")?.meta?.active === true && byName.get("api-interceptor/index")?.meta?.active === true, JSON.stringify((imported || []).map((s: any) => [s.meta.name, s.meta.active])));
+    check("import restores params (api-interceptor.label)", !!byName.get("api-interceptor/index")?.paramDefs?.label);
+    check("import keeps libraries as libraries (api-lib)", byName.get("api-interceptor/api-lib")?.meta?.active === false);
+    check("import restores enabled state", byName.get("MV3 hook/index")?.enabled === true && byName.get("api-interceptor/index")?.enabled === true);
     check("partial import skips the unticked script", !!skipName && !byName.has(skipName), String(skipName));
+    // its package.json came in without it, so the Explorer flags the missing entry
+    if (skipName) await deleteTweak(mgrSend, skipName.slice(0, skipName.lastIndexOf("/")));
     check("import status shows success", (await mgr.evaluate(() => document.querySelector("#editor-status")?.textContent ?? "")).includes("imported"));
 
     // a package's new version: its files that version lacks are listed as deleted and, checked, deleted
     {
         const { buildExportZip } = await import("../src/shared/exportZip");
-        for (const m of [{ id: "s_kit_a", name: "kit/a" }, { id: "s_kit_old", name: "kit/old" }])
-            await mgr.evaluate((m: any) => new Promise<any>((r) => chrome.runtime.sendMessage({ type: "saveScript", ...m, code: "export const x = 1;" }, r)), m);
+        for (const [id, file] of [["s_kit_a", "a"], ["s_kit_old", "old"]]) await saveTweak(mgrSend, id, "kit", "export const x = 1;", { file });
         await mgr.reload();
         await mgr.waitForSelector("#btn-import", { state: "attached", timeout: 10000 });
         await mgr.waitForSelector('#script-list li[data-id="dir:kit"]', { state: "attached", timeout: 10000 });
-        const kitZip = [...buildExportZip({ scripts: [{ name: "kit/a", code: "export const a = 2;" }], dataFiles: [] })];
+        const kitZip = [...buildExportZip({ scripts: [{ name: "kit/a", code: "export const a = 2;" }], dataFiles: [{ path: "kit/package.json", text: bundlePkg("kit") }] })];
         await mgr.evaluate((bytes: number[]) => {
             const orig = document.createElement.bind(document);
             (document as any).createElement = function (tag: string) {
@@ -1101,6 +1058,7 @@ tweak.replaceResponse({ url: "${ORIGIN}/sf-data", strategy: "page" }, async () =
         const kit = await mgr.evaluate(() => new Promise<any>((r) => chrome.runtime.sendMessage({ type: "listScripts" }, r)));
         const kitNames = (kit || []).map((s: any) => s.meta.name).filter((n: string) => n.startsWith("kit/"));
         check("import deletes the package's file its new version lacks", JSON.stringify(kitNames) === '["kit/a"]', JSON.stringify(kitNames) + " " + (await mgr.evaluate(() => document.querySelector("#editor-status")?.textContent)));
+        await deleteTweak(mgrSend, "kit"); // modules only: its package.json would stay flagged for a missing entry
     }
 
     // the user's scenario: the popup is the FIRST thing opened after the SW
@@ -1115,9 +1073,9 @@ tweak.replaceResponse({ url: "${ORIGIN}/sf-data", strategy: "page" }, async () =
     const coldErrors: string[] = [];
     coldPopup.on("pageerror", (e: Error) => coldErrors.push(String(e?.message || e)));
     await coldPopup.goto(`chrome-extension://${extId}/popup.html`);
-    await coldPopup.waitForFunction(() => [...document.querySelectorAll("#script-list .script-name")].some((e) => e.textContent === "MV3 hook.tangitweak"), null, { timeout: 15000 }).catch(() => {});
+    await coldPopup.waitForFunction(() => [...document.querySelectorAll("#script-list .script-name")].some((e) => e.textContent === "mv3-hook"), null, { timeout: 15000 }).catch(() => {});
     const coldItems = await coldPopup.evaluate(() => [...document.querySelectorAll("#script-list .script-name")].map((e) => e.textContent));
-    check("popup lists scripts on a COLD SW wake (idle restart)", coldItems.includes("MV3 hook.tangitweak"), `swWasUp=${wasSwUp} items=${JSON.stringify(coldItems)} errors=${JSON.stringify(coldErrors.slice(0, 2))}`);
+    check("popup lists scripts on a COLD SW wake (idle restart)", coldItems.includes("mv3-hook"), `swWasUp=${wasSwUp} items=${JSON.stringify(coldItems)} errors=${JSON.stringify(coldErrors.slice(0, 2))}`);
     check("cold popup has no page errors", coldErrors.length === 0, JSON.stringify(coldErrors.slice(0, 3)));
 
     // ---- MV3 onPage: document_start handlers run from the cached bundle ----
@@ -1126,6 +1084,7 @@ tweak.replaceResponse({ url: "${ORIGIN}/sf-data", strategy: "page" }, async () =
     // proves the fast path)
     const warm = await ctx.newPage();
     await warm.goto(`chrome-extension://${extId}/editor.html`);
+    const warmSend = (msg: any): Promise<any> => warm.evaluate((m: any) => new Promise((r) => chrome.runtime.sendMessage(m, (x: any) => r(x ?? null))), msg);
     await warm.waitForFunction(() => (window as any).monaco?.editor.getEditors().length === 1, null, { timeout: 20000 });
     // the cache-hit line is debug-level — open the filter (also proves the
     // debug path end-to-end)
@@ -1134,15 +1093,9 @@ tweak.replaceResponse({ url: "${ORIGIN}/sf-data", strategy: "page" }, async () =
         sel.value = "debug";
         sel.dispatchEvent(new Event("change"));
     });
-    await warm.evaluate(() => new Promise((r) => chrome.runtime.sendMessage({
-        type: "saveScript", id: "s_dom", name: "Early dom.tangitweak",
-        code: `import { tweak } from "tangitweak"; tweak.onSite({ url: "*://*:*/*", when: "document_start" }, (ctx) => { document.title = "DOM-RAN:" + document.readyState; });`,
-    }, r)));
+    await saveTweak(warmSend, "s_dom", "Early dom", `import { tweak } from "tangitweak"; tweak.onSite({ url: "*://*:*/*", when: "document_start" }, (ctx) => { document.title = "DOM-RAN:" + document.readyState; });`);
     // a second script with its own `when` must not inherit the first's
-    await warm.evaluate(() => new Promise((r) => chrome.runtime.sendMessage({
-        type: "saveScript", id: "s_idle", name: "Idle dom.tangitweak",
-        code: `import { tweak } from "tangitweak"; tweak.onSite({ url: "*://*:*/*", when: "document_idle" }, () => { document.documentElement.dataset.idle = document.readyState; });`,
-    }, r)));
+    await saveTweak(warmSend, "s_idle", "Idle dom", `import { tweak } from "tangitweak"; tweak.onSite({ url: "*://*:*/*", when: "document_idle" }, () => { document.documentElement.dataset.idle = document.readyState; });`);
     await warm.waitForTimeout(1500); // cache refresh (pipeline reload warm)
     const domPage = await ctx.newPage();
     await domPage.goto(`${ORIGIN}/page`);
@@ -1164,8 +1117,8 @@ tweak.replaceResponse({ url: "${ORIGIN}/sf-data", strategy: "page" }, async () =
         await bp.goto(`${ORIGIN}/page-badge`);
         const tabId: number | undefined = await warm.evaluate((u: string) => new Promise((r) => chrome.tabs.query({}, (all) => r(all.find((t) => t.url === u)?.id))), `${ORIGIN}/page-badge`);
         const ids = (): Promise<string[]> => warm.evaluate((tabId: number | undefined) => new Promise((r) => chrome.runtime.sendMessage({ type: "activeScripts", tabId }, r)), tabId);
-        const save = (id: string, name: string, code: string) => warm.evaluate((m: { id: string; name: string; code: string }) => new Promise((r) => chrome.runtime.sendMessage({ type: "saveScript", ...m }, r)), { id, name, code });
-        await save("s_badgeiso", "Badge iso.tangitweak", `import { tweak } from "tangitweak"; tweak.onPage({ url: "*://*:*/page-badge*", when: "document_start" }, () => { document.documentElement.dataset.badgeIso = "1"; });`);
+        const save = (id: string, folder: string, code: string, file?: string) => saveTweak(warmSend, id, folder, code, file ? { file } : {});
+        await save("s_badgeiso", "Badge iso", `import { tweak } from "tangitweak"; tweak.onPage({ url: "*://*:*/page-badge*", when: "document_start" }, () => { document.documentElement.dataset.badgeIso = "1"; });`);
         await warm.waitForTimeout(1500);
         const before = await ids();
         const injected = await bp.evaluate(() => document.documentElement.dataset.badgeIso);
@@ -1178,7 +1131,7 @@ tweak.replaceResponse({ url: "${ORIGIN}/sf-data", strategy: "page" }, async () =
             after = await ids();
         }
         check("badge: it counts once it ran on the page (the next load)", after.includes("s_badgeiso"), JSON.stringify(after));
-        await save("s_badgebad", "Badge bad.tangitweak", `import { tweak } from "tangitweak"; tweak.onPage("*://*:*/page-badge*", () => { throw new Error("badge-boom"); });`);
+        await save("s_badgebad", "Badge bad", `import { tweak } from "tangitweak"; tweak.onPage("*://*:*/page-badge*", () => { throw new Error("badge-boom"); });`);
         let look: any = null;
         // (its user script registers in the background: reload until it ran)
         for (let i = 0; i < 40; i++) {
@@ -1191,7 +1144,7 @@ tweak.replaceResponse({ url: "${ORIGIN}/sf-data", strategy: "page" }, async () =
         // errors that only reached the browser console are the script's own now
         await save(
             "s_evalerr",
-            "Eval errs.tangitweak",
+            "Eval errs",
             `import { tweak } from "tangitweak"; const site = tweak.onSite("*://*:*/page-badge*", () => ({
                 boom: (): string => { throw new Error("evalerr-site"); },
             }));
@@ -1212,13 +1165,13 @@ tweak.replaceResponse({ url: "${ORIGIN}/sf-data", strategy: "page" }, async () =
         }
         check("onPage: async rejections, including an onSite function's error it awaits, are the script's errors", seen.length === wanted.length, JSON.stringify(seen));
         await warm.evaluate(() => new Promise((r) => chrome.runtime.sendMessage({ type: "clearScriptError", scriptId: "s_evalerr" }, r)));
-        for (const id of ["s_evalerr", "s_badgebad", "s_badgeiso"]) await warm.evaluate((id: string) => new Promise((r) => chrome.runtime.sendMessage({ type: "deleteScript", id }, r)), id);
+        for (const dir of ["Eval errs", "Badge bad", "Badge iso"]) await deleteTweak(warmSend, dir);
         await warm.evaluate(() => new Promise((r) => chrome.runtime.sendMessage({ type: "clearScriptError", scriptId: "s_badgebad" }, r)));
         // onSite code uses the script's imports and top-level declarations in the page world
-        await save("s_evcaplib", "evcap-lib", `export function mark(v: string) { (window as any).__evcap = v; }`);
+        await save("s_evcaplib", "Eval capture", `export function mark(v: string) { (window as any).__evcap = v; }`, "evcap-lib");
         await save(
             "s_evcap",
-            "Eval capture.tangitweak",
+            "Eval capture",
             `import { tweak } from "tangitweak"; import { mark } from "./evcap-lib";
             const SUFFIX = "-ok";
             const suffixed = (v: string) => v + SUFFIX;
@@ -1240,11 +1193,11 @@ tweak.replaceResponse({ url: "${ORIGIN}/sf-data", strategy: "page" }, async () =
             evcap = await bp.evaluate(() => ({ page: (window as any).__evcap, iso: document.documentElement.dataset.evcap })).catch(() => null);
         }
         check("onSite: its functions use the script's imports and top-level helpers in the page world; onPage awaits them (promise-returning too)", evcap?.page === "v1-ok-ret" && evcap?.iso === "v1-ok-ret", JSON.stringify(evcap));
-        for (const id of ["s_evcap", "s_evcaplib"]) await warm.evaluate((id: string) => new Promise((r) => chrome.runtime.sendMessage({ type: "deleteScript", id }, r)), id);
+        await deleteTweak(warmSend, "Eval capture");
         // isolated code at document_start calls an onSite handler's functions (it answers once ready)
         await save(
             "s_pagecall",
-            "Page call.tangitweak",
+            "Page call",
             `import { tweak } from "tangitweak"; const page = tweak.onSite({ url: "*://*:*/page-badge*", when: "document_start" }, async () => {
                 (window as any).__pagecallMark = 1;
                 await new Promise((r) => setTimeout(r, 50));
@@ -1261,7 +1214,7 @@ tweak.replaceResponse({ url: "${ORIGIN}/sf-data", strategy: "page" }, async () =
             pagecall = await bp.evaluate(() => document.documentElement.dataset.pagecall).catch(() => null);
         }
         check("onPage: isolated code calls an onSite handler's functions at document_start", pagecall === "main:number", String(pagecall));
-        await warm.evaluate(() => new Promise((r) => chrome.runtime.sendMessage({ type: "deleteScript", id: "s_pagecall" }, r)));
+        await deleteTweak(warmSend, "Page call");
         // an onSite handle not on this page fails at once; a save that puts it here answers the onPage code's call
         const hotCall = (where: string) =>
             `import { tweak } from "tangitweak"; const site = tweak.onSite("*://*:*/${where}*", () => ({ who: () => "site-${where}" }));
@@ -1270,7 +1223,7 @@ tweak.replaceResponse({ url: "${ORIGIN}/sf-data", strategy: "page" }, async () =
                 const r = await site.who().catch((e: any) => e.message);
                 document.documentElement.dataset.hotcall = r + "|" + (Date.now() - t < 1500 ? "fast" : "slow");
             });`;
-        await save("s_hotcall", "Hot call.tangitweak", hotCall("nowhere"));
+        await save("s_hotcall", "Hot call", hotCall("nowhere"));
         let hotcall: any = null;
         for (let i = 0; i < 40 && !hotcall; i++) {
             if (i % 8 === 0) await bp.reload();
@@ -1278,11 +1231,11 @@ tweak.replaceResponse({ url: "${ORIGIN}/sf-data", strategy: "page" }, async () =
             hotcall = await bp.evaluate(() => document.documentElement.dataset.hotcall).catch(() => null);
         }
         check("onPage: a call to an onSite handle that isn't on the page fails at once", /not running on this page\|fast$/.test(String(hotcall)), String(hotcall));
-        await save("s_hotcall", "Hot call.tangitweak", hotCall("page-badge"));
+        await save("s_hotcall", "Hot call", hotCall("page-badge"));
         await bp.waitForFunction(() => /^site-page-badge/.test(document.documentElement.dataset.hotcall || ""), null, { timeout: 10000 }).catch(() => {});
         hotcall = await bp.evaluate(() => document.documentElement.dataset.hotcall).catch(() => null);
         check("onPage: a save that brings the onSite code to the open page answers its call (no reload)", hotcall === "site-page-badge|fast", String(hotcall));
-        await warm.evaluate(() => new Promise((r) => chrome.runtime.sendMessage({ type: "deleteScript", id: "s_hotcall" }, r)));
+        await deleteTweak(warmSend, "Hot call");
         await bp.close();
     }
 
@@ -1292,6 +1245,7 @@ tweak.replaceResponse({ url: "${ORIGIN}/sf-data", strategy: "page" }, async () =
     const fPage = await ctx.newPage();
     await fPage.goto(`chrome-extension://${extId}/editor.html`);
     await fPage.waitForFunction(() => (window as any).monaco?.editor.getEditors().length === 1, null, { timeout: 20000 });
+    const fSend = (msg: any): Promise<any> => fPage.evaluate((m: any) => new Promise((r) => chrome.runtime.sendMessage(m, (x: any) => r(x ?? null))), msg);
     const adopted = await fPage.evaluate(async () => {
         const root = await navigator.storage.getDirectory();
         return await (window as any).__resAdoptFolder(root);
@@ -1306,64 +1260,70 @@ tweak.replaceResponse({ url: "${ORIGIN}/sf-data", strategy: "page" }, async () =
         new MutationObserver(() => seen.push(btn.getAttribute("data-state") || "")).observe(btn, { attributes: true, attributeFilter: ["data-state"] });
     });
 
-    const opfsText = (name: string): Promise<string | null> =>
-        fPage.evaluate(async (n: string) => {
+    /** a file in the synced (OPFS) folder by its path; null when it isn't there */
+    const opfsText = (path: string): Promise<string | null> =>
+        fPage.evaluate(async (p: string) => {
             try {
-                const fh = await (await navigator.storage.getDirectory()).getFileHandle(n);
+                const parts = p.split("/");
+                let dir = await navigator.storage.getDirectory();
+                for (const d of parts.slice(0, -1)) dir = await dir.getDirectoryHandle(d);
+                const fh = await dir.getFileHandle(parts[parts.length - 1]);
                 return await (await fh.getFile()).text();
             } catch {
                 return null;
             }
-        }, name);
-    const opfsWrite = (name: string, text: string): Promise<void> =>
-        fPage.evaluate(async ([n, t]: [string, string]) => {
-            const fh = await (await navigator.storage.getDirectory()).getFileHandle(n, { create: true });
+        }, path);
+    const opfsWrite = (path: string, text: string): Promise<void> =>
+        fPage.evaluate(async ([p, t]: [string, string]) => {
+            const parts = p.split("/");
+            let dir = await navigator.storage.getDirectory();
+            for (const d of parts.slice(0, -1)) dir = await dir.getDirectoryHandle(d, { create: true });
+            const fh = await dir.getFileHandle(parts[parts.length - 1], { create: true });
             const w = await (fh as any).createWritable();
             await w.write(t);
             await w.close();
-        }, [name, text] as any);
+        }, [path, text] as any);
 
-    // GUI change → settings.json and settings.schema.json in the folder
-    await fPage.evaluate(() => new Promise((r) => chrome.runtime.sendMessage({
-        type: "saveScript", id: "s_sync", name: "Sync guinea.tangitweak",
-        code: 'import { tweak } from "tangitweak"; tweak.params({ token: { type: "string", default: "abc", description: "Sync token" } });\ntweak.onRequest({ url: "*://sync.invalid/*", strategy: "page" }, () => {});\n',
-    }, r)));
+    // GUI change → settings.json and settings.schema.json in the folder; the tweak's settings in its data folder
+    await saveTweak(fSend, "s_sync", "Sync guinea", 'import { tweak } from "tangitweak"; tweak.params({ token: { type: "string", default: "abc", description: "Sync token" } });\ntweak.onRequest({ url: "*://sync.invalid/*", strategy: "page" }, () => {});\n');
     await fPage.waitForTimeout(2500); // export debounce + SW poller cadence
     const json1 = await opfsText("settings.json");
     check("MV3 folder sync: settings.json exported to the folder", typeof json1 === "string" && json1.trim().startsWith("{"), (json1 || "MISSING").slice(0, 160));
 
     const schema1 = JSON.parse((await opfsText("settings.schema.json")) || "{}");
-    check("MV3 folder sync: settings.schema.json types each script's params (VS Code completion)",
-        schema1?.properties?.scripts?.properties?.["Sync guinea.tangitweak.ts"]?.properties?.token?.default === "abc", JSON.stringify(schema1?.properties?.scripts?.properties ?? {}).slice(0, 160));
+    check("MV3 folder sync: settings.schema.json exported (TangiTweak's own settings, no scripts)", !!schema1?.properties && !schema1.properties.scripts, JSON.stringify(Object.keys(schema1?.properties ?? {})).slice(0, 160));
+    const tweakSettings1 = await opfsText("Sync guinea/.tweak/settings.json");
+    check("MV3 folder sync: the tweak's .tweak/settings.json exported", JSON.parse(tweakSettings1 || "{}")?.enabled === true, tweakSettings1 || "MISSING");
 
-    // external whole-file edit applies to storage
-    await opfsWrite("settings.json", JSON.stringify({ scripts: { "Sync guinea.tangitweak.ts": { token: "xyz" } } }, null, 2) + "\n");
+    // an external edit of the tweak's settings applies to storage
+    await opfsWrite("Sync guinea/.tweak/settings.json", JSON.stringify({ enabled: true, params: { token: "xyz" } }, null, 2) + "\n");
     await fPage.waitForTimeout(2500);
-    const p1 = await fPage.evaluate(() => new Promise((r) => chrome.runtime.sendMessage({ type: "getScriptParams", scriptId: "s_sync" }, r)));
-    check("MV3 folder sync: external settings.json edit applied", (p1 as any)?.values?.token === "xyz", JSON.stringify(p1));
+    const p1 = await fSend({ type: "getScriptParams", scriptId: "s_sync" });
+    check("MV3 folder sync: external .tweak/settings.json edit applied", (p1 as any)?.values?.token === "xyz", JSON.stringify(p1));
     const syncStates = await fPage.evaluate(() => (window as any).__syncStates as string[]);
     check("folder sync button: connected, then shows sending and receiving", syncStates[0] !== "off" && syncStates.includes("sending") && syncStates.includes("receiving") && syncStates.at(-1) === "connected", JSON.stringify(syncStates));
 
     // whole-file sync: a disk edit reaches the manager's open editor
-    await fPage.locator(".script-item", { hasText: "settings.json" }).click();
+    await fPage.locator('.script-item[data-id="__settings__"]').click();
     await fPage.waitForFunction(() => (window as any).monaco.editor.getEditors()[0].getModel()?.uri.toString() === "file:///settings.json");
-    const diskText = JSON.stringify({ logLevel: "warn", scripts: { "Sync guinea.tangitweak.ts": { token: "xyz" } } }, null, 2) + "\n";
+    const diskText = JSON.stringify({ logLevel: "warn" }, null, 2) + "\n";
     await opfsWrite("settings.json", diskText);
     await fPage.waitForTimeout(2500);
     const mgrText = await fPage.evaluate(() => (window as any).monaco.editor.getEditors()[0].getValue());
     check("MV3 folder sync: disk settings.json reaches the Editor", mgrText === diskText, JSON.stringify(mgrText).slice(0, 200));
 
     // …and the other way: a manager save lands in the file
-    const savedText = JSON.stringify({ logLevel: "error", scripts: { "Sync guinea.tangitweak.ts": { token: "xyz" } } }, null, 2) + "\n";
+    const savedText = JSON.stringify({ logLevel: "error" }, null, 2) + "\n";
     await fPage.evaluate((t: string) => new Promise((r) => chrome.runtime.sendMessage({ type: "applySettingsJson", text: t }, r)), savedText);
     await fPage.waitForTimeout(500);
     check("MV3 folder sync: manager settings.json save written to disk", (await opfsText("settings.json")) === savedText);
 
-    // a new .ts file in the folder inserts a script
-    await opfsWrite("imported-sync.ts", 'import { tweak } from "tangitweak"; tweak.onRequest({ url: "*://imported.invalid/*", strategy: "page" }, () => {});\n');
+    // a new tweak folder (package.json + index.ts) inserts a script
+    await opfsWrite("imported-sync/package.json", bundlePkg("imported-sync"));
+    await opfsWrite("imported-sync/index.ts", 'import { tweak } from "tangitweak"; tweak.onRequest({ url: "*://imported.invalid/*", strategy: "page" }, () => {});\n');
     await fPage.waitForTimeout(2500);
     const flist = await fPage.evaluate(() => new Promise((r) => chrome.runtime.sendMessage({ type: "listScripts" }, r)));
-    check("MV3 folder sync: external .ts file became a script", (flist as any[]).some((s) => s.meta?.name === "imported-sync"), JSON.stringify((flist as any[]).map((s) => s.meta?.name)));
+    check("MV3 folder sync: external .ts file became a script", (flist as any[]).some((s) => s.meta?.name === "imported-sync/index"), JSON.stringify((flist as any[]).map((s) => s.meta?.name)));
 
     // the SW gets reaped (idle, sleep, update): a file copied in while it is
     // down must still be imported once it restarts (it used to be absorbed)
@@ -1371,31 +1331,29 @@ tweak.replaceResponse({ url: "${ORIGIN}/sf-data", strategy: "page" }, async () =
     await swCdp.send("ServiceWorker.enable");
     await swCdp.send("ServiceWorker.stopAllWorkers");
     await fPage.waitForTimeout(500);
-    await opfsWrite("while-asleep.ts", 'import { tweak } from "tangitweak"; tweak.onRequest({ url: "*://asleep.invalid/*", strategy: "page" }, () => {});\n');
+    await opfsWrite("while-asleep/package.json", bundlePkg("while-asleep"));
+    await opfsWrite("while-asleep/index.ts", 'import { tweak } from "tangitweak"; tweak.onRequest({ url: "*://asleep.invalid/*", strategy: "page" }, () => {});\n');
     await fPage.evaluate(() => new Promise((r) => chrome.runtime.sendMessage({ type: "folderSyncStatus" }, r))); // wakes the SW
     await fPage.waitForTimeout(2500);
     const flist2 = await fPage.evaluate(() => new Promise((r) => chrome.runtime.sendMessage({ type: "listScripts" }, r)));
-    check("MV3 folder sync: file copied in while the SW was stopped is imported after restart", (flist2 as any[]).some((s) => s.meta?.name === "while-asleep"), JSON.stringify((flist2 as any[]).map((s) => s.meta?.name)));
+    check("MV3 folder sync: file copied in while the SW was stopped is imported after restart", (flist2 as any[]).some((s) => s.meta?.name === "while-asleep/index"), JSON.stringify((flist2 as any[]).map((s) => s.meta?.name)));
 
     // scripts saved outside the editor (Import…) land in the folder, and an
     // importer saved before its library re-checks once the library appears
-    const saveMsg = (id: string, name: string, code: string) =>
-        fPage.evaluate((m: any) => new Promise((r) => chrome.runtime.sendMessage(m, r)), { type: "saveScript", id, name, code });
-    await saveMsg("s_late_user", "late-user", 'import { tweak } from "tangitweak"; import { late } from "./late-lib";\ntweak.onRequest({ url: "*://late.invalid/*", strategy: "page" }, () => {});\nlate();\n');
+    await saveTweak(fSend, "s_late_user", "late", 'import { tweak } from "tangitweak"; import { late } from "./late-lib";\ntweak.onRequest({ url: "*://late.invalid/*", strategy: "page" }, () => {});\nlate();\n');
     await fPage.waitForTimeout(2500);
-    await saveMsg("s_late_lib", "late-lib", "export function late(): void {}\n");
+    await saveTweak(fSend, "s_late_lib", "late", "export function late(): void {}\n", { file: "late-lib" });
     await fPage.waitForTimeout(3500);
     check("MV3 folder sync: scripts saved outside the editor are written to the folder",
-        (await opfsText("late-user.ts"))?.includes("./late-lib") === true && (await opfsText("late-lib.ts"))?.includes("late()") === true);
+        (await opfsText("late/index.ts"))?.includes("./late-lib") === true && (await opfsText("late/late-lib.ts"))?.includes("late()") === true);
     const lateList = (await fPage.evaluate(() => new Promise((r) => chrome.runtime.sendMessage({ type: "listScripts" }, r)))) as any[];
-    const lateUser = lateList.find((s) => s.meta?.name === "late-user");
+    const lateUser = lateList.find((s) => s.meta?.name === "late/index");
     check("importer saved before its library: 'Cannot find module' clears once the library exists",
         !!lateUser && !(lateUser.typeErrors || []).length, JSON.stringify(lateUser?.typeErrors));
-    await fPage.evaluate(() => new Promise((r) => chrome.runtime.sendMessage({ type: "deleteScript", id: "s_sync" }, r)));
+    await deleteTweak(fSend, "Sync guinea");
     await fPage.waitForTimeout(2500);
-    const jsonDel = JSON.parse((await opfsText("settings.json")) || "{}");
-    check("MV3 folder sync: a deleted script's settings.json entry is removed",
-        !jsonDel?.scripts?.["Sync guinea.tangitweak.ts"], JSON.stringify(jsonDel));
+    const tweakSettingsDel = await opfsText("Sync guinea/.tweak/settings.json");
+    check("MV3 folder sync: a deleted tweak's .tweak/settings.json is removed", tweakSettingsDel === null, String(tweakSettingsDel));
     await fPage.close();
 
     // many interdependent scripts: while the Editor loads them, none is
@@ -1406,14 +1364,13 @@ tweak.replaceResponse({ url: "${ORIGIN}/sf-data", strategy: "page" }, async () =
     await sPage.waitForFunction(() => (window as any).monaco?.editor.getEditors().length === 1, null, { timeout: 20000 });
     const sSend = (m: any) => sPage.evaluate((m: any) => new Promise<any>((r) => chrome.runtime.sendMessage(m, r)), m);
     const SN = 8;
-    const settleIds: string[] = [];
+    // one tweak (an entry, so its package.json isn't flagged): its lib/ and app/ modules import each other inside the bundle
+    await saveTweak(sSend, "s_sentry", "settle", "export {};\n");
     for (let i = 0; i < SN; i++) {
-        settleIds.push(`s_sl${i}`, `s_sa${i}`);
         await sSend({ type: "saveScript", id: `s_sl${i}`, name: `settle/lib/l${i}`, code: `${i ? `import { f${i - 1} } from "./l${i - 1}";\n` : ""}export function f${i}(): number { return ${i ? `1 + f${i - 1}()` : "0"}; }\n` });
     }
     for (let i = 0; i < SN; i++)
         await sSend({ type: "saveScript", id: `s_sa${i}`, name: `settle/app/a${i}`, code: `import { tweak } from "tangitweak"; import { f${SN - 1} } from "../lib/l${SN - 1}";\n${i < SN - 1 ? `import { f${i} } from "../lib/l${i}";` : ""}\ntweak.onRequest({ url: "*://settle.invalid/*", strategy: "page" }, () => { console.log(f${SN - 1}() + f${i}()); });\n` });
-    settleIds.push("s_sbad");
     await sSend({ type: "saveScript", id: "s_sbad", name: "settle/app/bad", code: `import { q } from "../lib/nope";\nconsole.log(q);\n` });
     await sPage.waitForTimeout(4000);
     await sPage.reload();
@@ -1428,7 +1385,7 @@ tweak.replaceResponse({ url: "${ORIGIN}/sf-data", strategy: "page" }, async () =
     const wrongly = [...settleSeen].filter((x) => !/^.{0,4}bad/.test(x));
     check("Editor loading many interdependent scripts: none is briefly flagged with a 'Cannot find module' it doesn't have", !wrongly.length, wrongly.join(" | "));
     check("Editor loading many interdependent scripts: a genuinely missing import stays flagged", badMissing === 0 && [...settleSeen].some((x) => /bad/.test(x)), `${badMissing} samples without it; seen: ${[...settleSeen].join(" | ")}`);
-    for (const id of settleIds) await sSend({ type: "deleteScript", id });
+    await deleteTweak(sSend, "settle");
     await sPage.close();
 } catch (e) {
     failed++;
