@@ -53,7 +53,7 @@ export type UiQueries = {
 export interface GotoOptions {
     /** The website's own `<body>` HTML. */
     html?: string;
-    /** The page's Content-Security-Policy (§6.7 of the plan: `onSite` falls back when it forbids eval). */
+    /** The page's Content-Security-Policy: where it forbids eval (Firefox, Chromium MV2), `onSite` runs in the isolated world, with a problem. */
     csp?: string;
     /** How far the page has loaded (default `"document_end"`). */
     phase?: DocumentWhen;

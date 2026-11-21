@@ -17,6 +17,9 @@ its section below.
 - Folder Sync writes the running build's SDK to `.tangitweak/sdk/tangitweak/` (`package.json`, `index.d.ts`, `tsconfig.json`) and lists it as the root `package.json`'s `tangitweak` devDependency, so a tweak's `tsconfig.json` and its `"tangitweak"` import resolve after `npm install`. A tweak's own `package.json`, `tsconfig.json` and `.gitignore` sync as its data files.
 - **A tweak's data folder**, `.tweak` by default: `.tweak/settings.json` holds its enable switch and the params you changed from their defaults, and `.tweak/stores/<id>.json` holds each persisted `tweak.globalStore("<id>", …)`. The Explorer lists them inside the tweak's folder and Folder Sync mirrors them both ways; an invalid file is reported and neither applied nor overwritten ([docs](docs/editor.md#a-tweaks-data-folder)).
 - **Settings → Tweaks → Tweak data folder** (`"dataFolder"` in `settings.json`) names that folder; changing it renames it in every tweak.
+- **`"tangitweak/test"`**, replacing `@tangitweak/test`: Vitest's `test` with `page`, `browser`, `net`, `tweak` and `mount` fixtures, and `createTweakTest({ params, entry, browser, realLimits, mocks })` for others. A test finds its tweak from the nearest `package.json` with a `"tangitweak"` block, and each test gets its own copy of the tweak and its stores (so `test.concurrent` works), each tab its own document. `mount("features/x/Panel")` renders one component through TangiTweak's compiler; `renderTweak(<Panel />, { stores })` is React Testing Library's `render` with store seeds and a reset after each test ([docs](docs/testing.md)).
+- **Tests follow each strategy's real limits:** `net.request` walks a request through `page → rules → extension → debugger → helper` as the chosen browser (`"chrome"`, `"chromium-mv2"`, `"firefox"`) would, and the result's `skipped` and `decidedBy` say which handlers didn't run and why, and which one decided. `realLimits: false` runs every handler in one chain as before.
+- **Tests catch browser differences:** the tweak sees no Node globals (`Buffer`, `process`, …), `rules` regexes are checked with RE2 (`re2js`) and the rule counts with Chrome's limits, `onSite` and `onPage` have separate window globals, `page.goto(url, { csp })` applies a page's CSP, and `res.skipped` warns that the `debugger` may miss a new tab's first page load. npm packages in tests come from `node_modules`, resolved as the extension resolves them ([docs](docs/testing.md#browser-differences-the-tests-catch)).
 - **Export…** has **Include my settings and saved data**, off by default, to add each tweak's data folder to the zip; **Import…** lists a zip's data folder files in their tweak's folder.
 
 ### Changed
@@ -27,6 +30,7 @@ its section below.
 - **New Script…** and **Install Script…** are now **New Tweak…** and **Install Tweak…**.
 - Installing or updating a tweak never takes a package's data folder (or any dot folder) and never overwrites the tweak's settings or saved stores.
 - A synced folder's root `package.json` and `tsconfig*.json`, and `package-lock.json` / `jsconfig.json` anywhere, are left alone; Folder Sync's typings for downloaded packages skip `.tangitweak/sdk/`.
+- `loadTweak`'s `simulate` follows the strategies' real limits by default (`realLimits: false` for the old single chain), and `openPage` takes `setup(window)` for the website's own globals instead of the test setting them on a shared window.
 
 ### Removed
 
@@ -40,6 +44,7 @@ its section below.
 ### Fixed
 
 - A package's Node.js built-in fallback (`"events": "npm:events@^3"` in a tweak's dependencies) is resolved per tweak: two tweaks mapping the same built-in to different packages each get their own, instead of the first one's.
+- In tests, a `tweak.tabStore` survives a reload of its tab; it was per page.
 
 ## [0.37.0-alpha] - 2026-11-15
 

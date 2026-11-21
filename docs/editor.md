@@ -430,7 +430,7 @@ TypeScript completions; saves hot apply instantly. The typings of
 `.tangitweak/types/`, which TangiTweak owns: it rewrites and prunes them as
 scripts change. The built-ins' (`valtio`, `react`, `react-dom`) go to
 `.tangitweak/types/builtin/`, so their imports resolve there too, and the
-[script test harness](testing.md) (`@tangitweak/test`) goes to
+low-level [test loader](testing.md#loadtweak-the-low-level-api) (`@tangitweak/test`) goes to
 `.tangitweak/test/`. The running build's SDK goes to
 `.tangitweak/sdk/tangitweak/` (a `package.json`, its `index.d.ts` and the
 `tsconfig.json` tweaks extend), and the root `package.json` lists it as the
