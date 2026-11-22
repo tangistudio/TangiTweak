@@ -59,8 +59,10 @@ install page warns, and background auto-updates wait for review. When the
 dependency isn't a version range (a `file:` path, a git URL), set
 `"minTangiTweakVersion"` in the `"tangitweak"` block instead. Without either,
 any version will do.
-`connect` lists the hosts its `tweak.fetch` calls reach. An update that
-adds one waits for your approval.
+`connect` lists the hosts its `tweak.fetch` calls reach. `onPage` code can
+fetch only these hosts and their subdomains
+([why](scripting.md#tweakfetch)). An update that adds one waits for your
+approval.
 `updateURL` is where updates come from, instead of where the tweak was
 installed from. It takes any URL the install page reads, as listed in the table under
 [Install a tweak](#install-a-tweak): a `package.json`, `.ts` or `.zip` URL, a GitHub

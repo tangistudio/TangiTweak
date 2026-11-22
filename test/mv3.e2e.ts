@@ -1190,7 +1190,26 @@ tweak.replaceResponse({ url: "${ORIGIN}/sf-data", strategy: "page" }, async () =
         }
         check("onPage: errors from its timers and unawaited promises are the script's errors, the page's own aren't", caught.length === uncaught.length && !pageOwn, JSON.stringify({ caught, pageOwn }));
         await warm.evaluate(() => new Promise((r) => chrome.runtime.sendMessage({ type: "clearScriptError", scriptId: "s_uncaught" }, r)));
-        for (const dir of ["Eval errs", "Uncaught errs", "Badge bad", "Badge iso"]) await deleteTweak(warmSend, dir);
+        // onPage's tweak.fetch: the background fetches, to "tangitweak.connect" hosts only
+        await warmSend({ type: "saveDataFile", path: "Page fetch/package.json", text: bundlePkg("page-fetch", { tangitweak: { connect: ["localhost"] } }) });
+        await save(
+            "s_pagefetch",
+            "Page fetch",
+            `import { tweak } from "tangitweak";
+            tweak.onPage("*://*:*/page-badge*", async () => {
+                const d = document.documentElement.dataset;
+                d.pfAllowed = (await (await tweak.fetch("http://localhost:${PORT}/data")).json()).value;
+                d.pfDenied = await tweak.fetch("/data").then(() => "fetched", (e) => String(e?.message ?? e));
+            });`
+        );
+        let pf: any = null;
+        for (let i = 0; i < 40 && !pf?.denied; i++) {
+            if (i % 8 === 0) await bp.reload();
+            await warm.waitForTimeout(250);
+            pf = await bp.evaluate(() => ({ allowed: document.documentElement.dataset.pfAllowed, denied: document.documentElement.dataset.pfDenied }));
+        }
+        check("onPage: tweak.fetch reaches a connect host (no CORS) and names a host that isn't one", pf?.allowed === "ORIGINAL" && /tangitweak\.connect.*add "127\.0\.0\.1"/.test(pf?.denied ?? ""), JSON.stringify(pf));
+        for (const dir of ["Eval errs", "Uncaught errs", "Badge bad", "Badge iso", "Page fetch"]) await deleteTweak(warmSend, dir);
         await warm.evaluate(() => new Promise((r) => chrome.runtime.sendMessage({ type: "clearScriptError", scriptId: "s_badgebad" }, r)));
         // onSite code uses the script's imports and top-level declarations in the page world
         await save("s_evcaplib", "Eval capture", `export function mark(v: string) { (window as any).__evcap = v; }`, "evcap-lib");

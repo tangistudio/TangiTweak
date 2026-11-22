@@ -32,7 +32,7 @@ import { dlogLevel } from "../../shared/debugLog";
 import { routeMatches, sampleUrl, type RouteMeta } from "../../shared/route";
 import { shippedLibIds, type ShippedLib } from "../../shared/scriptImports";
 import { tabScopeOfPage } from "../../shared/storeOps";
-import { fetchFor, storeOwner } from "./stores";
+import { fetchFor, pageFetchFor, storeOwner } from "./stores";
 import { reactChunkSource } from "../reactChunk";
 import { pages, pagesReady } from "./pages";
 import { addBypass, addBypassRule } from "./bypass";
@@ -303,6 +303,11 @@ export function serveLink(link: BridgeLink): void {
         if (!(await deps.isoScripts?.(url, link.frameId === 0))?.has(s)) throw new Error("iso.stores: this script has no isolated onPage code here");
         return grantStores("iso.stores", isoGrants, s, url);
     });
+    link.ep.handle("iso.fetch", async ({ url, request, bypass }, s) => {
+        if (__MV3__ || s === undefined || typeof url !== "string" || !sameOrigin(url, link.port.sender?.url)) throw new Error("iso.fetch: refused");
+        if (!(await deps.isoScripts?.(url, link.frameId === 0))?.has(s)) throw new Error("iso.fetch: this script has no isolated onPage code here");
+        return pageFetchFor(s, request, !!bypass);
+    });
 
     link.ep.handle("overlay.open", async ({ nonce, url }, s) => {
         if (s === undefined || link.frameId !== 0) throw new Error("overlay.open: overlays are top-frame only");
@@ -471,6 +476,10 @@ export function serveIsoLink(link: IsoLink): void {
         if (!bound(s)) throw new Error("param.set: refused");
         await deps.paramSet?.(s, key, value, lib);
         return {};
+    });
+    ep.handle("fetch", (a, s) => {
+        if (!bound(s)) throw new Error("fetch: refused");
+        return pageFetchFor(s, a.request, !!a.bypass);
     });
     // isolated code calls its overlay (top frame only)
     ep.on("rpc.call", (call, s) => {

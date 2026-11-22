@@ -153,6 +153,8 @@ export interface WireOps {
      * go over L2 tagged `ISO_STORE_TAG + s` (the overlay's are tagged `s`).
      */
     "iso.stores": { req: { url: string }; res: {} };
+    /** MV2: isolated onPage code's `tweak.fetch` (to its `"tangitweak.connect"` hosts only) */
+    "iso.fetch": { req: { url: string; request: WireRequest; bypass: boolean }; res: WireResponse };
     /** L6: this world's onPage code ran on its document (tags the document's Network row) */
     ran: { push: { api: "onPage"; name: string } };
     /** L6: scripts changed: load again, re-run when the code hash moved */

@@ -156,6 +156,25 @@ export function parseManifest(text: string, where = MANIFEST_FILE): Manifest {
     return out;
 }
 
+/** a package.json's `"tangitweak.connect"` hosts (lower case), or none when it has no valid list */
+export function connectOf(pkg: any): string[] {
+    const list = isObject(pkg) && isObject(pkg.tangitweak) ? pkg.tangitweak.connect : undefined;
+    return Array.isArray(list) ? [...new Set(list.filter((h): h is string => typeof h === "string").map((h) => h.trim().toLowerCase()).filter(Boolean))] : [];
+}
+
+/** whether `connect` lets a tweak reach `url`: an http(s) URL whose host is a listed one or a subdomain of one */
+export function connectAllows(connect: readonly string[], url: string): boolean {
+    let host: string;
+    try {
+        const u = new URL(url);
+        if (u.protocol !== "https:" && u.protocol !== "http:") return false;
+        host = u.hostname.toLowerCase();
+    } catch {
+        return false;
+    }
+    return connect.some((h) => host === h || host.endsWith("." + h));
+}
+
 /** package.json's JSON schema for the `"tangitweak"` block and the fields TangiTweak reads: the Editor's completions and checks */
 export const MANIFEST_SCHEMA = {
     type: "object",
@@ -173,7 +192,7 @@ export const MANIFEST_SCHEMA = {
             properties: {
                 displayName: { type: "string", description: "The name shown in the Explorer, the popup and when installing" },
                 icon: { type: "string", description: "Icon shown in the Explorer and popup: a relative .svg/.png/… file path in this folder, a data: or https:// URL, or inline <svg>" },
-                connect: { type: "array", items: { type: "string" }, uniqueItems: true, description: "Hosts the tweak's tweak.fetch calls reach; an update that adds one waits for review" },
+                connect: { type: "array", items: { type: "string" }, uniqueItems: true, description: "Hosts the tweak's tweak.fetch calls reach (onPage code can reach only these, and their subdomains); an update that adds one waits for review" },
                 updateURL: {
                     type: "string",
                     description: "Where updates come from instead of where it was installed from: a package.json or .zip URL, a GitHub folder, a gist (an update that changes it waits for review)",

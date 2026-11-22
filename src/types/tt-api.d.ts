@@ -858,7 +858,7 @@ declare namespace TangiTweak {
          * from it too. An update that changes it waits for review.
          */
         updateURL?: string;
-        /** hosts the bundle's tweak.fetch calls reach — an update that adds one waits for review */
+        /** hosts the bundle's tweak.fetch calls reach (onPage code: only these and their subdomains) — an update that adds one waits for review */
         connect?: string[];
     }
 
@@ -1465,6 +1465,11 @@ declare namespace TangiTweak {
          * extension's host permissions (no CORS) and the browser's cookies.
          * `bypass: true` keeps every script's handlers — this one's too — off
          * the request, e.g. to get the real response a mock replaces.
+         *
+         * In `onPage` code it reaches only the hosts in package.json's
+         * `"tangitweak.connect"` and their subdomains (the page's process
+         * runs that code, so it can't send the background anywhere else).
+         * In `onSite` code it rejects: use the page's `fetch`.
          *
          * @example
          * const real = await (await tweak.fetch("https://api.example.com/user", { bypass: true })).json();

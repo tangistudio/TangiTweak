@@ -3,7 +3,7 @@ import { describe, it, expect } from "vitest";
 import "../src/shared/transpile";
 import { compileWithLibs } from "../src/shared/compile";
 import { fileExtension } from "../src/shared/scriptName";
-import { compareVersions, highestVersion, isBundlePackageJson, minTangiTweakOf, minTangiTweakProblem, parseManifest, rangeMinimum } from "../src/shared/packageMetadata";
+import { compareVersions, connectAllows, connectOf, highestVersion, isBundlePackageJson, minTangiTweakOf, minTangiTweakProblem, parseManifest, rangeMinimum } from "../src/shared/packageMetadata";
 import { resolveWorkspaceIcons } from "../src/shared/packageModel";
 
 const SCRIPT = `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*://example.com/*", strategy: "extension" }, () => {});`;
@@ -121,5 +121,18 @@ describe("package metadata", () => {
         expect(minTangiTweakProblem("0.36.0", "0.35.0-alpha")).toBe("Requires TangiTweak 0.36.0 or newer (you have 0.35.0-alpha).");
         expect(minTangiTweakProblem("0.10.0", "0.9.5")).toMatch(/Requires TangiTweak 0\.10\.0/);
         expect(highestVersion(["0.32.0", undefined, "0.36.1", "0.35.0"])).toBe("0.36.1");
+    });
+});
+
+describe("connect (onPage tweak.fetch's hosts)", () => {
+    it("allows listed hosts and their subdomains over http(s) only", () => {
+        const connect = connectOf({ tangitweak: { connect: [" Mail.Google.com ", 3, "example.com"] } });
+        expect(connect).toEqual(["mail.google.com", "example.com"]);
+        expect(connectAllows(connect, "https://mail.google.com/mail/u/0")).toBe(true);
+        expect(connectAllows(connect, "https://api.example.com/x")).toBe(true);
+        expect(connectAllows(connect, "https://evilexample.com/")).toBe(false);
+        expect(connectAllows(connect, "https://example.com.evil.net/")).toBe(false);
+        expect(connectAllows(connect, "ftp://example.com/")).toBe(false);
+        expect(connectAllows(connectOf({ dependencies: { tangitweak: "*" } }), "https://example.com/")).toBe(false);
     });
 });

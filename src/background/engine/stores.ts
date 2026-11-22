@@ -16,6 +16,9 @@ import { StoreOwner } from "./storeOwner";
 import { log } from "./logs";
 import { scriptStorageAll, scriptStorageSet, scriptStorageDelete, getScript, listScripts, onScriptsChanged } from "./scriptStore";
 import { backgroundFetch } from "./ttFetch";
+import { ensureDataFiles } from "./dataFiles";
+import { bundleOf, dataReader } from "../../shared/tweakBundle";
+import { connectAllows, connectOf } from "../../shared/packageMetadata";
 import { pages, pagesReady } from "./pages";
 
 const ownerLog = (s: string, msg: string, level: "info" | "warn" | "error") => log(-1, msg, level, s);
@@ -111,6 +114,26 @@ async function nameOf(scriptId: string): Promise<string> {
 /** `tweak.fetch(..., { from: "background" })` for a script */
 export async function fetchFor(scriptId: string, request: WireRequest, bypass: boolean): Promise<WireResponse> {
     return backgroundFetch(request, { bypass, scriptId, scriptName: await nameOf(scriptId) });
+}
+
+/**
+ * onPage code's `tweak.fetch`: only to the hosts its package.json's
+ * `"tangitweak.connect"` lists (and their subdomains). onPage code runs in
+ * the page's renderer, which a compromised page could take over, so the
+ * background must not fetch anywhere it's asked from there.
+ */
+export async function pageFetchFor(scriptId: string, request: WireRequest, bypass: boolean): Promise<WireResponse> {
+    const script = await getScript(scriptId);
+    if (!script) throw new Error("tweak.fetch: this tweak is gone");
+    const connect = connectOf(bundleOf(script.meta.name, dataReader(await ensureDataFiles()))?.pkg);
+    if (!connectAllows(connect, request.url)) {
+        let host = request.url;
+        try {
+            host = new URL(request.url).hostname;
+        } catch {}
+        throw new Error(`tweak.fetch in onPage code reaches only the hosts in package.json's "tangitweak.connect" (and their subdomains) — add "${host}" to it`);
+    }
+    return backgroundFetch(request, { bypass, scriptId, scriptName: script.meta.name });
 }
 
 // ---- MV2: the in-process hub ----

@@ -937,8 +937,21 @@ tweak.replaceResponse({ url: "*://api.example.com/user", strategy: "helper" }, a
   as the page — its origin, cookies and CORS rules — and works only in
   [overlays](#overlays--wtonoverlay), where it's the default (relative URLs
   resolve against the page); in handlers it rejects.
-- `onSite` and `onPage` code has no `tweak.fetch` (it rejects): use `fetch`,
-  or call a function of the overlay.
+- **`onPage` code reaches only the hosts in its `package.json`'s
+  `"tangitweak.connect"`** (and their subdomains: `"example.com"` also
+  allows `api.example.com`). Any other host rejects, naming the host to
+  add. That's because `onPage` code runs in the page's process: a page that
+  takes it over could ask the background to fetch anything with your
+  cookies, so the tweak says up front where it fetches, and an update that
+  adds a host waits for your review. Relative URLs resolve against the page.
+  `from: "page"` rejects there: the page's own `fetch` does that.
+
+  ```json
+  { "tangitweak": { "connect": ["mail.google.com"] } }
+  ```
+
+- `onSite` code has no `tweak.fetch` (it rejects), since the site's own
+  scripts could call it: use `fetch`, or a handle to `onPage` code.
 
 ### Built-in valtio and React
 
@@ -1119,9 +1132,9 @@ tagged `isolated › host`), live [stores](#stores-in-page-code) (site stores to
 built-in React and valtio, and calls the script's handles. Errors its code
 throws later, in a timer, an event listener or a promise nobody awaits, go to
 the Log too (`onPage (uncaught)`, `onPage (unhandled rejection)`); the page's
-own errors don't. It has no `tweak.fetch` (call one through an
-[`onOverlay` handle](#handles--calls-between-places)); its `fetch` isn't seen
-by the `page` strategy.
+own errors don't. Its `tweak.fetch` reaches only the hosts in
+`"tangitweak.connect"` ([why](#tweakfetch)); its `fetch` isn't seen by the
+`page` strategy.
 
 ```tsx
 tweak.onPage("*://app.example.com/*", (ctx) => {

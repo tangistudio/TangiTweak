@@ -19,6 +19,8 @@
 import { normalizeRoute, placeKeyer, placeKind, routeMatches, type DocumentWhen, type PageWorld, type PlaceApi, type RouteMeta } from "./route";
 import { inertRemote, LIB_SITE_STORE, siteRemote, SITE_NO_STORES, unusableStore, type SiteCannotCallError } from "./remote";
 import type { Exposer } from "./rpc";
+import { fromWireResponse, splitFetchInit, toWireRequest, type WtFetchInit } from "./ttFetch";
+import type { WireRequest, WireResponse } from "./wire";
 import type { Generation, ScriptLife } from "./runLifecycle";
 import { isParamDef, isParamGroup, type ParamTree } from "./scriptDef";
 import { libBodyRunning } from "./scriptImports";
@@ -68,7 +70,18 @@ export interface PageShimOptions {
      * (onSite code never can).
      */
     setParam?: (key: string, value: any, lib?: string) => Promise<void>;
+    /** `tweak.fetch` in onPage code: the background fetches, to the tweak's `"tangitweak.connect"` hosts only (absent: it rejects) */
+    fetch?: (request: WireRequest, bypass: boolean) => Promise<WireResponse>;
 }
+
+/** onPage's `tweak.fetch`: from the background (relative URLs resolve against the page) */
+const pageTweakFetch =
+    (f: NonNullable<PageShimOptions["fetch"]>) =>
+    async (input: RequestInfo | URL, init?: WtFetchInit): Promise<Response> => {
+        const { init: rest, from, bypass } = splitFetchInit(init);
+        if (from === "page") throw new Error(`tweak.fetch: from: "page" fetches as the page, which only an overlay (tweak.onOverlay) can do — onPage code uses the page's own fetch for that`);
+        return fromWireResponse(await f(await toWireRequest(input, rest, location.href), bypass));
+    };
 
 type Register = (api: PlaceApi) => (route: unknown, fn: unknown, lib?: string) => any;
 /** the script whose top level is running (PageShim.top): where libraries' registrations and unnamed stores go */
@@ -82,7 +95,7 @@ export interface PageStores {
 
 const noStore = unusableStore(SITE_NO_STORES);
 const libSiteStore = unusableStore(LIB_SITE_STORE);
-const NO_FETCH = "tweak.fetch isn't available in page code — use the page's own fetch";
+const NO_FETCH = "tweak.fetch isn't available in onSite code (the page's own scripts could use it) — fetch from onPage code, or use the page's fetch";
 /** a library's handles: its handlers don't run */
 const LIB_HANDLE = "handles from an imported library don't connect; register the handler in the script itself";
 
@@ -163,7 +176,7 @@ export function makePageShim(o: PageShimOptions): PageShim {
         onResponseHeaders: inert,
         replaceResponse: inert,
         onResponseBody: inert,
-        fetch: () => Promise.reject(new Error(NO_FETCH)),
+        fetch: o.fetch ? pageTweakFetch(o.fetch) : () => Promise.reject(new Error(NO_FETCH)),
         onSite: register("onSite"),
         onPage: register("onPage"),
         onOverlay: register("onOverlay"),

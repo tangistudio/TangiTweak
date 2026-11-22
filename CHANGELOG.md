@@ -16,6 +16,7 @@ its section below.
 - **Script lint** in the Editor's Problems: stores or handles used in `onSite` code, `tweak.siteStore` in network handlers, logging, timers or store writes in `strategy: "rules"` handlers, and bad CSS selectors and shortcut keys, found before the tweak runs.
 - **Folder Sync writes `eslint.config.mjs`** and `.tangitweak/eslint-plugin.mjs`, and lists ESLint and typescript-eslint in the root `package.json`, so `npx eslint .` or VS Code's ESLint extension shows the Editor's checks in a synced folder ([docs](docs/editor.md#synced-folder)).
 - **Uncaught errors in `onPage` code show in the Log**: an error thrown in a timer, event listener or observer callback, or a promise nobody awaits, is logged as the tweak's (`onPage (uncaught)` / `onPage (unhandled rejection)`) with its source lines. The page's own errors aren't.
+- **`tweak.fetch` in `onPage` code**, to the hosts listed in the tweak's `package.json` `"tangitweak.connect"` and their subdomains only. Any other host rejects and names the host to add ([docs](docs/scripting.md#tweakfetch)). It used to reject everywhere in page code; `onSite` code still can't use it.
 
 ### Changed
 
