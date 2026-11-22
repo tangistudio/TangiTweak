@@ -4,7 +4,7 @@
  * rewritten; extension/eval frames are dropped).
  */
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { formatScriptError, rewriteFrame, EVAL_WRAPPER_LINES } from "../src/shared/scriptError";
+import { formatScriptError, rewriteFrame, EVAL_WRAPPER_LINES, reportUncaught } from "../src/shared/scriptError";
 import { ExtensionStrategy } from "../src/background/engine/strategies/extensionStrategy";
 import { DebuggerStrategy } from "../src/background/engine/strategies/debuggerStrategy";
 import { addUiPort, type LogEntry } from "../src/background/engine/logs";
@@ -208,5 +208,28 @@ describe("compile: positions for the Problems view", () => {
         await import("../src/shared/transpile");
         const c = compileScript(["const a: number = 1;", 'import { tweak } from "tangitweak"; tweak.onRequest({ url: "*://a.test/*", strategy: "helper" }, () => {});', "foo(", "const b = 2;"].join("\n"));
         expect(c.error).toMatch(/^SyntaxError: .* \(line 4\)$/);
+    });
+});
+
+describe("reportUncaught", () => {
+    const thrown = (file: string) => {
+        try {
+            scriptFunction("throw new Error('boom')", file)({} as any, console, () => ({}), { exports: {} }, {});
+        } catch (e) {
+            return e;
+        }
+    };
+    const fire = (win: EventTarget, type: string, props: object) => win.dispatchEvent(Object.assign(new Event(type), props));
+
+    it("gives a script its own uncaught errors and rejections, and leaves the page's alone", () => {
+        const win = new EventTarget();
+        const got: string[] = [];
+        reportUncaught(win as any, (file) => (file === "b/lib/util" ? (e: any, context) => got.push(`${context}: ${e.message}`) : undefined));
+        fire(win, "error", { error: thrown("b/lib/util"), filename: "tangitweak-script:///b/lib/util", lineno: 3, colno: 1 });
+        fire(win, "unhandledrejection", { reason: thrown("b/lib/util") });
+        fire(win, "error", { error: new Error("page's"), filename: "https://site.example/app.js" });
+        fire(win, "error", { error: thrown("other/index.ts") });
+        fire(win, "unhandledrejection", { reason: "no stack" });
+        expect(got).toEqual(["onPage (uncaught): boom", "onPage (unhandled rejection): boom"]);
     });
 });

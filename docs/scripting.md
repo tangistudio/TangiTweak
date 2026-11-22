@@ -1116,8 +1116,12 @@ the same DOM, none of the site's globals (read those through an
 [`onSite` handle](#handles--calls-between-places)). It's trusted: it gets
 `tweak.storage`, `tweak.log`, `tweak.params` and `console` (lines go to the Log
 tagged `isolated › host`), live [stores](#stores-in-page-code) (site stores too), the
-built-in React and valtio, and calls the script's handles. It has no
-`tweak.fetch`; its `fetch` isn't seen by the `page` strategy.
+built-in React and valtio, and calls the script's handles. Errors its code
+throws later, in a timer, an event listener or a promise nobody awaits, go to
+the Log too (`onPage (uncaught)`, `onPage (unhandled rejection)`); the page's
+own errors don't. It has no `tweak.fetch` (call one through an
+[`onOverlay` handle](#handles--calls-between-places)); its `fetch` isn't seen
+by the `page` strategy.
 
 ```tsx
 tweak.onPage("*://app.example.com/*", (ctx) => {

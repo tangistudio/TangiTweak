@@ -18,7 +18,7 @@
  * mirrors of the hook's, over window messages. A save arrives as
  * `iso.update`: load again, re-run if the code changed.
  */
-import { formatScriptError } from "../shared/scriptError";
+import { formatScriptError, reportUncaught } from "../shared/scriptError";
 import { makeScriptConsole, formatLogArgs, scriptLogLine, type ScriptLogLevel } from "../shared/scriptLog";
 import { scriptFunction } from "../shared/scriptFn";
 import { makeLibRequire } from "../shared/scriptImports";
@@ -44,6 +44,9 @@ import { FrameKeyOffers } from "../shared/frameKeys";
     const top = window === window.top;
     /** the script's name (from iso.load), for errors raised before or outside a run */
     let scriptName = s;
+    /** the files its current code ran (its entry and the modules it imported): their errors are its own */
+    let files = new Set<string>();
+    reportUncaught(window, (file) => (files.has(file) ? (e, context) => log("error", formatScriptError(scriptName, e, context)) : undefined));
 
     let current: Endpoint | null = null;
     let link: Promise<Endpoint> | null = null;
@@ -255,19 +258,21 @@ import { FrameKeyOffers } from "../shared/frameKeys";
             });
         const consoleProxy = makeScriptConsole((level, source, text) => log(level, scriptLogLine(init.name, source, text)));
         let dom: PageDocumentHandler[];
+        const ran = new Set([init.name]);
         try {
             const codeOf = (importer: string) => (importer === init.name ? init.src : (init.libs.find((l) => l.name === importer)?.src ?? ""));
             const shim = makeShim();
             // the tweak's modules run with its `tweak`: their handlers, params and stores are its own
             const requireFrom = makeLibRequire(
                 init.libs,
-                (lib, require, moduleObj) => scriptFunction(lib.src!, lib.name)(shim.host, consoleProxy, require, moduleObj, moduleObj.exports),
+                (lib, require, moduleObj) => (ran.add(lib.name), scriptFunction(lib.src!, lib.name)(shim.host, consoleProxy, require, moduleObj, moduleObj.exports)),
                 { builtin: scriptBuiltin(codeOf, hotRegistry(init.name).begin()) }
             );
             const moduleObj = { exports: {} as any };
             shim.top(() => scriptFunction(init.src, init.name)(shim.host, consoleProxy, requireFrom(init.name), moduleObj, moduleObj.exports));
             dom = shim.dom;
             reactDom = () => reactOf(requireFrom(init.name));
+            files = ran;
         } catch (e: any) {
             // the previous code keeps running
             exposer.revert();

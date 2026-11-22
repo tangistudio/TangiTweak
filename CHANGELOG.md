@@ -15,6 +15,7 @@ its section below.
 - **Iframe shortcuts**: `ctx.shortcut(keys, fn, { iframes: true })` (or a selector, or `{ shadow, crossOrigin }`) also counts keys pressed in child iframes, such as the hidden editing iframe of Google Docs; `crossOrigin: true` follows iframes from other sites too. In `onPage`, `ctx.iframes`'s `f.shortcut` listens in one iframe. Page code now also runs in `about:blank` and `srcdoc` frames. The limits are in [docs](docs/scripting.md#limits--shadow-roots-and-iframes).
 - **Script lint** in the Editor's Problems: stores or handles used in `onSite` code, `tweak.siteStore` in network handlers, logging, timers or store writes in `strategy: "rules"` handlers, and bad CSS selectors and shortcut keys, found before the tweak runs.
 - **Folder Sync writes `eslint.config.mjs`** and `.tangitweak/eslint-plugin.mjs`, and lists ESLint and typescript-eslint in the root `package.json`, so `npx eslint .` or VS Code's ESLint extension shows the Editor's checks in a synced folder ([docs](docs/editor.md#synced-folder)).
+- **Uncaught errors in `onPage` code show in the Log**: an error thrown in a timer, event listener or observer callback, or a promise nobody awaits, is logged as the tweak's (`onPage (uncaught)` / `onPage (unhandled rejection)`) with its source lines. The page's own errors aren't.
 
 ### Changed
 

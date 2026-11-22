@@ -1165,7 +1165,32 @@ tweak.replaceResponse({ url: "${ORIGIN}/sf-data", strategy: "page" }, async () =
         }
         check("onPage: async rejections, including an onSite function's error it awaits, are the script's errors", seen.length === wanted.length, JSON.stringify(seen));
         await warm.evaluate(() => new Promise((r) => chrome.runtime.sendMessage({ type: "clearScriptError", scriptId: "s_evalerr" }, r)));
-        for (const dir of ["Eval errs", "Badge bad", "Badge iso"]) await deleteTweak(warmSend, dir);
+        // errors its onPage code throws later (a timer, a promise nobody awaits) are its errors too; the page's own aren't
+        await save(
+            "s_uncaught",
+            "Uncaught errs",
+            `import { tweak } from "tangitweak";
+            tweak.onPage("*://*:*/page-badge*", () => {
+                setTimeout(() => { throw new Error("uncaught-timer"); }, 0);
+                void Promise.resolve().then(() => { throw new Error("uncaught-rejection"); });
+                const s = document.createElement("script");
+                s.textContent = 'setTimeout(() => { throw new Error("uncaught-page-own"); }, 0)';
+                document.documentElement.append(s);
+            });`
+        );
+        const uncaught = ["uncaught-timer", "uncaught-rejection"];
+        let caught: string[] = [];
+        let pageOwn = false;
+        for (let i = 0; i < 40 && caught.length < uncaught.length; i++) {
+            if (i % 8 === 0) await bp.reload();
+            await warm.waitForTimeout(250);
+            const lines: string[] = await warm.evaluate(() => [...document.querySelectorAll("#log-entries .log-line.error")].map((l) => (l as HTMLElement).dataset.text || l.textContent || ""));
+            caught = uncaught.filter((w) => lines.some((l) => l.includes("[Uncaught errs") && l.includes(w)));
+            pageOwn ||= lines.some((l) => l.includes("uncaught-page-own"));
+        }
+        check("onPage: errors from its timers and unawaited promises are the script's errors, the page's own aren't", caught.length === uncaught.length && !pageOwn, JSON.stringify({ caught, pageOwn }));
+        await warm.evaluate(() => new Promise((r) => chrome.runtime.sendMessage({ type: "clearScriptError", scriptId: "s_uncaught" }, r)));
+        for (const dir of ["Eval errs", "Uncaught errs", "Badge bad", "Badge iso"]) await deleteTweak(warmSend, dir);
         await warm.evaluate(() => new Promise((r) => chrome.runtime.sendMessage({ type: "clearScriptError", scriptId: "s_badgebad" }, r)));
         // onSite code uses the script's imports and top-level declarations in the page world
         await save("s_evcaplib", "Eval capture", `export function mark(v: string) { (window as any).__evcap = v; }`, "evcap-lib");

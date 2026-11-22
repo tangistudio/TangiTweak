@@ -25,7 +25,7 @@
  * Nothing in the page's world calls trusted code: what the page posts
  * toward it is dropped (and logged).
  */
-import { formatScriptError } from "../shared/scriptError";
+import { formatScriptError, reportUncaught } from "../shared/scriptError";
 import { makeScriptConsole, formatLogArgs, scriptLogLine, type ScriptContext, type ScriptLogLevel } from "../shared/scriptLog";
 import { scriptFunction } from "../shared/scriptFn";
 import { makeLibRequire, type ShippedLib } from "../shared/scriptImports";
@@ -322,6 +322,12 @@ import type { RanApi } from "../shared/netTypes";
     const fallbackExposers = new Map<string, Exposer>();
     /** MV2 onPage `ctx.shortcut`: keys pressed in this frame (listening from the start, before the page); shared keys go by list order */
     let pageOrder: { id: string; name: string }[] = [];
+    /** each file the isolated onPage code ran → the script that ran it: uncaught errors thrown in it are that script's */
+    let isoFiles = new Map<string, { id: string; name: string }>();
+    reportUncaught(window, (file) => {
+        const o = isoFiles.get(file);
+        return o && ((e, context) => scriptLog(o.id, "error", formatScriptError(o.name, e, context), "isolated"));
+    });
     // shortcuts in cross-origin iframes (shared/frameKeys.ts): as the parent (MV2 onPage, overlays) and as the child
     let keyHold = false;
     const browserRuntime = (globalThis as any).browser?.runtime;
@@ -504,6 +510,7 @@ import type { RanApi } from "../shared/netTypes";
                 }
             }
         if (world === "isolated") pageOrder = handlers.map((h) => ({ id: h.scriptId, name: h.name }));
+        const files = new Map<string, { id: string; name: string }>();
         // onPage code's handles: its onSite handlers (the page's world), its own (here), its overlay (top frame)
         // a compile's handles call with its signal: they abort once a reload replaced it and its runs ended
         const handle = (scriptId: string, gen: Generation) => (api: PlaceApi, key: string) => {
@@ -563,6 +570,8 @@ import type { RanApi } from "../shared/netTypes";
             // calls go to the extension LOG, not the page console
             const consoleProxy = makeScriptConsole((level, source, text) => scriptLog(h.scriptId, level, scriptLogLine(h.name, source, text), ctx));
             let dom: PageDocumentHandler[];
+            const owner = { id: h.scriptId, name: h.name };
+            const ran = [h.name];
             try {
                 // page-side require over the shipped library sources and data files
                 const codeOf = (importer: string) => (importer === h.name ? h.src : (libSources.find((l) => l.name === importer)?.src ?? ""));
@@ -570,7 +579,7 @@ import type { RanApi } from "../shared/netTypes";
                 // the tweak's modules run with its `tweak`: their handlers, params and stores are its own
                 const requireFrom = makeLibRequire(
                     libSources,
-                    (lib, require, moduleObj) => scriptFunction(lib.src!, lib.name)(shim.host, consoleProxy, require, moduleObj, moduleObj.exports),
+                    (lib, require, moduleObj) => (ran.push(lib.name), scriptFunction(lib.src!, lib.name)(shim.host, consoleProxy, require, moduleObj, moduleObj.exports)),
                     // the built-ins: isolated code all of them, the onSite fallback valtio's core
                     world === "isolated" ? { builtin: scriptBuiltin(codeOf, hotRegistry(h.scriptId).begin()) } : { builtin: siteBuiltin, onSite: true }
                 );
@@ -578,8 +587,10 @@ import type { RanApi } from "../shared/netTypes";
                 shim.top(() => scriptFunction(h.src, h.name)(shim.host, consoleProxy, requireFrom(h.name), moduleObj, moduleObj.exports));
                 dom = shim.dom;
                 if (world === "isolated") reactDoms.set(h.scriptId, () => reactOf(requireFrom(h.name)));
+                for (const f of ran) if (!files.has(f)) files.set(f, owner);
             } catch (e: any) {
                 // the previous code keeps running
+                for (const [f, o] of isoFiles) if (o.id === h.scriptId && !files.has(f)) files.set(f, o);
                 exposer.revert();
                 exposer.done();
                 life.discard(gen);
@@ -610,6 +621,7 @@ import type { RanApi } from "../shared/netTypes";
             }
             life.commit(gen);
         }
+        if (world === "isolated") isoFiles = files;
     }
 
     /** onSite handlers, here because the page CSP blocks eval in the page */

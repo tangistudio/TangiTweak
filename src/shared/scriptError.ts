@@ -40,6 +40,39 @@ export function scriptFrame(line: string): { name: string; line: number; column:
     return { name, line: userLine, column: Number(m[3]), fn: fn && fn[1] !== "eval" ? fn[1] : null };
 }
 
+/** the script files whose frames are in `stack`, innermost first */
+export function scriptFilesIn(stack: string): string[] {
+    const out: string[] = [];
+    for (const m of stack.matchAll(/tangitweak-script:\/\/\/([^\s():]*):\d+:\d+/g)) {
+        let name: string;
+        try {
+            name = decodeURIComponent(m[1]);
+        } catch {
+            name = m[1];
+        }
+        if (!out.includes(name)) out.push(name);
+    }
+    return out;
+}
+
+/**
+ * Logs the uncaught errors and unhandled rejections in `win` that a script's
+ * own code threw: `reportOf(file)` gives the reporter of the script that ran
+ * that file, and the innermost such frame decides. Errors without a script
+ * frame (the page's, or a dependency's own callback) are left alone.
+ */
+export function reportUncaught(win: Window, reportOf: (file: string) => ((e: unknown, context: string) => void) | undefined): void {
+    const route = (e: unknown, where: string, context: string) => {
+        const stack = e && typeof e === "object" && typeof (e as any).stack === "string" ? (e as any).stack : "";
+        for (const file of scriptFilesIn(`${stack}\n${where}`)) {
+            const report = reportOf(file);
+            if (report) return report(e, context);
+        }
+    };
+    win.addEventListener("error", (ev) => route(ev.error ?? ev.message, ev.filename ? `${ev.filename}:${ev.lineno}:${ev.colno}` : "", "onPage (uncaught)"));
+    win.addEventListener("unhandledrejection", (ev) => route(ev.reason, "", "onPage (unhandled rejection)"));
+}
+
 /** what replaced the `tt` global (removed in 0.40), for code that still uses it */
 export const TT_REMOVED = 'the `tt` global was removed in TangiTweak 0.40 — add `import { tweak } from "tangitweak";` and call `tweak.onPage(…)`, `tweak.params(…)`, … instead';
 
