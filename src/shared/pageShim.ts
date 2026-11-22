@@ -243,8 +243,22 @@ export function firePageHandler(d: PageDocumentHandler, ctx: any, exposer?: Expo
         exposer?.revert(d.h);
         throw e;
     }
-    // an async handler's rejection: an error like a thrown one
-    if (onError && out && typeof (out as any).then === "function") (out as Promise<unknown>).then(undefined, onError);
+    if (out && typeof (out as any).then === "function") {
+        // an async handler's rejection: an error like a thrown one
+        if (onError) (out as Promise<unknown>).then(undefined, onError);
+        // a run that ended before its promise settled (replaced, navigated away) exposes nothing
+        const signal: AbortSignal | undefined = ctx?.signal;
+        if (signal) {
+            exposer?.expose(
+                d.h,
+                (out as Promise<unknown>).then(
+                    (v) => (signal.aborted ? new Promise(() => {}) : v),
+                    (e) => (signal.aborted ? new Promise(() => {}) : Promise.reject(e))
+                )
+            );
+            return out;
+        }
+    }
     exposer?.expose(d.h, out);
     return out;
 }

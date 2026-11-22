@@ -36,8 +36,9 @@ import { ensurePackages, packagesSnapshot } from "../background/engine/packageIm
 import { isUrlSpec, packageClosure, type PackageModules } from "../shared/packageImports";
 import { crawl, isPackageFile, pickStart } from "../shared/packageSource";
 import { domHandlersFor, fireRun, makePageShim, pageCtxBase, type PageDocumentHandler } from "../shared/pageShim";
+import { NavRoutes } from "../shared/navRoutes";
 import { requestBodyFrom, requestBodyFromText, type RequestBody } from "../shared/requestBody";
-import { pageWorld, type DocumentWhen, type PlaceApi, type RouteMeta, type Strategy } from "../shared/route";
+import { followsNav, pageWorld, type DocumentWhen, type PlaceApi, type RouteMeta, type Strategy } from "../shared/route";
 import { probeScriptRules } from "../shared/rulesProbe";
 import { reactOf, ScriptLife, type Generation, type ReactDomClient } from "../shared/runLifecycle";
 import { formatScriptError } from "../shared/scriptError";
@@ -244,7 +245,7 @@ export interface TestPage {
     siteStore<T extends Record<string, any> = Record<string, any>>(name: string, initial?: T, scriptName?: string): T;
     /** Advance document lifecycle to `"document_end"` or `"document_idle"`. */
     advanceTo(phase: DocumentWhen): Promise<void>;
-    /** Simulate SPA navigation (`location.href` update + `ctx.onNavigate` callbacks). */
+    /** Simulate an in-place SPA navigation: updates `location.href`, starts and stops handlers whose route sets `navigation`, and calls `ctx.onNavigate` callbacks. */
     navigate(nextUrl: string | URL): Promise<void>;
     /** Simulate saving / hot-reloading scripts on the live page (`autoRestore`, `ctx.patch`, Fast Refresh). */
     reload(): Promise<void>;
@@ -1173,6 +1174,9 @@ export async function loadTweak(source: TweakSource, options: LoadTweakOptions =
             isoPending: PageDocumentHandler[];
             siteRan: Set<string>;
             isoRan: Set<string>;
+            /** handlers with `navigation` (and ctx.onNavigate), per world */
+            siteNavs: NavRoutes<PageDocumentHandler>;
+            isoNavs: NavRoutes<PageDocumentHandler>;
             overlay?: {
                 rt: OverlayRuntime;
                 bridge: ReturnType<typeof endpointPair>[1];
@@ -1214,8 +1218,33 @@ export async function loadTweak(source: TweakSource, options: LoadTweakOptions =
                 isoPending: [],
                 siteRan: new Set(),
                 isoRan: new Set(),
+                siteNavs: new NavRoutes(() => {}),
+                isoNavs: new NavRoutes(() => {}),
             });
         }
+
+        /** `navigation` runs waiting for a later phase */
+        let waiting: { when: DocumentWhen; run: () => void }[] = [];
+        const scheduleNav = (when: DocumentWhen, run: () => void, now: boolean) => (now || phaseRank(when) <= phaseRank(currentPhase) ? run() : waiting.push({ when, run }));
+        const fireSite = (st: ScriptWorldState, g: Generation, d: PageDocumentHandler, url: string) => {
+            const report = (e: unknown) => logSink(st.script.name, "error", "onSite", formatScriptError(st.script.name, e, "onSite"));
+            fireRun(st.siteLife, g, d, (signal) => ({ ...pageCtxBase(url), onNavigate: st.siteNavs.onNavigate(signal, report) }), st.siteExposer, report);
+        };
+        const fireIso = (st: ScriptWorldState, g: Generation, d: PageDocumentHandler, url: string) => {
+            const report = (e: unknown) => logSink(st.script.name, "error", "onPage", formatScriptError(st.script.name, e, "onPage"));
+            fireRun(
+                st.isoLife,
+                g,
+                d,
+                (signal) => ({
+                    ...pageCtxBase(url),
+                    shortcut: (combo: string, fn: () => unknown, opts?: any) => addPageShortcut(st.script.id, combo, fn, opts, signal),
+                    onNavigate: st.isoNavs.onNavigate(signal, report),
+                }),
+                st.isoExposer,
+                report
+            );
+        };
 
         const fireDueForState = (st: ScriptWorldState, hot: boolean) => {
             if (st.siteGen) {
@@ -1223,9 +1252,7 @@ export async function loadTweak(source: TweakSource, options: LoadTweakOptions =
                     if (!hot && phaseRank(d.when) > phaseRank(currentPhase)) continue;
                     if (st.siteRan.has(d.h)) continue;
                     st.siteRan.add(d.h);
-                    fireRun(st.siteLife, st.siteGen, d, pageCtxBase(currentUrl), st.siteExposer, (e) =>
-                        logSink(st.script.name, "error", "onSite", formatScriptError(st.script.name, e, "onSite"))
-                    );
+                    fireSite(st, st.siteGen, d, currentUrl);
                 }
             }
             if (st.isoGen) {
@@ -1233,17 +1260,7 @@ export async function loadTweak(source: TweakSource, options: LoadTweakOptions =
                     if (!hot && phaseRank(d.when) > phaseRank(currentPhase)) continue;
                     if (st.isoRan.has(d.h)) continue;
                     st.isoRan.add(d.h);
-                    fireRun(
-                        st.isoLife,
-                        st.isoGen,
-                        d,
-                        (signal) => ({
-                            ...pageCtxBase(currentUrl),
-                            shortcut: (combo: string, fn: () => unknown, opts?: any) => addPageShortcut(st.script.id, combo, fn, opts, signal),
-                        }),
-                        st.isoExposer,
-                        (e) => logSink(st.script.name, "error", "onPage", formatScriptError(st.script.name, e, "onPage"))
-                    );
+                    fireIso(st, st.isoGen, d, currentUrl);
                 }
             }
         };
@@ -1270,6 +1287,8 @@ export async function loadTweak(source: TweakSource, options: LoadTweakOptions =
 
                 const wrapReq = (reqFn: (spec: string) => any) => (spec: string) => (mockObjs.has(spec) ? mockObjs.get(spec) : reqFn(spec));
 
+                let siteNavSet: PageDocumentHandler[] | null = null;
+                let isoNavSet: PageDocumentHandler[] | null = null;
                 // 1. Site world (`tweak.onSite`)
                 if (hasSite) {
                     if (hot) st.siteExposer.reset();
@@ -1298,10 +1317,11 @@ export async function loadTweak(source: TweakSource, options: LoadTweakOptions =
                         const mod = { exports: {} as any };
                         shim.top(() => scriptFunction(src, s.name)(shim.host, consoleSite, wrapReq(requireFrom(s.name)), mod, mod.exports));
                     });
-                    st.sitePending = domHandlersFor(shim.dom, currentUrl, st.siteExposer);
+                    st.sitePending = domHandlersFor(shim.dom, currentUrl, st.siteExposer).filter((d) => !followsNav(d.route));
                     st.siteExposer.done();
                     st.siteGen = g;
                     st.siteRan.clear();
+                    siteNavSet = shim.dom;
                 }
 
                 // 2. Overlay frame (`tweak.onOverlay`)
@@ -1490,13 +1510,20 @@ export async function loadTweak(source: TweakSource, options: LoadTweakOptions =
                             return { createRoot: ReactDOMClient.createRoot };
                         }
                     });
-                    st.isoPending = domHandlersFor(shim.dom, currentUrl, st.isoExposer);
+                    st.isoPending = domHandlersFor(shim.dom, currentUrl, st.isoExposer).filter((d) => !followsNav(d.route));
                     st.isoExposer.done();
                     st.isoGen = g;
                     st.isoRan.clear();
+                    isoNavSet = shim.dom;
                 }
 
                 fireDueForState(st, hot);
+                const navSet = (navs: NavRoutes<PageDocumentHandler>, dom: PageDocumentHandler[], life: ScriptLife, exposer: Exposer, fire: (d: PageDocumentHandler, url: string) => void) =>
+                    navs.set({ dom, url: currentUrl, now: hot, fire, stop: (d) => life.stopRun(d.h, "the page navigated away"), exposer, schedule: scheduleNav });
+                const siteG = st.siteGen;
+                const isoG = st.isoGen;
+                if (siteNavSet && siteG) navSet(st.siteNavs, siteNavSet, st.siteLife, st.siteExposer, (d, url) => fireSite(st, siteG, d, url));
+                if (isoNavSet && isoG) navSet(st.isoNavs, isoNavSet, st.isoLife, st.isoExposer, (d, url) => fireIso(st, isoG, d, url));
                 if (st.siteGen) st.siteLife.commit(st.siteGen);
                 if (st.isoGen) st.isoLife.commit(st.isoGen);
             }
@@ -1551,12 +1578,17 @@ export async function loadTweak(source: TweakSource, options: LoadTweakOptions =
                     fireDueForState(st, false);
                     if (st.overlay && !st.overlay.bridge.closed) st.overlay.bridge.push("when", { phase: currentPhase });
                 }
+                const due = waiting.filter((w) => phaseRank(w.when) <= phaseRank(currentPhase));
+                waiting = waiting.filter((w) => phaseRank(w.when) > phaseRank(currentPhase));
+                for (const w of due) w.run();
                 await flushAsync(12, true);
             },
             async navigate(nextUrl: string | URL): Promise<void> {
                 currentUrl = new URL(String(nextUrl), currentUrl).href;
                 setWindowUrl(win, currentUrl);
                 for (const st of states.values()) {
+                    st.siteNavs.nav(currentUrl);
+                    st.isoNavs.nav(currentUrl);
                     if (st.overlay && !st.overlay.bridge.closed) st.overlay.bridge.push("nav", { url: currentUrl });
                 }
                 await flushAsync(12, true);

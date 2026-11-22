@@ -13,7 +13,8 @@ import { makeScriptConsole, formatLogArgs, scriptLogLine, type ScriptLogLevel } 
 import { scriptFunction, withTweak, type RawScriptFn, type ScriptFn } from "../shared/scriptFn";
 import { siteUnits, type PackageFn } from "../shared/siteCode";
 import { makeLibRequire, type ShippedLib } from "../shared/scriptImports";
-import { indexRoutes, takesBinary, type DocumentWhen, type RouteMeta } from "../shared/route";
+import { followsNav, indexRoutes, takesBinary, type DocumentWhen, type RouteMeta } from "../shared/route";
+import { checkUrl, NavRoutes, watchUrl } from "../shared/navRoutes";
 import { makePageShim, domHandlersFor, scheduleDocument, fireRun, type PageDocumentHandler, type PageShim } from "../shared/pageShim";
 import { ScriptLife, type Generation } from "../shared/runLifecycle";
 import { noteShadowRoot } from "../shared/domElements";
@@ -128,6 +129,13 @@ import { watchCall, type CallWatch } from "../shared/callWatch";
     const exposers = new Map<string, Exposer>();
     /** per script: its onSite runs here (shared/runLifecycle.ts; no ctx.mount: React isn't in the page) */
     const lives = new Map<string, ScriptLife>();
+    /** per script: its onSite handlers with `navigation`, and ctx.onNavigate */
+    const navs = new Map<string, NavRoutes<PageDocumentHandler>>();
+    const navsOf = (id: string): NavRoutes<PageDocumentHandler> => {
+        let n = navs.get(id);
+        if (!n) navs.set(id, (n = new NavRoutes(() => watchUrl((url) => n!.nav(url)))));
+        return n;
+    };
     /** calls into onSite handles that arrived before the handlers compiled */
     const earlyCalls: [string, RpcCall, (r: RpcResult) => void, string | undefined][] = [];
     /**
@@ -357,6 +365,8 @@ import { watchCall, type CallWatch } from "../shared/callWatch";
             { builtin: siteBuiltin, onSite: true, ...(__NO_EVAL__ ? { packageFn } : {}) }
         );
         const compiledDocument: { scriptId: string; name: string; when: DocumentWhen; d: PageDocumentHandler; exposer: Exposer; life: ScriptLife; gen: Generation }[] = [];
+        /** each compiled script's handlers, for its NavRoutes */
+        const navSets: { scriptId: string; name: string; dom: PageDocumentHandler[]; exposer: Exposer; life: ScriptLife; gen: Generation }[] = [];
         const gens: [ScriptLife, Generation][] = [];
         const commit = () => gens.forEach(([life, gen]) => life.commit(gen));
         let cspBlocked = false;
@@ -369,6 +379,7 @@ import { watchCall, type CallWatch } from "../shared/callWatch";
                     exposers.delete(id);
                     lives.get(id)?.stop();
                     lives.delete(id);
+                    navs.delete(id);
                 }
         for (const d of domHandlers) {
             let exposer = exposers.get(d.scriptId);
@@ -396,7 +407,11 @@ import { watchCall, type CallWatch } from "../shared/callWatch";
                 } finally {
                     entry = undefined;
                 }
-                if (gen) for (const h of domHandlersFor(shim.dom, location.href, ex)) compiledDocument.push({ scriptId: d.scriptId, name: d.name, when: h.when, d: h, exposer, life, gen });
+                if (gen) {
+                    for (const h of domHandlersFor(shim.dom, location.href, ex))
+                        if (!followsNav(h.route)) compiledDocument.push({ scriptId: d.scriptId, name: d.name, when: h.when, d: h, exposer, life, gen });
+                    navSets.push({ scriptId: d.scriptId, name: d.name, dom: shim.dom, exposer, life, gen });
+                }
             } catch (e: any) {
                 // the previous code keeps running (none: calls get `not running`)
                 ex?.revert();
@@ -418,28 +433,46 @@ import { watchCall, type CallWatch } from "../shared/callWatch";
                 window.postMessage({ source: HOOK_SOURCE, kind: "cspBlocked" }, window.location.origin);
             } catch {}
         }
-        if (compiledDocument.length === 0) return commit();
+        if (compiledDocument.length === 0 && !navSets.some((n) => n.dom.some((h) => followsNav(h.route)))) {
+            for (const n of navSets) navsOf(n.scriptId).set({ dom: [], url: location.href, fire: () => {}, stop: () => {}, schedule: scheduleDocument });
+            return commit();
+        }
 
         const injected = (document.currentScript as HTMLScriptElement | null)
             ? "document.currentScript"
             : (document.querySelector("script[data-res-override-hook]") ? "script tag (already in DOM)" : "bundle message");
-        const fire = ({ scriptId, name, when, d, exposer, life, gen }: (typeof compiledDocument)[number]) => {
+        const fire = ({ scriptId, name, when, d, exposer, life, gen }: (typeof compiledDocument)[number], url = location.href) => {
             try {
-                scriptLogUp(scriptId, "debug", scriptLogLine(name, "onSite", `running (${when}) on ${location.href} [${document.readyState}], hook injected via ${injected}`));
-                fireRun(life, gen, d, makeCtx(location.href, "GET"), exposer, (e) => scriptLogUp(scriptId, "error", formatScriptError(name, e, "onSite")));
+                scriptLogUp(scriptId, "debug", scriptLogLine(name, "onSite", `running (${when}) on ${url} [${document.readyState}], hook injected via ${injected}`));
+                const report = (e: unknown) => scriptLogUp(scriptId, "error", formatScriptError(name, e, "onSite"));
+                fireRun(life, gen, d, (signal) => ({ ...makeCtx(url, "GET"), onNavigate: navsOf(scriptId).onNavigate(signal, report) }), exposer, report);
                 window.postMessage({ source: HOOK_SOURCE, kind: "scriptRan", scriptId, name, api: "onSite" }, window.location.origin);
             } catch (e: any) {
                 scriptLogUp(scriptId, "error", formatScriptError(name, e, "onSite"));
             }
         };
+        const setNavs = () => {
+            for (const { scriptId, name, dom, exposer, life, gen } of navSets)
+                navsOf(scriptId).set({
+                    dom,
+                    url: location.href,
+                    now: hot,
+                    fire: (d, url) => fire({ scriptId, name, when: d.when, d, exposer, life, gen }, url),
+                    stop: (d) => life.stopRun(d.h, "the page navigated away"),
+                    exposer,
+                    schedule: scheduleDocument,
+                });
+        };
         if (hot) {
-            compiledDocument.forEach(fire); // hot update: refire immediately so edits are visible live
+            compiledDocument.forEach((h) => fire(h)); // hot update: refire immediately so edits are visible live
+            setNavs();
             return commit();
         }
         if (domFired) return; // initial + ready re-sends fire only once
         domFired = true;
         // each handler keeps its own { when } (same as the isolated-world fallback)
         for (const h of compiledDocument) scheduleDocument(h.when, () => fire(h));
+        setNavs();
         commit();
     }
 
@@ -453,6 +486,7 @@ import { watchCall, type CallWatch } from "../shared/callWatch";
         if (navWatched) return;
         navWatched = true;
         const nudge = () => {
+            checkUrl();
             try {
                 window.postMessage({ source: HOOK_SOURCE, kind: "nav" }, window.location.origin);
             } catch {}

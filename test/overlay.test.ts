@@ -198,6 +198,31 @@ describe("overlay runtime", () => {
         expect((await callOverlay(g, { h: "onOverlay:0", fn: "f", args: [] })).value).toBe("https://x.com/b/rel");
     });
 
+    it('navigation: "match" runs the overlay handler while the page URL matches, at its when', async () => {
+        const h = await start(
+            `import { tweak } from "tangitweak"; tweak.onOverlay({ url: "*://x.com/cart*", navigation: "match", when: "document_idle" }, (ctx) => { const b = document.body.dataset; b.runs = String(Number(b.runs || 0) + 1); ctx.signal.addEventListener("abort", () => (b.ended = "1")); return { url: () => ctx.url }; });`
+        );
+        const b = document.body.dataset;
+        expect(b.runs).toBeUndefined();
+        h.bridge.push("nav", { url: "https://x.com/cart" });
+        await settle();
+        expect(b.runs).toBeUndefined(); // not document_idle yet
+        h.bridge.push("when", { phase: "document_idle" });
+        await settle();
+        expect(b.runs).toBe("1");
+        expect((await callOverlay(h, { h: "onOverlay:0", fn: "url", args: [] })).value).toBe("https://x.com/cart");
+        h.bridge.push("nav", { url: "https://x.com/cart/2" });
+        await settle();
+        expect(b.runs).toBe("1");
+        h.bridge.push("nav", { url: "https://x.com/app" });
+        await settle();
+        expect(b.ended).toBe("1");
+        h.bridge.push("nav", { url: "https://x.com/cart/3" });
+        await settle();
+        expect(b.runs).toBe("2");
+        expect((await callOverlay(h, { h: "onOverlay:0", fn: "url", args: [] })).value).toBe("https://x.com/cart/3");
+    });
+
     it("calls onPage functions through the bridge (onPage:N), and answers calls into its handles (onOverlay:N)", async () => {
         const h = await start(`import { tweak } from "tangitweak"; const page = tweak.onPage("*", () => ({ count: () => 0 }));\ntweak.onOverlay("*", () => ({ ask: async (sel) => "matches: " + (await page.count(sel)), picked: (t) => "got " + t }));`);
         const asked = callOverlay(h, { h: "onOverlay:0", fn: "ask", args: ["a"] });

@@ -74,6 +74,44 @@ tweak.onPage("*://a.test/*", () => { document.body.dataset.pageSees = [typeof (w
     });
 });
 
+describe("single-page apps: a route's navigation", () => {
+    it('"match" starts and stops onPage and onSite with the URL; "every" runs again per URL; ctx.onNavigate follows', async () => {
+        const t = await loadTweak({
+            name: "spa",
+            code: src(`
+const bump = (k: string) => (document.body.dataset[k] = String(Number(document.body.dataset[k] || 0) + 1));
+tweak.onPage({ url: "*://a.test/cart*", navigation: "match" }, (ctx) => {
+    bump("page");
+    ctx.style("body { color: red }");
+    ctx.onNavigate((u) => (document.body.dataset.seen = u));
+    ctx.signal.addEventListener("abort", () => bump("pageEnd"));
+});
+tweak.onSite({ url: "*://a.test/cart*", navigation: "every" }, (ctx) => { bump("site"); document.body.dataset.siteUrl = ctx.url; });
+tweak.onPage({ url: "*://a.test/cart*", navigation: "match", when: "document_idle" }, () => { bump("idle"); });
+tweak.onPage("*://a.test/cart*", () => { bump("load"); });`),
+        });
+        const page = await t.openPage("https://a.test/home");
+        const d = () => ({ ...page.document.body.dataset });
+        await page.flush();
+        expect(d()).toEqual({});
+        await page.navigate("/cart");
+        expect(d()).toMatchObject({ page: "1", site: "1", siteUrl: "https://a.test/cart" });
+        expect(d().idle).toBeUndefined(); // waits for its when
+        expect(page.window.getComputedStyle(page.document.body).color).toBe("red");
+        await page.navigate("/cart/2");
+        expect(d()).toMatchObject({ page: "1", site: "2", siteUrl: "https://a.test/cart/2", seen: "https://a.test/cart/2" });
+        await page.advanceTo("document_idle");
+        expect(d().idle).toBe("1");
+        await page.navigate("/home");
+        expect(d()).toMatchObject({ page: "1", pageEnd: "1", site: "2" });
+        expect(page.window.getComputedStyle(page.document.body).color).not.toBe("red");
+        await page.navigate("/cart");
+        expect(d()).toMatchObject({ page: "2", site: "3", idle: "2" }); // idle has passed: right away
+        expect(d().load).toBeUndefined(); // "load" routes match only the URL the page loaded with
+        await t.dispose();
+    });
+});
+
 describe("browsers", () => {
     const onSite = { name: "c", code: src(`tweak.onSite("*://a.test/*", () => { document.body.dataset.ran = "1"; });`) };
     const CSP_LINE = "page CSP blocks eval in the page world";

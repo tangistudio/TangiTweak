@@ -35,7 +35,7 @@ import { missedLine } from "../../shared/netTypes";
 import { binaryOptedOut, debuggerMissedLine, frameHasHook as pingHook, isLoopbackUrl, missedReason, missedWhat, routeProblem, MISSED_SKIP_TYPES } from "../../shared/missedTap";
 import { resolveParamValues } from "../../shared/scriptDef";
 import { shippedLibIds, type ShippedLib } from "../../shared/scriptImports";
-import { effectiveStrategy, hookCanSee, indexRoutes, isNetKind, pageWorld, routeLabel, routeMatches, takesBinary, type RouteMeta, type Strategy } from "../../shared/route";
+import { effectiveStrategy, hookCanSee, indexRoutes, isNetKind, pageWorld, routeLabel, routeMatches, routeMayMatch, takesBinary, type RouteMeta, type Strategy } from "../../shared/route";
 import { analyzeScripts, runBodyOp, type Analyzed } from "../compileHost";
 import { recordNetBody } from "../network";
 import { reportSkipped, setSkipRoutes } from "./skipped";
@@ -663,11 +663,12 @@ export function createPipeline(
             const over: RouteMeta[] = [];
             for (const r of a.meta.routes) {
                 if (r.kind === "onDocument") {
-                    if (!routeMatches(r, url)) continue;
+                    // a route that follows in-place navigation ships wherever its origin matches
+                    if (!routeMayMatch(r, url)) continue;
                     if (pageWorld(r) === "isolated") iso = true;
                     else main = true;
                 } else if (r.kind === "onOverlay") {
-                    if (preview !== undefined || (top && routeMatches(r, url))) over.push(r);
+                    if (preview !== undefined || (top && routeMayMatch(r, url))) over.push(r);
                 } else if (r.kind !== "onResponseHeaders" && effectiveStrategy(r) === "page" && hookCanSee(r)) routes.push(r);
             }
             if (over.length) {

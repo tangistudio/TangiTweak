@@ -24,7 +24,8 @@ import { makeLibRequire } from "../shared/scriptImports";
 import type { PackageModules } from "../shared/packageImports";
 import { Exposer, RpcClient, isRpcCall } from "../shared/rpc";
 import { inertRemote } from "../shared/remote";
-import { routeMatches, type DocumentWhen } from "../shared/route";
+import { followsNav, routeMatches, type DocumentWhen } from "../shared/route";
+import { NavRoutes } from "../shared/navRoutes";
 import { fireRun, pageCtxBase, type PageDocumentHandler } from "../shared/pageShim";
 import { reactOf, ScriptLife, type Generation, type ReactDomClient } from "../shared/runLifecycle";
 import { hotRegistry } from "../shared/hotRefresh";
@@ -94,7 +95,10 @@ export async function startOverlay(ep: Endpoint, init: OverlayInit, env: Overlay
 
     // the bridge's `when` and `nav` can come while React loads: keep the latest
     const ran = new Set<number>();
-    const navFns = new Set<(url: string) => void>();
+    /** handlers with `navigation`, and ctx.onNavigate (the bridge watches the URL and says `nav`) */
+    const navs = new NavRoutes<PageDocumentHandler>(() => {});
+    /** their runs waiting for a later `when` */
+    let waiting: { when: DocumentWhen; run: () => void }[] = [];
     let phase = init.phase ?? "document_start";
     /** a save's handlers run at once, whatever their `when` */
     let hotNow = false;
@@ -103,15 +107,13 @@ export async function startOverlay(ep: Endpoint, init: OverlayInit, env: Overlay
     ep.on("when", (a) => {
         if (rank(a.phase) > rank(phase)) phase = a.phase;
         runDue();
+        const due = waiting.filter((w) => rank(w.when) <= rank(phase));
+        waiting = waiting.filter((w) => rank(w.when) > rank(phase));
+        for (const w of due) w.run();
     });
     ep.on("nav", ({ url }) => {
         page.url = url;
-        for (const fn of [...navFns])
-            try {
-                fn(url);
-            } catch (e) {
-                log("error", errorLine(e, "ctx.onNavigate"));
-            }
+        navs.nav(url);
     });
 
     // ctx.shortcut: the bridge matches keys pressed in the page and says which
@@ -245,30 +247,34 @@ export async function startOverlay(ep: Endpoint, init: OverlayInit, env: Overlay
             return;
         }
         reactDom = () => reactOf(requireFrom(init.name));
-        handlers = compiled.handlers.onOverlay
-            .filter(({ route }) => {
-                const on = routeMatches(route, page.url);
-                if (!on) exposer.fail(route.key!);
-                return on;
-            })
-            .map(({ fn, route }) => ({ h: route.key!, route, when: route.when || "document_end", fn }));
+        const all: PageDocumentHandler[] = compiled.handlers.onOverlay.map(({ fn, route }) => ({ h: route.key!, route, when: route.when || "document_end", fn }));
+        handlers = all.filter(({ route }) => {
+            if (followsNav(route)) return false;
+            const on = routeMatches(route, page.url);
+            if (!on) exposer.fail(route.key!);
+            return on;
+        });
         exposer.done();
         gen = g;
         ran.clear();
         hotNow = hot;
         runDue();
+        navs.set({
+            dom: all,
+            url: page.url,
+            now: hot,
+            fire: (d, url) => fire(g, d, url),
+            stop: (d) => life.stopRun(d.h, "the page navigated away"),
+            exposer,
+            schedule: (when, run, now) => (now || rank(when) <= rank(phase) ? run() : waiting.push({ when, run })),
+        });
         life.commit(g);
     };
 
-    const ctx = (signal: AbortSignal) => ({
-        ...pageCtxBase(page.url),
-        onNavigate(fn: (url: string) => void) {
-            if (typeof fn !== "function") throw new TypeError("ctx.onNavigate: the argument must be a function");
-            navFns.add(fn);
-            const off = () => void navFns.delete(fn);
-            signal.addEventListener("abort", off, { once: true });
-            return off;
-        },
+    const report = (e: unknown) => log("error", errorLine(e, "onOverlay"));
+    const ctx = (url: string) => (signal: AbortSignal) => ({
+        ...pageCtxBase(url),
+        onNavigate: navs.onNavigate(signal, (e) => log("error", errorLine(e, "ctx.onNavigate"))),
         shortcut(combo: string, fn: () => unknown, opts?: ShortcutOptions) {
             const off = shortcut(combo, fn, opts);
             signal.addEventListener("abort", off, { once: true });
@@ -281,11 +287,14 @@ export async function startOverlay(ep: Endpoint, init: OverlayInit, env: Overlay
         for (const d of handlers) {
             if (ran.has(d.route.index) || (!hotNow && rank(d.route.when) > rank(phase))) continue;
             ran.add(d.route.index);
-            try {
-                fireRun(life, g, d, ctx, exposer, (e) => log("error", errorLine(e, "onOverlay")));
-            } catch (e) {
-                log("error", errorLine(e, "onOverlay"));
-            }
+            fire(g, d, page.url);
+        }
+    };
+    const fire = (g: Generation, d: PageDocumentHandler, url: string) => {
+        try {
+            fireRun(life, g, d, ctx(url), exposer, report);
+        } catch (e) {
+            report(e);
         }
     };
     ep.on("overlay.update", (next) => void load(next, true));

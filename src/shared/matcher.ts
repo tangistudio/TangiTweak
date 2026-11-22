@@ -148,6 +148,27 @@ export function matchAny(patterns: string[], url: string): boolean {
     });
 }
 
+const originOnly = new WeakMap<URLPattern, URLPattern>();
+
+/**
+ * Whether url's origin (protocol, hostname, port) matches any pattern's —
+ * ignoring path, query and hash. In-place navigation (pushState, #hash)
+ * keeps the origin, so this tells which patterns a page could still match.
+ */
+export function originMatchAny(patterns: string[], url: string): boolean {
+    return patterns.some((p) => {
+        try {
+            const full = cached(p);
+            if (!full) return false;
+            let o = originOnly.get(full);
+            if (!o) originOnly.set(full, (o = new URLPattern({ protocol: full.protocol, hostname: full.hostname, port: full.port })));
+            return o.test(url);
+        } catch {
+            return false;
+        }
+    });
+}
+
 /**
  * Named (and numbered "0", "1"… wildcard) groups of the first pattern that
  * matches url, merged across URL components — null when none matches.

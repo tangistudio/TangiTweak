@@ -244,7 +244,8 @@ export class ScriptLife {
         const old = this.current.get(h);
         this.current.set(h, run);
         if (!old) return;
-        this.end(old, "the script reloaded");
+        // the same compile runs a handler again only when the page navigated (navigation: "every")
+        this.end(old, old.gen === g ? "the page navigated" : "the script reloaded");
         const release = () => {
             run.settle = undefined;
             this.release(old);
@@ -267,6 +268,15 @@ export class ScriptLife {
                 this.release(run);
             }
         this.sweep();
+    }
+
+    /** end handler `h`'s live run and tear down its claims (its route stopped matching after in-place navigation) */
+    stopRun(h: string, why: string): void {
+        const run = this.current.get(h);
+        if (!run) return;
+        this.current.delete(h);
+        this.end(run, why);
+        this.release(run);
     }
 
     /** the script stopped here (disabled, deleted, no longer matches): every run ends, every claim is torn down */

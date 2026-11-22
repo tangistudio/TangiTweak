@@ -222,6 +222,45 @@ declare namespace TangiTweak {
         url: UrlPatterns;
         /** Frame URLs to skip even when `url` matches. */
         exclude?: UrlPatterns;
+        /**
+         * What happens when a single-page app changes the URL in place
+         * (history API, back/forward, `#hash`), without loading a new page.
+         * - unset / `"load"`: matched once, against the URL the page
+         *   loaded with; in-place URL changes don't start or stop it
+         * - `"match"`: runs while the URL matches. It starts when the URL
+         *   starts matching (at its `when`, or right away if that has
+         *   passed) and ends when the URL stops matching: `ctx.signal`
+         *   aborts and what the run set up is undone
+         * - `"every"`: like `"match"`, and also runs again on each URL
+         *   change while the URL still matches
+         *
+         * @example
+         * // only on pull request pages, however you got there
+         * tweak.onPage({ url: "https://github.com/tangistudio/TangiTweak/pull/*", navigation: "match" }, (ctx) => {
+         *     ctx.mount("#partial-discussion-header", <Badge />);
+         * });
+         * @see https://github.com/tangistudio/TangiTweak/blob/master/docs/scripting.md#single-page-apps
+         */
+        navigation?: "load" | "match" | "every";
+    }
+
+    /** `ctx.onNavigate`, on the `onSite`, `onPage` and `onOverlay` contexts. */
+    interface NavigateCtx {
+        /**
+         * Run `fn` with the frame's new URL whenever it changes in place
+         * (history API, back/forward, `#hash` changes), as single-page apps
+         * do. The run goes on; returns a function that stops listening
+         * (it also stops when the run ends). To start and stop with the
+         * URL instead, use the route's `navigation`.
+         *
+         * @example
+         * tweak.onOverlay("*://example.com/*", (ctx) => {
+         *     const show = (url: string) => (badge.hidden = !url.includes("/cart"));
+         *     show(ctx.url);
+         *     ctx.onNavigate(show);
+         * });
+         */
+        onNavigate(fn: (url: string) => void): () => void;
     }
 
     /**
@@ -458,7 +497,7 @@ declare namespace TangiTweak {
     }
 
     /** The context an `onSite` handler gets (`url` is the frame's URL). No `mount`: React isn't in the site's world. */
-    interface SiteCtx extends RequestCtx, RunCtx, IframesCtx<SiteIframeCtx> {}
+    interface SiteCtx extends RequestCtx, RunCtx, NavigateCtx, IframesCtx<SiteIframeCtx> {}
 
     /** What `ctx.iframes` adds for the iframe its `fn` runs in. */
     interface IframeInfo {
@@ -545,7 +584,7 @@ declare namespace TangiTweak {
     }
 
     /** The context an `onPage` handler gets (`url` is the frame's URL). */
-    interface PageCtx extends RequestCtx, TrustedRunCtx, IframesCtx<PageIframeCtx> {
+    interface PageCtx extends RequestCtx, TrustedRunCtx, NavigateCtx, IframesCtx<PageIframeCtx> {
         /**
          * Run `fn` when the user presses `keys` on the page: "Alt+Shift+M",
          * "Mod+K" (Mod = Cmd on macOS, Ctrl elsewhere), "Shift+F2", "Esc".
@@ -578,22 +617,7 @@ declare namespace TangiTweak {
     }
 
     /** The context an `onOverlay` handler gets (`url` is the page's URL). */
-    interface OverlayCtx extends RequestCtx, TrustedRunCtx, Pick<PageCtx, "shortcut"> {
-        /**
-         * Run `fn` with the page's new URL whenever it navigates in place
-         * (history API, back/forward, `#hash` changes), as single-page apps
-         * do. The overlay stays; returns a function that stops listening
-         * (it also stops when the run ends).
-         *
-         * @example
-         * tweak.onOverlay("*://example.com/*", (ctx) => {
-         *     const show = (url: string) => (badge.hidden = !url.includes("/cart"));
-         *     show(ctx.url);
-         *     ctx.onNavigate(show);
-         * });
-         */
-        onNavigate(fn: (url: string) => void): () => void;
-    }
+    interface OverlayCtx extends RequestCtx, TrustedRunCtx, NavigateCtx, Pick<PageCtx, "shortcut"> {}
 
     /** Header edits. */
     interface HeaderMod {
@@ -783,8 +807,10 @@ declare namespace TangiTweak {
          *
          * **Applies to every value:**
          * - Runs **once** per document load, per matching frame. SPA route
-         *   changes (`pushState`) and framework re-renders do *not* re-run it —
-         *   start a `MutationObserver` inside the handler to keep re-applying.
+         *   changes (`pushState`) don't re-run it unless the route sets
+         *   `navigation` (then `when` is the earliest it starts); framework
+         *   re-renders never do — start a `MutationObserver` inside the
+         *   handler to keep re-applying.
          * - Saving the script while the page is open runs the handler again
          *   **immediately**, regardless of `when` (a new run): what it sets
          *   up with `ctx.once` / `ctx.patch` / `ctx.style` / `ctx.mount` is

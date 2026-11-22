@@ -69,7 +69,7 @@ A site store's live copy in `onPage` or `onOverlay` code: it follows the site's 
 _Avoid_: replica (that's a copy of a `tweak.globalStore` or `tweak.pageStore`)
 
 **Run**:
-One execution of a page handler in one frame. A save, navigation or disable ends it, aborting `ctx.signal`.
+One execution of a page handler in one frame. A save, navigation or disable ends it, aborting `ctx.signal`; so does an in-place URL change its route's `navigation` says to follow.
 _Avoid_: instance, session
 
 **Claim**:
@@ -87,6 +87,10 @@ _Avoid_: response handler, modifyResponse
 **Route**:
 The first argument of a handler, saying which requests it applies to: one or more URL patterns, optionally narrowed by excludes, methods and resource types (`resourceTypes`), plus an optional strategy.
 _Avoid_: match, filter, rule
+
+**Navigation** (route option):
+Whether a page route follows a single-page app's in-place URL changes: `"load"` (default, matched once at load), `"match"` (runs while the URL matches) or `"every"` (also runs again on each URL change).
+_Avoid_: SPA mode, soft navigation, route change
 
 **URL pattern**:
 A URLPattern string inside a route.

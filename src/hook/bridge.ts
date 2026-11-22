@@ -43,7 +43,8 @@ import { siteBuiltin } from "../shared/siteBuiltin";
 import { SITE_DOWN_KINDS, SITE_UP_KINDS, type SiteDown, type SiteUp } from "../shared/siteStoreHost";
 import { Exposer, RpcClient, isRpcCall, isRpcResult, NOT_RUNNING, RPC_QUEUE_MAX, TOP_FRAME_ONLY, type RpcCall, type RpcResult } from "../shared/rpc";
 import { inertRemote } from "../shared/remote";
-import type { DocumentWhen, PlaceApi, RouteMeta } from "../shared/route";
+import { followsNav, type DocumentWhen, type PlaceApi, type RouteMeta } from "../shared/route";
+import { checkUrl, NavRoutes, watchUrl } from "../shared/navRoutes";
 import { clipPathFor, normalizeRects } from "../shared/overlayRects";
 import { fromWireRequest, toWireResponse } from "../shared/ttFetch";
 import { ShortcutRegistry, watchShortcuts, FrameShortcuts, ShortcutWindows, shortcutFrames } from "../shared/shortcut";
@@ -251,7 +252,7 @@ import type { RanApi } from "../shared/netTypes";
             p.reply(data.result);
             return;
         }
-        if (data.kind === "nav") noteNav();
+        if (data.kind === "nav") checkUrl();
         if (data.kind === "wire") dropped("a page-world message to trusted code");
         });
     });
@@ -475,6 +476,20 @@ import type { RanApi } from "../shared/netTypes";
 
     /** per world, per script: its runs here (shared/runLifecycle.ts) */
     const lives = { isolated: new Map<string, ScriptLife>(), page: new Map<string, ScriptLife>() };
+    /** per world, per script: its handlers with `navigation`, and ctx.onNavigate */
+    const navs = { isolated: new Map<string, NavRoutes<PageDocumentHandler>>(), page: new Map<string, NavRoutes<PageDocumentHandler>>() };
+    const navsOf = (world: "page" | "isolated", id: string): NavRoutes<PageDocumentHandler> => {
+        let n = navs[world].get(id);
+        if (!n)
+            navs[world].set(
+                id,
+                (n = new NavRoutes(() => {
+                    watchNavigation();
+                    watchUrl((url) => n!.nav(url));
+                }))
+            );
+        return n;
+    };
     /** per script: its `react-dom/client` (for `ctx.mount` in onPage code) */
     const reactDoms = new Map<string, () => ReactDomClient>();
 
@@ -504,6 +519,7 @@ import type { RanApi } from "../shared/netTypes";
                 exposers.delete(id);
                 lives[world].get(id)?.stop();
                 lives[world].delete(id);
+                navs[world].delete(id);
                 if (world === "isolated") {
                     abortCalls(id, "the script stopped");
                     pageKeys.removeScript(id);
@@ -600,26 +616,30 @@ import type { RanApi } from "../shared/netTypes";
             }
             const matching = domHandlersFor(dom, location.href, exposer);
             exposer.done();
-            for (const d of matching) {
-                const run = () => {
-                    try {
-                        const base = pageCtxBase(location.href);
-                        const keys = world === "isolated" ? pageKeys : null;
-                        fireRun(
-                            life,
-                            gen,
-                            d,
-                            keys ? (signal) => ({ ...base, shortcut: (combo: string, fn: () => unknown, opts?: any) => keys.add(h.scriptId, combo, fn, opts, signal) }) : base,
-                            exposer,
-                            (e) => scriptLog(h.scriptId, "error", formatScriptError(h.name, e, api), ctx)
-                        );
-                        scriptRan(h.scriptId, h.name, api);
-                    } catch (e: any) {
-                        scriptLog(h.scriptId, "error", formatScriptError(h.name, e, api), ctx);
-                    }
-                };
-                scheduleDocument(d.when, run, hot);
-            }
+            const nav = navsOf(world, h.scriptId);
+            const fire = (d: PageDocumentHandler, url: string) => {
+                try {
+                    const report = (e: unknown) => scriptLog(h.scriptId, "error", formatScriptError(h.name, e, api), ctx);
+                    const keys = world === "isolated" ? pageKeys : null;
+                    fireRun(
+                        life,
+                        gen,
+                        d,
+                        (signal) => ({
+                            ...pageCtxBase(url),
+                            ...(keys ? { shortcut: (combo: string, fn: () => unknown, opts?: any) => keys.add(h.scriptId, combo, fn, opts, signal) } : {}),
+                            onNavigate: nav.onNavigate(signal, report),
+                        }),
+                        exposer,
+                        report
+                    );
+                    scriptRan(h.scriptId, h.name, api);
+                } catch (e: any) {
+                    scriptLog(h.scriptId, "error", formatScriptError(h.name, e, api), ctx);
+                }
+            };
+            for (const d of matching) if (!followsNav(d.route)) scheduleDocument(d.when, () => fire(d, location.href), hot);
+            nav.set({ dom, url: location.href, now: hot, fire, stop: (d) => life.stopRun(d.h, "the page navigated away"), exposer, schedule: scheduleDocument });
             life.commit(gen);
         }
         if (world === "isolated") isoFiles = files;
@@ -1161,23 +1181,16 @@ import type { RanApi } from "../shared/netTypes";
         return toWireResponse(res);
     }
 
-    // ---- in-place navigation (ctx.onNavigate) ----
+    // ---- in-place navigation (the overlays' ctx.onNavigate and `navigation` routes) ----
     let navWatching = false;
-    let lastHref = location.href;
     function watchNavigation(): void {
         if (navWatching) return;
         navWatching = true;
-        // the isolated world can't see history.pushState: the hook nudges (`nav`)
+        // without the Navigation API this world can't see history.pushState: the hook nudges (`nav`)
         window.postMessage({ source: MAIN_SOURCE, kind: "watchNav" }, window.location.origin);
-        window.addEventListener("popstate", () => noteNav());
-        window.addEventListener("hashchange", () => noteNav());
-        // pages whose hook is missing or broken: poll while overlays exist
-        setInterval(() => overlays.size && noteNav(), 1000);
-    }
-    function noteNav(): void {
-        if (location.href === lastHref) return;
-        lastHref = location.href;
-        for (const o of overlays.values()) o.ep?.push("nav", { url: lastHref });
+        watchUrl((url) => {
+            for (const o of overlays.values()) o.ep?.push("nav", { url });
+        });
     }
 
     // the overlays' `when`

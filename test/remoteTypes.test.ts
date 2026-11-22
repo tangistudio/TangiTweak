@@ -120,9 +120,10 @@ tweak.onOverlay("*", async () => { const n: number = await page.count("a"); cons
         expect(errorsOf(`import { tweak } from "tangitweak"; tweak.onPage("*", () => {});\ntweak.onSite("*", () => "x");\ntweak.onPage("*", () => document.body);\ntweak.onOverlay("*", async () => {});`)).toEqual([]);
     });
 
-    it("ctx.onNavigate and ctx.shortcut are the overlay's only", () => {
+    it("ctx.onNavigate is in every page world; ctx.shortcut isn't in onSite; navigation is typed", () => {
         expect(errorsOf(`import { tweak } from "tangitweak"; tweak.onOverlay("*", (ctx) => { const off: () => void = ctx.onNavigate((u: string) => {}); off(); ctx.shortcut("Alt+K", () => {}); });`)).toEqual([]);
-        expect(errorsOf(`import { tweak } from "tangitweak"; tweak.onPage("*", (ctx) => { ctx.onNavigate(() => {}); });`)).toHaveLength(1);
+        expect(errorsOf(`import { tweak } from "tangitweak"; tweak.onPage({ url: "*", navigation: "match" }, (ctx) => { ctx.onNavigate(() => {}); }); tweak.onSite({ url: "*", navigation: "every" }, (ctx) => { ctx.onNavigate(() => {}); });`)).toEqual([]);
+        expect(errorsOf(`import { tweak } from "tangitweak"; tweak.onPage({ url: "*", navigation: "always" }, () => {});`)).toHaveLength(1);
         expect(errorsOf(`import { tweak } from "tangitweak"; tweak.onSite("*", (ctx) => { ctx.shortcut("Alt+K", () => {}); });`)).toHaveLength(1);
     });
 });

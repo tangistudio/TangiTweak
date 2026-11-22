@@ -17,6 +17,7 @@ its section below.
 - **Folder Sync writes `eslint.config.mjs`** and `.tangitweak/eslint-plugin.mjs`, and lists ESLint and typescript-eslint in the root `package.json`, so `npx eslint .` or VS Code's ESLint extension shows the Editor's checks in a synced folder ([docs](docs/editor.md#synced-folder)).
 - **Uncaught errors in `onPage` code show in the Log**: an error thrown in a timer, event listener or observer callback, or a promise nobody awaits, is logged as the tweak's (`onPage (uncaught)` / `onPage (unhandled rejection)`) with its source lines. The page's own errors aren't.
 - **`tweak.fetch` in `onPage` code**, to the hosts listed in the tweak's `package.json` `"tangitweak.connect"` and their subdomains only. Any other host rejects and names the host to add ([docs](docs/scripting.md#tweakfetch)). It used to reject everywhere in page code; `onSite` code still can't use it.
+- **Page code can follow single-page apps**: a route's `navigation: "match"` runs an `onPage`, `onSite` or `onOverlay` handler while the URL matches, starting when an in-place URL change (history API, back/forward, `#hash`) makes it match and ending, with its setup undone, when one makes it stop; `"every"` also runs it again on each URL change. `ctx.onNavigate(fn)` now works in `onPage` and `onSite` too ([docs](docs/scripting.md#single-page-apps--navigation)). Routes still match only the URL a page loaded with by default.
 
 ### Changed
 

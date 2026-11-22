@@ -9,7 +9,7 @@
  * Each network route is owned by exactly one strategy: its own, required,
  * `strategy` — there is no default.
  */
-import { hostKeyOf, matchAny, matchGroups, matchPatternError } from "./matcher";
+import { hostKeyOf, matchAny, matchGroups, matchPatternError, originMatchAny } from "./matcher";
 
 export type Strategy = "page" | "extension" | "debugger" | "helper" | "rules";
 export const STRATEGIES: Strategy[] = ["helper", "page", "extension", "debugger", "rules"];
@@ -56,6 +56,16 @@ export function placeKeyer(): (api: PlaceApi, lib?: string) => { key: string; n:
 export type DocumentWhen = "document_start" | "document_end" | "document_idle";
 const DOCUMENT_WHENS: DocumentWhen[] = ["document_start", "document_end", "document_idle"];
 
+/**
+ * onSite / onPage / onOverlay: what in-place URL changes (pushState,
+ * back/forward, #hash) do. "load" (default): nothing — matched once,
+ * against the URL the page loaded with. "match": the run starts when the
+ * URL starts matching and ends when it stops. "every": also restarts on
+ * each change while it matches.
+ */
+export type Navigation = "load" | "match" | "every";
+const NAVIGATIONS: Navigation[] = ["load", "match", "every"];
+
 /** webRequest resource type names (also ctx.resourceType) */
 export const RESOURCE_TYPES = [
     "main_frame", "sub_frame", "stylesheet", "script", "image", "font", "object",
@@ -79,6 +89,8 @@ export interface RouteMeta {
     strategy?: Strategy;
     /** onDocument / onOverlay only */
     when?: DocumentWhen;
+    /** onDocument / onOverlay: follow in-place URL changes; absent = "load" */
+    navigation?: Exclude<Navigation, "load">;
     /** onDocument: the JavaScript world — "isolated" (tweak.onPage) or "page" (tweak.onSite) */
     world?: PageWorld;
     /** the API name it was registered with, when it differs from `kind` (tweak.onSite / tweak.onPage → kind "onDocument") */
@@ -169,10 +181,15 @@ export function normalizeRoute(kind: RouteKind, raw: unknown, index: number, api
             if (!DOCUMENT_WHENS.includes(obj.when)) throw new Error(`${where}: when must be one of ${DOCUMENT_WHENS.join(", ")}`);
             route.when = obj.when;
         } else route.when = api === "onSite" ? "document_start" : "document_end"; // onSite: ahead of the site's own code
+        if (obj.navigation !== undefined) {
+            if (!NAVIGATIONS.includes(obj.navigation)) throw new Error(`${where}: navigation must be one of ${NAVIGATIONS.map((n) => JSON.stringify(n)).join(", ")}, got ${JSON.stringify(obj.navigation)}`);
+            if (obj.navigation !== "load") route.navigation = obj.navigation;
+        }
         if (kind === "onDocument") route.world = api === "onSite" ? "page" : "isolated";
         return route;
     }
     if (obj.when !== undefined) throw new Error(`${where}: "when" applies to onSite, onPage and onOverlay only`);
+    if (obj.navigation !== undefined) throw new Error(`${where}: "navigation" applies to onSite, onPage and onOverlay only`);
     if (obj.binary !== undefined) {
         if (kind !== "onResponseBody") throw new Error(`${where}: "binary" applies to onResponseBody only`);
         if (typeof obj.binary !== "boolean" && obj.binary !== "both") throw new Error(`${where}: binary must be true, false or "both", got ${JSON.stringify(obj.binary)}`);
@@ -204,6 +221,19 @@ export function routeMatches(route: RouteMeta, url: string, method?: string, typ
     if (route.methods && method && !route.methods.includes(method.toUpperCase())) return false;
     if (route.resourceTypes && type && !route.resourceTypes.includes(type)) return false;
     return true;
+}
+
+/** the route re-checks its match on in-place URL changes (`navigation: "match" | "every"`) */
+export const followsNav = (route: Pick<RouteMeta, "navigation">): boolean => !!route.navigation;
+
+/**
+ * Whether a document at url could run the route, now or after in-place
+ * navigation: routeMatches for "load" routes; for routes that follow
+ * navigation, only the origin has to match (pushState can't change it).
+ */
+export function routeMayMatch(route: RouteMeta, url: string): boolean {
+    if (!followsNav(route)) return routeMatches(route, url);
+    return originMatchAny(routePatterns(route.url), url);
 }
 
 /**

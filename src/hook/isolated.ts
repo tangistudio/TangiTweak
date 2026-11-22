@@ -29,7 +29,8 @@ import { hotRegistry } from "../shared/hotRefresh";
 import { portEndpoint, type Endpoint, type IsoInit } from "../shared/wire";
 import { Exposer, RpcClient, isRpcCall, TOP_FRAME_ONLY, type RpcResult } from "../shared/rpc";
 import { inertRemote } from "../shared/remote";
-import { routeMatches, type PlaceApi, type RouteMeta } from "../shared/route";
+import { followsNav, routeMayMatch, type PlaceApi, type RouteMeta } from "../shared/route";
+import { NavRoutes, watchUrl } from "../shared/navRoutes";
 import { ReplicaHub } from "../shared/storeReplica";
 import { tabScopeOfPage } from "../shared/storeOps";
 import { SiteMirrors } from "../shared/siteStoreMirror";
@@ -39,7 +40,7 @@ import { FrameKeyOffers } from "../shared/frameKeys";
 
 (() => {
     const me = ((globalThis as any).__ttIsoQ as { s: string; routes: RouteMeta[] }[] | undefined)?.shift();
-    if (!me || !me.routes.some((r) => routeMatches(r, location.href))) return;
+    if (!me || !me.routes.some((r) => routeMayMatch(r, location.href))) return;
     const s = me.s;
     const top = window === window.top;
     /** the script's name (from iso.load), for errors raised before or outside a run */
@@ -86,7 +87,7 @@ import { FrameKeyOffers } from "../shared/frameKeys";
     // a compile's handles call with its signal: they abort once a reload replaced it and its runs ended
     const handle = (gen: Generation) => (api: PlaceApi, key: string, route: RouteMeta) => {
         const sig = () => gen.signal;
-        if (api === "onSite" && routeMatches(route, location.href)) siteHere.add(key);
+        if (api === "onSite" && routeMayMatch(route, location.href)) siteHere.add(key);
         return api === "onSite" ? pageClient.remote(key, sig) : api === "onPage" ? local.remote(key, sig) : top ? client.remote(key, sig) : inertRemote(TOP_FRAME_ONLY);
     };
     let reactDom: () => ReactDomClient = () => {
@@ -99,6 +100,8 @@ import { FrameKeyOffers } from "../shared/frameKeys";
         // f.shortcut: keys pressed in that iframe
         frameCtx: (doc, signal) => ({ shortcut: (combo: string, fn: () => unknown, opts?: any) => keys.add(s, combo, fn, opts, signal, doc.defaultView!) }),
     });
+    /** handlers with `navigation`, and ctx.onNavigate: in-place URL changes */
+    const navs: NavRoutes<PageDocumentHandler> = new NavRoutes(() => watchUrl((url) => navs.nav(url)));
     /** ctx.shortcut in cross-origin iframes: keep the link up while there are any */
     let keyHold = false;
     let linked = 0;
@@ -284,27 +287,28 @@ import { FrameKeyOffers } from "../shared/frameKeys";
         }
         const matching = domHandlersFor(dom, location.href, exposer);
         exposer.done();
-        for (const d of matching)
-            scheduleDocument(
-                d.when,
-                () => {
-                    try {
-                        const base = pageCtxBase(location.href);
-                        fireRun(
-                            life,
-                            gen,
-                            d,
-                            (signal) => ({ ...base, shortcut: (combo: string, fn: () => unknown, opts?: any) => keys.add(s, combo, fn, opts, signal) }),
-                            exposer,
-                            (e) => log("error", formatScriptError(init.name, e, "onPage"))
-                        );
-                        noteRan("onPage", init.name);
-                    } catch (e: any) {
-                        log("error", formatScriptError(init.name, e, "onPage"));
-                    }
-                },
-                hot
-            );
+        const fire = (d: PageDocumentHandler, url: string) => {
+            try {
+                const report = (e: unknown) => log("error", formatScriptError(init.name, e, "onPage"));
+                fireRun(
+                    life,
+                    gen,
+                    d,
+                    (signal) => ({
+                        ...pageCtxBase(url),
+                        shortcut: (combo: string, fn: () => unknown, opts?: any) => keys.add(s, combo, fn, opts, signal),
+                        onNavigate: navs.onNavigate(signal, report),
+                    }),
+                    exposer,
+                    report
+                );
+                noteRan("onPage", init.name);
+            } catch (e: any) {
+                log("error", formatScriptError(init.name, e, "onPage"));
+            }
+        };
+        for (const d of matching) if (!followsNav(d.route)) scheduleDocument(d.when, () => fire(d, location.href), hot);
+        navs.set({ dom, url: location.href, now: hot, fire, stop: (d) => life.stopRun(d.h, "the page navigated away"), exposer, schedule: scheduleDocument });
         life.commit(gen);
     }
 

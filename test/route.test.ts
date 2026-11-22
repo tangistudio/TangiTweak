@@ -1,7 +1,19 @@
 /** Per-handler routes: normalization, matching, required strategy, and the page-side shim. */
 import { describe, expect, it } from "vitest";
-import { RouteIndex, effectiveStrategy, hookCanSee, normalizeRoute, routeGroups, routeLabel, routeMatches, sampleUrl, scriptUrls, type RouteMeta } from "../src/shared/route";
+import { RouteIndex, effectiveStrategy, hookCanSee, normalizeRoute, routeGroups, routeLabel, routeMatches, routeMayMatch, sampleUrl, scriptUrls, type RouteMeta } from "../src/shared/route";
 import { domHandlersFor, makePageShim } from "../src/shared/pageShim";
+
+describe("routeMayMatch", () => {
+    it("a route following navigation may match any URL on its origins; others need a full match", () => {
+        const nav = normalizeRoute("onDocument", { url: "https://a.com/cart/*", navigation: "match" }, 0);
+        expect(routeMayMatch(nav, "https://a.com/home")).toBe(true);
+        expect(routeMayMatch(nav, "https://b.com/cart/1")).toBe(false);
+        expect(routeMayMatch(nav, "http://a.com/cart/1")).toBe(false);
+        const load = normalizeRoute("onDocument", "https://a.com/cart/*", 0);
+        expect(routeMayMatch(load, "https://a.com/home")).toBe(false);
+        expect(routeMayMatch(load, "https://a.com/cart/1")).toBe(true);
+    });
+});
 
 describe("normalizeRoute", () => {
     it("accepts { url, strategy } with a string or a list", () => {
@@ -29,6 +41,10 @@ describe("normalizeRoute", () => {
         expect(() => normalizeRoute("onDocument", { url: "*", when: "DOMContentLoaded" }, 0)).toThrow(/when must be one of document_start, document_end, document_idle$/);
         expect(() => normalizeRoute("onDocument", { url: "*", methods: ["GET"] }, 0)).toThrow(/doesn't apply to onDocument/);
         expect(() => normalizeRoute("onRequest", { url: "*", when: "document_idle" }, 0)).toThrow(/"when" applies to onSite, onPage and onOverlay only/);
+        expect(normalizeRoute("onOverlay", { url: "*", navigation: "every" }, 0, "onOverlay").navigation).toBe("every");
+        expect(normalizeRoute("onDocument", { url: "*", navigation: "load" }, 0)).not.toHaveProperty("navigation");
+        expect(() => normalizeRoute("onDocument", { url: "*", navigation: "always" }, 0)).toThrow(/navigation must be one of "load", "match", "every"/);
+        expect(() => normalizeRoute("onRequest", { url: "*", navigation: "match", strategy: "page" }, 0)).toThrow(/"navigation" applies to onSite, onPage and onOverlay only/);
     });
 
     it("network handlers require a strategy: bare patterns and strategy-less objects throw", () => {

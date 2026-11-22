@@ -1067,10 +1067,10 @@ so one handler can add an early listener and a late mount.
   Chrome's content-script `run_at: "document_idle"` (which can fire
   before `load`); one slow image or ad iframe delays it.
 - **Once per document, per matching frame.** SPA soft navigations
-  (`pushState`) and framework re-renders don't re-run it — start a
-  `MutationObserver` inside the handler to keep re-applying (the overlay
-  has [`ctx.onNavigate`](#overlays--wtonoverlay)). Hard navigations start
-  over.
+  (`pushState`) don't re-run it unless the route sets
+  [`navigation`](#single-page-apps--navigation). Framework re-renders never
+  do — start a `MutationObserver` inside the handler to keep re-applying.
+  Hard navigations start over.
 - **Saving the script** runs the handlers again right away, whatever their
   `when`, without reloading the page ([hot reload](#hot-reload--runs-and-ctx)).
   What they set up with `ctx.once`/`ctx.patch`/`ctx.style`/`ctx.mount` is
@@ -1080,6 +1080,36 @@ so one handler can add an early listener and a late mount.
 - `ctx` has the request-context shape: `ctx.url` is the frame's URL (the
   page's in an overlay); `method`, `resourceType` and `groups` are
   placeholders (`"GET"`, `"main_frame"`, `{}`).
+
+### Single-page apps — `navigation`
+
+Single-page apps change the URL in place (history API, back/forward,
+`#hash`) without loading a new page. By default a route is matched once,
+against the URL the page loaded with. The route's `navigation` changes
+that:
+
+| `navigation` | in-place URL changes |
+|---|---|
+| `"load"` (default) | ignored: matched once at load |
+| `"match"` | runs while the URL matches: starts when it starts matching, ends when it stops |
+| `"every"` | like `"match"`, and runs again on each URL change while it matches |
+
+```ts
+// only on pull request pages, however you got there
+tweak.onPage({ url: "https://github.com/*/*/pull/*", navigation: "match" }, (ctx) => {
+    ctx.mount("#partial-discussion-header", <Badge />);
+});
+```
+
+- **Starting.** At the route's `when`, or right away if that has passed.
+- **Ending.** As if the handler were removed: `ctx.signal` aborts and what
+  the run set up with `ctx.patch`/`ctx.style`/`ctx.mount` is undone. Its
+  [handles](#handles--calls-between-places) answer only while it runs.
+- **`"every"`** starts a new run for each URL, like a save does, so mounts
+  stay without flicker.
+- **`ctx.onNavigate(fn)`** runs `fn(url)` on each in-place URL change
+  while the run goes on, for when one run should follow the URL itself.
+- Iframes follow their own URL. Works in all three worlds.
 
 ### `tweak.onSite` — the site's world
 
@@ -1298,7 +1328,7 @@ starting timers — isn't undone, and the new run does it again: an
 | `mount(ui)`, `mount(target, ui, opts?)` | — | ✓ | ✓ | render React UI (JSX) on every match; a save re-renders it, state kept |
 | `each(fn, ...args)` | — | ✓ | ✓ | [loop over a handle function's answers](#waiting-for-events--ctxeach) |
 | `iframes(selector?, fn)` | ✓ | ✓ | — | run `fn` in each same-origin iframe, now and later |
-| `onNavigate(fn)` | — | — | ✓ | [in-place navigations](#overlays--wtonoverlay) |
+| `onNavigate(fn)` | ✓ | ✓ | ✓ | [in-place navigations](#single-page-apps--navigation) |
 | `shortcut(keys, fn, opts)` | — | ✓ | ✓ | [keyboard shortcuts](#keyboard-shortcuts) |
 
 ```ts
@@ -1596,7 +1626,9 @@ it right away, and the value survives restarts.
 - **`ctx`.** `ctx.url` is the page's URL. `ctx.onNavigate(fn)` runs `fn(url)`
   whenever the page navigates in place (`pushState`, back/forward,
   `#hash`), as single-page apps do; the overlay stays. It returns a
-  function that stops listening; it also stops when the run ends.
+  function that stops listening; it also stops when the run ends. To
+  show the overlay only on some in-app pages, use the route's
+  [`navigation`](#single-page-apps--navigation) instead.
 
   ```ts
   tweak.onOverlay("*://app.example.com/*", (ctx) => {

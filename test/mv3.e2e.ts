@@ -1283,6 +1283,42 @@ tweak.replaceResponse({ url: "${ORIGIN}/sf-data", strategy: "page" }, async () =
         await bp.close();
     }
 
+    // ---- single-page apps: a route's navigation follows in-place URL changes ----
+    {
+        await saveTweak(
+            warmSend,
+            "s_spa",
+            "Spa",
+            `import { tweak } from "tangitweak";
+            const bump = (k: string) => (document.documentElement.dataset[k] = String(Number(document.documentElement.dataset[k] || 0) + 1));
+            tweak.onPage({ url: "*://*:*/page-spa/cart*", navigation: "match" }, (ctx) => { bump("spaPage"); ctx.signal.addEventListener("abort", () => bump("spaPageEnd")); });
+            tweak.onSite({ url: "*://*:*/page-spa/cart*", navigation: "every" }, (ctx) => { bump("spaSite"); document.documentElement.dataset.spaSiteUrl = ctx.url; });`
+        );
+        await warm.waitForTimeout(1500);
+        const sp = await ctx.newPage();
+        await sp.goto(`${ORIGIN}/page-spa/home`);
+        await sp.waitForTimeout(1000);
+        const ds = () => sp.evaluate(() => ({ ...document.documentElement.dataset }) as Record<string, string>);
+        /** pushState to `path`, then wait until `want` (an expression over `d`, the root's dataset) holds */
+        const go = async (path: string, want: string) => {
+            await sp.evaluate((p: string) => (p === "back" ? history.back() : history.pushState(null, "", p)), path);
+            await sp.waitForFunction(`(d => ${want})(document.documentElement.dataset)`, null, { timeout: 5000 }).catch(() => {});
+            return ds();
+        };
+        const atLoad = await ds();
+        check("navigation: a route that doesn't match the loaded URL doesn't run", !atLoad.spaPage && !atLoad.spaSite, JSON.stringify(atLoad));
+        let d = await go("/page-spa/cart", `d.spaPage === "1" && d.spaSite === "1"`);
+        check('navigation: "match" onPage and "every" onSite start when pushState makes the URL match', d.spaPage === "1" && d.spaSite === "1" && d.spaSiteUrl === `${ORIGIN}/page-spa/cart`, JSON.stringify(d));
+        d = await go("/page-spa/cart/2", `d.spaSite === "2"`);
+        check('navigation: "every" runs again on a URL change; "match" keeps its run', d.spaPage === "1" && d.spaSite === "2" && d.spaSiteUrl === `${ORIGIN}/page-spa/cart/2`, JSON.stringify(d));
+        d = await go("/page-spa/home", `d.spaPageEnd === "1"`);
+        check('navigation: "match" ends (signal aborts) when the URL stops matching', d.spaPageEnd === "1", JSON.stringify(d));
+        d = await go("back", `d.spaPage === "2" && d.spaSite === "3"`);
+        check("navigation: back/forward starts it again", d.spaPage === "2" && d.spaSite === "3", JSON.stringify(d));
+        await deleteTweak(warmSend, "Spa");
+        await sp.close();
+    }
+
     // ---- MV3 folder sync: the poller now runs in the service worker ----
     // (a 25s keep-alive ping + a 30s alarms fallback; previously MV3 refused
     // to sync at all while the manager still showed "Scripts Folder ✓")
