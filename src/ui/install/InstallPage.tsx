@@ -184,7 +184,7 @@ export function InstallFlow({ request, host }: { request: InstallRequest; host: 
 
     async function pickLocal(label: string, files: Record<string, string>, myRun = ++runSeq.current) {
         const entries = startsIn(Object.keys(files), (p) => files[p]);
-        if (!entries.length) return setState({ phase: "pick", error: `${label} has no tweak to install — a tweak is a folder with a ${MANIFEST_FILE} that has a "tangitweak" block.` });
+        if (!entries.length) return setState({ phase: "pick", error: `${label} has no tweak to install — a tweak is a folder with a ${MANIFEST_FILE} that lists "tangitweak" in its dependencies.` });
         const top = entries.filter((e) => e.split("/").length === entries[0].split("/").length);
         if (top.length > 1) return setState({ phase: "pick", local: { label, files, entries } });
         await installLocal(files, entries[0], myRun);

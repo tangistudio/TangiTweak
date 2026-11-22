@@ -218,7 +218,7 @@ function bundleOf(testFile: string | undefined): string {
         if (dir) return dir;
     }
     throw new Error(
-        `tangitweak/test: no package.json with a "tangitweak" block above ${testFile ?? "this test file"} — a test file lives inside its tweak's folder (e.g. <tweak>/__tests__/x.test.ts)`
+        `tangitweak/test: no package.json listing "tangitweak" in its dependencies above ${testFile ?? "this test file"} — a test file lives inside its tweak's folder (e.g. <tweak>/__tests__/x.test.ts)`
     );
 }
 

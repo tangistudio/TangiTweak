@@ -1,6 +1,6 @@
 /**
- * Installed packages: a tweak bundle (a folder whose package.json has a
- * "tangitweak" block), its entry and the files it imports — installed from
+ * Installed packages: a tweak bundle (a folder whose package.json lists
+ * "tangitweak" in its dependencies), its entry and the files it imports — installed from
  * a URL, a GitHub repository, a gist or a local folder and recorded so it
  * updates, all files together, from where it came from. The files themselves are ordinary
  * scripts and data files; the record maps each package file to the store

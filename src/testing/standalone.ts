@@ -71,14 +71,15 @@ export function setStore(store: object, value: object): void {
 const SELF = nodeUrl.fileURLToPath(import.meta.url);
 const bundleOfDir = new Map<string, string | null>();
 
-/** the folder of the nearest package.json with a "tangitweak" block above `dir` */
+/** the folder of the nearest tweak package.json above `dir` (one listing "tangitweak" in its dependencies, or with a "tangitweak" block; as packageMetadata's isTweakPackage) */
 export function bundleDirOf(dir: string): string | null {
     const hit = bundleOfDir.get(dir);
     if (hit !== undefined) return hit;
     let found: string | null = null;
     try {
         const pkg = JSON.parse(fs.readFileSync(nodePath.join(dir, "package.json"), "utf8"));
-        if (pkg && typeof pkg === "object" && pkg.tangitweak && typeof pkg.tangitweak === "object") found = dir;
+        const obj = (v: unknown): v is Record<string, any> => !!v && typeof v === "object" && !Array.isArray(v);
+        if (obj(pkg) && (obj(pkg.tangitweak) || (obj(pkg.dependencies) && typeof pkg.dependencies.tangitweak === "string"))) found = dir;
     } catch {}
     if (!found) {
         const up = nodePath.dirname(dir);

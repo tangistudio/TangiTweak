@@ -2,8 +2,8 @@
  * Where a package comes from, and reading its files: the install page
  * (first install, local files) and the background (updates) share this.
  *
- * A package is a tweak bundle — a folder whose package.json has a
- * "tangitweak" block (see packageMetadata) — its entry and every file it
+ * A package is a tweak bundle — a folder whose package.json lists
+ * "tangitweak" in its dependencies (see packageMetadata) — its entry and every file it
  * imports by a relative path, followed transitively. Sources:
  *   - GitHub: a file (`github.com/o/r/blob/ref/x/package.json`, `…/index.ts`,
  *     `raw.githubusercontent.com/o/r/ref/…`) or a folder (`github.com/o/r/tree/ref/dir`,
@@ -472,7 +472,7 @@ export function pickStart(paths: string[], where: string): string {
     const manifest = paths.find(isManifestPath);
     if (manifest) return manifest;
     const legacy = paths.some((p) => /(^|\/)metadata\.json$/i.test(p)) ? " (metadata.json bundles no longer install)" : paths.some(isScriptFilePath) ? " (single-file scripts no longer install)" : "";
-    throw new Error(`no package.json in ${where} — a tweak is a folder with a package.json that has a "tangitweak" block${legacy}`);
+    throw new Error(`no package.json in ${where} — a tweak is a folder with a package.json that lists "tangitweak" in its dependencies${legacy}`);
 }
 
 /** a package's files as read, before they're laid out in the Explorer */
@@ -543,7 +543,7 @@ export async function crawl(start: string, read: (path: string) => Promise<strin
         // a file of the tweak: its folder's package.json
         const pj = dir + MANIFEST_FILE;
         const t = await read(pj).catch(() => null);
-        if (t === null || !isBundlePackageJson(t)) throw new Error(`${start} isn't in a tweak — a tweak is a folder with a package.json that has a "tangitweak" block (single-file scripts no longer install)`);
+        if (t === null || !isBundlePackageJson(t)) throw new Error(`${start} isn't in a tweak — a tweak is a folder with a package.json that lists "tangitweak" in its dependencies (single-file scripts no longer install)`);
         start = pj;
     }
     const manifest: Manifest = parseManifest(await first(start, start), start);

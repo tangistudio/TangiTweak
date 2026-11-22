@@ -43,7 +43,7 @@ export interface Bundle {
     pkg: any;
 }
 
-/** the bundle a file (script name or data path) is in: the nearest folder whose package.json has a "tangitweak" block */
+/** the bundle a file (script name or data path) is in: the nearest folder whose package.json lists "tangitweak" in its dependencies */
 export function bundleOf(name: string, read: DataReader): Bundle | undefined {
     for (const dir of ancestors(name)) {
         const text = read(dir + MANIFEST_FILE);
@@ -72,13 +72,15 @@ export function bundleRole(name: string, scriptNames: Iterable<string>, read: Da
         const entry = entryName(b, (n) => names.has(n.toLowerCase()));
         return { role: entry.toLowerCase() === name.toLowerCase() ? "entry" : "module", bundle: b, entry };
     }
+    const plain = ancestors(name).find((dir) => read(dir + MANIFEST_FILE) !== undefined);
+    if (plain !== undefined) return { role: "rewrite", reason: `${NEEDS_REWRITE} ${plain}${MANIFEST_FILE} doesn't list "tangitweak" in its "dependencies" — add it to make this folder a tweak` };
     const legacy = ancestors(name).find((dir) => read(dir + LEGACY_MANIFEST_FILE) !== undefined);
     return {
         role: "rewrite",
         reason:
             legacy !== undefined
-                ? `${NEEDS_REWRITE} ${legacy}${LEGACY_MANIFEST_FILE} bundles no longer load — replace it with a package.json that has a "tangitweak" block, with one entry (its "main", else index.ts) that imports the other files (see New Tweak…)`
-                : `${NEEDS_REWRITE} single-file scripts no longer load — make it a tweak: a folder with a package.json that has a "tangitweak" block and this code in its index.ts (see New Tweak…)`,
+                ? `${NEEDS_REWRITE} ${legacy}${LEGACY_MANIFEST_FILE} bundles no longer load — replace it with a package.json that lists "tangitweak" in its dependencies, with one entry (its "main", else index.ts) that imports the other files (see New Tweak…)`
+                : `${NEEDS_REWRITE} single-file scripts no longer load — make it a tweak: a folder with a package.json that lists "tangitweak" in its dependencies and this code in its index.ts (see New Tweak…)`,
     };
 }
 

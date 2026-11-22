@@ -9,7 +9,7 @@ conversation.
 ## Scripts
 
 **Tweak**:
-A folder whose `package.json` has a `"tangitweak"` block, and what it runs: one enable switch, its params, stores and handlers. The only way to write and ship code for TangiTweak; **New Tweak…** creates one.
+A folder whose `package.json` lists `tangitweak` in its `dependencies` (its `"tangitweak"` block of settings is optional), and what it runs: one enable switch, its params, stores and handlers. The only way to write and ship code for TangiTweak; **New Tweak…** creates one.
 _Avoid_: bundle, package (for the folder), `metadata.json` bundle (the pre-0.40 format)
 
 **Entry**:

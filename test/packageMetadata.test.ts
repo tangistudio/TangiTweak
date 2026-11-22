@@ -92,7 +92,8 @@ describe("package metadata", () => {
     });
     it("rejects a wrong package.json", () => {
         expect(() => parseManifest("{")).toThrow(/valid JSON/);
-        expect(() => parseManifest(`{"name":"x"}`)).toThrow(/no "tangitweak" block/);
+        expect(() => parseManifest(`{"name":"x"}`)).toThrow(/list "tangitweak" in its "dependencies"/);
+        expect(() => parseManifest(`{"tangitweak":[]}`)).toThrow(/"tangitweak" must be an object/);
         expect(() => parseManifest(pkg({ main: "data.json", tangitweak: {} }))).toThrow(/data\.json/);
         expect(() => parseManifest(pkg({ main: "../a.ts", tangitweak: {} }))).toThrow(/bundle's folder/);
         expect(() => parseManifest(pkg({ tangitweak: { displayName: 3 } }))).toThrow(/"tangitweak.displayName" must be a string/);

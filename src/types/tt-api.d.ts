@@ -1524,10 +1524,11 @@ declare namespace TangiTweak {
 }
 
 /**
- * The TangiTweak API. Each file that imports it gets its own `tweak`;
- * handlers it registers in a file are known by their order there ("the
- * 2nd `onPage`"), and its tab/page/site stores by their order among the
- * file's `tabStore` / `pageStore` / `siteStore` calls.
+ * The TangiTweak API. Everything a bundle's files register belongs to
+ * its tweak. Each file gets its own `tweak` object, so handlers are known
+ * by their order in their file ("the 2nd `onPage`"), and tab/page/site
+ * stores by their order among that file's `tabStore` / `pageStore` /
+ * `siteStore` calls.
  */
 declare module "tangitweak" {
     export const tweak: TangiTweak.Tweak;

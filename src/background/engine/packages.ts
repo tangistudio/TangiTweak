@@ -70,7 +70,7 @@ export interface Analysis {
     metadata: PackageMetadata;
     /** resolved `<img src>` URL when the bundle declares an icon */
     iconUrl?: string;
-    /** a bundle (a package.json with a "tangitweak" block): always, now */
+    /** a bundle (a tweak's package.json): always, now */
     bundle: boolean;
     caps: Capabilities;
     /** an entry's compile error */
@@ -160,7 +160,7 @@ async function analyze(fetched: Pick<FetchedPackage, "entries" | "files">, pkg?:
     if (!entry) throw new Error("the package has no script to run");
     if (files[entry] === undefined) throw new Error(`the package has no ${entry}`);
     if (!SCRIPT_FILE_RE.test(entry)) throw new Error(`${entry}: a package's scripts are .ts or .tsx files`);
-    if (files[MANIFEST_FILE] === undefined) throw new Error(`the package has no ${MANIFEST_FILE} — a tweak is a folder with a package.json that has a "tangitweak" block`);
+    if (files[MANIFEST_FILE] === undefined) throw new Error(`the package has no ${MANIFEST_FILE} — a tweak is a folder with a package.json that lists "tangitweak" in its dependencies`);
     const manifest = parseManifest(files[MANIFEST_FILE]);
     const [scripts, dataFiles, folders] = await Promise.all([listScripts(), listDataFiles(), listFolders()]);
     const taken = [...scripts.map((s) => s.meta.name), ...dataFiles.map((d) => d.path), ...allFolders(folders, [])];

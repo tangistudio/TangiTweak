@@ -4,7 +4,7 @@ import { crawl, filesHash, type CrawledPackage } from "./packageSource";
 
 export { isPackageFile, unzipPackage } from "./packageSource";
 
-/** the tweaks (package.json files with a "tangitweak" block, when `textOf` reads them) a set of files has, shallowest first */
+/** the tweaks (tweak package.json files, when `textOf` reads them) a set of files has, shallowest first */
 export function startsIn(paths: string[], textOf?: (path: string) => string | undefined): string[] {
     const depth = (p: string) => p.split("/").length;
     return paths

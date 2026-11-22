@@ -2,7 +2,7 @@
 
 [<img src="../icons/icon.svg" width="16" height="16" align="absmiddle" alt=""> README](../README.md) · [Glossary](../GLOSSARY.md)
 
-A tweak is a folder with a `package.json` that has a `"tangitweak"` block
+A tweak is a folder with a `package.json` that lists `tangitweak` in its `dependencies`
 (see [package.json](packages.md#packagejson)). **New Tweak…** in the
 Explorer creates one. Its **entry** (`main`, else `index.ts`, else
 `index.tsx`) is the tweak's code, called "the script" below; the folder's

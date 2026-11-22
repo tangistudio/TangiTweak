@@ -1,5 +1,5 @@
 /**
- * Tweak bundles: a folder whose package.json has a "tangitweak" block. Its
+ * Tweak bundles: a folder whose package.json lists "tangitweak" in its dependencies. Its
  * entry (`main`, else index.ts, else index.tsx) is the tweak; the other
  * files are its modules; anything outside a bundle needs a rewrite.
  */
@@ -46,15 +46,19 @@ describe("bundles", () => {
         expect(entryName(b({ main: "app.tsx" }), has("t/index"))).toBe("t/app.tsx");
     });
 
-    it("roles: the entry, its modules, and files that need a rewrite (single files, metadata.json bundles)", () => {
-        const r = read({ "t/package.json": bundlePkg("t"), "old/metadata.json": JSON.stringify({ scripts: ["a.ts"] }) });
-        const names = ["t/index", "t/lib/util", "solo", "old/a"];
+    it("roles: the entry, its modules, and files that need a rewrite (single files, metadata.json bundles, package.json without tangitweak)", () => {
+        const r = read({ "t/package.json": bundlePkg("t"), "old/metadata.json": JSON.stringify({ scripts: ["a.ts"] }), "plain/package.json": JSON.stringify({ name: "plain", main: "a.ts" }), "deps/package.json": JSON.stringify({ main: "a.ts", dependencies: { tangitweak: "^0.40.1-alpha" } }) });
+        const names = ["t/index", "t/lib/util", "solo", "old/a", "plain/a", "deps/a"];
         expect(bundleRole("t/index", names, r)).toMatchObject({ role: "entry", entry: "t/index" });
         expect(bundleRole("t/lib/util", names, r)).toMatchObject({ role: "module", entry: "t/index" });
         const solo = bundleRole("solo", names, r);
         expect(solo.role === "rewrite" && solo.reason).toMatch(/^Needs a rewrite: single-file scripts no longer load/);
         const old = bundleRole("old/a", names, r);
         expect(old.role === "rewrite" && old.reason).toMatch(/^Needs a rewrite: old\/metadata\.json bundles no longer load/);
+        const plain = bundleRole("plain/a", names, r);
+        expect(plain.role === "rewrite" && plain.reason).toMatch(/^Needs a rewrite: plain\/package\.json doesn't list "tangitweak" in its "dependencies"/);
+        // the "tangitweak" block is optional: the dependency alone makes a tweak
+        expect(bundleRole("deps/a", names, r)).toMatchObject({ role: "entry", entry: "deps/a" });
     });
 
     it("lists each script's role for the UI, with an entry's bundle name", () => {

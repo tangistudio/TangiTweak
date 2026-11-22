@@ -129,7 +129,7 @@ function installMenu(): MenuItem[] {
 }
 
 /** open `id` unless it's already the open file */
-/** folders holding a package.json with a "tangitweak" block: tweaks (shared/newTweak) */
+/** folders holding a tweak's package.json: tweaks (shared/newTweak) */
 const localPackageFolders = (dataFiles: readonly { path: string; text: string }[]): Map<string, string> => tweakFolders(dataFiles);
 
 /** what Export Package… on a folder starts from: its package.json (or an installed package's); else undefined */

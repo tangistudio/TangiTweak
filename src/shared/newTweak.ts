@@ -1,5 +1,5 @@
 /**
- * New Tweak…: a folder with a package.json (its "tangitweak" block), a
+ * New Tweak…: a folder with a package.json (`dependencies.tangitweak` and a "tangitweak" block), a
  * tsconfig.json, an index.ts and a .gitignore (docs/packages.md).
  */
 import { currentTangiTweakVersion, isBundlePackageJson, MANIFEST_FILE } from "./packageMetadata";
@@ -57,7 +57,7 @@ export function newTweakFiles(folder: string, df = DEFAULT_DATA_FOLDER, version 
     };
 }
 
-/** the tweaks' folders among `dataFiles`: folder → its package.json path (one with a "tangitweak" block) */
+/** the tweaks' folders among `dataFiles`: folder → its package.json path (a tweak's) */
 export function tweakFolders(dataFiles: readonly { path: string; text: string }[]): Map<string, string> {
     const out = new Map<string, string>();
     for (const d of dataFiles) if (d.path.toLowerCase().endsWith("/" + MANIFEST_FILE) && isBundlePackageJson(d.text)) out.set(folderOf(d.path), d.path);

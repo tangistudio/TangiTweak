@@ -65,10 +65,16 @@ function parseJsonObject(text: string): Record<string, any> | undefined {
     }
 }
 
-/** does this package.json text declare a tweak bundle (has a `"tangitweak"` object)? */
+const isObject = (v: unknown): v is Record<string, any> => !!v && typeof v === "object" && !Array.isArray(v);
+
+/** is this parsed package.json a tweak's: `"tangitweak"` in its `dependencies`, or a `"tangitweak"` block (optional otherwise) */
+export function isTweakPackage(raw: unknown): boolean {
+    return isObject(raw) && (isObject(raw.tangitweak) || (isObject(raw.dependencies) && typeof raw.dependencies.tangitweak === "string"));
+}
+
+/** does this package.json text declare a tweak bundle (see isTweakPackage)? */
 export function isBundlePackageJson(text: string | undefined): boolean {
-    const raw = text === undefined ? undefined : parseJsonObject(text);
-    return !!raw && !!raw.tangitweak && typeof raw.tangitweak === "object" && !Array.isArray(raw.tangitweak);
+    return isTweakPackage(text === undefined ? undefined : parseJsonObject(text));
 }
 
 /** `main` as a bundle-relative file path ("./src/index.ts" → "src/index.ts"); undefined when unset */
@@ -103,8 +109,9 @@ export function parseManifest(text: string, where = MANIFEST_FILE): Manifest {
         throw new Error(`${where} isn't valid JSON: ${e?.message || e}`);
     }
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error(`${where}: expected an object`);
-    const block = raw.tangitweak;
-    if (!block || typeof block !== "object" || Array.isArray(block)) throw new Error(`${where} has no "tangitweak" block — a tweak bundle's package.json needs one`);
+    if (raw.tangitweak !== undefined && !isObject(raw.tangitweak)) throw new Error(`${where}: "tangitweak" must be an object`);
+    if (!isTweakPackage(raw)) throw new Error(`${where} isn't a tweak's — list "tangitweak" in its "dependencies"`);
+    const block = raw.tangitweak ?? {};
     const str = (obj: any, k: string, label = k): string | undefined => {
         const v = obj[k];
         if (v === undefined) return undefined;

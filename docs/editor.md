@@ -110,7 +110,7 @@ File…**, **New Folder…** (in that folder), **Copy Path**, **Rename…** and
 **Delete**; right-click the empty area for **Expand All** / **Fold All** and the New items at the root. Drag a
 script, data file or folder onto a folder to move it there (onto the empty
 area: to the root); hovering a collapsed folder while dragging expands it.
-A tweak's folder — one whose `package.json` has a `"tangitweak"` block,
+A tweak's folder — one whose `package.json` lists `tangitweak` in its `dependencies`,
 [installed](packages.md) or made with **New Tweak…** — has a box icon (or
 its `icon`) instead of a folder. An installed tweak shows ⬆ when an update waits for review (click it to review); its
 right-click menu adds **Review Update…**, **Check for Updates**, **Turn
@@ -560,7 +560,7 @@ ones.
 
 Importing a new version of a tweak (a zip from **Export Package…**, whose
 files are all in one folder, or any folder in the zip with a
-`package.json` that has a `"tangitweak"` block) also lists the files you have in that folder that the new
+`package.json` that lists `tangitweak` in its `dependencies`) also lists the files you have in that folder that the new
 version doesn't, struck through and marked **deleted**. They're ticked, so
 importing deletes them. Untick any you want to keep.
 Import takes zips only. A zip's script outside a tweak's folder imports

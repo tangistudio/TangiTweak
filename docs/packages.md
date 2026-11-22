@@ -2,7 +2,8 @@
 
 [<img src="../icons/icon.svg" width="16" height="16" align="absmiddle" alt=""> README](../README.md) · [Glossary](../GLOSSARY.md)
 
-A **tweak** is a folder whose `package.json` has a `"tangitweak"` block.
+A **tweak** is a folder whose `package.json` lists `tangitweak` in its
+`dependencies`.
 Its **entry** is the file `main` names, or else `index.ts`, or else
 `index.tsx`. The entry is the tweak: it has the enable switch, the params
 and the stores. The folder's other files are its **modules**. They run when
@@ -42,7 +43,9 @@ page shows it before anything is installed:
 }
 ```
 
-Every field but the `"tangitweak"` block is optional. `name` names the
+Every field but `dependencies.tangitweak` is optional, the `"tangitweak"`
+block included (a `package.json` with only the block still counts as a
+tweak). `name` names the
 tweak's folder when it's installed, and `displayName` (else `name`) is what
 the Explorer, the popup and the install page show. `description` is also the
 tweak's tooltip in the popup.
@@ -107,8 +110,8 @@ The install dialog and page accept:
 A tweak's `updateURL` overrides the **Updates from** column.
 
 A zip of a single folder counts as that folder. A folder, gist or zip
-installs the tweak of its shallowest `package.json` with a `"tangitweak"`
-block; without one there's nothing to install. The page reads the
+installs the tweak of its shallowest `package.json` that lists `tangitweak`
+in its `dependencies`; without one there's nothing to install. The page reads the
 `package.json`, the entry, and every file they import by a relative path. A
 tweak holds at most 200 files and 5 MB.
 
@@ -225,7 +228,7 @@ for a name and creates a tweak in a new folder:
 
 ```text
 my-tweak/
-├── package.json     the "tangitweak" block, and "dependencies": { "tangitweak": "^<this version>" }
+├── package.json     "dependencies": { "tangitweak": "^<this version>" }, and a "tangitweak" block with its displayName
 ├── tsconfig.json    { "extends": "tangitweak/tsconfig.json" }
 ├── index.ts         a small example
 └── .gitignore       node_modules/ and .tweak/

@@ -191,7 +191,7 @@ describe("localPackage", () => {
         expect(isPackageFile("node_modules/x/index.ts")).toBe(false);
         expect(isPackageFile("notes.txt")).toBe(false);
         expect(startsIn(["sub/b.ts", "lib.ts", "a.tangitweak.tsx", "t.d.ts", "c.json"])).toEqual([]);
-        // a tweak is a folder with a package.json (with a "tangitweak" block, when its text is known)
+        // a tweak is a folder with a package.json (a tweak's, when its text is known)
         expect(startsIn(["kit/package.json", "kit/a.ts", "package.json", "node_modules/x/package.json", "x.ts"])).toEqual(["package.json", "kit/package.json"]);
         const text: Record<string, string> = { "package.json": "{}", "kit/package.json": '{"tangitweak":{}}' };
         expect(startsIn(["kit/package.json", "package.json"], (p) => text[p])).toEqual(["kit/package.json"]);

@@ -51,8 +51,8 @@ my-tweak/
     └── Palette.test.tsx
 ```
 
-A test finds its tweak by itself: the nearest `package.json` with a
-`"tangitweak"` block above the test file. No `vitest.config.ts` is needed.
+A test finds its tweak by itself: the nearest `package.json` listing
+`tangitweak` in its `dependencies` above the test file. No `vitest.config.ts` is needed.
 
 ## Three styles
 
