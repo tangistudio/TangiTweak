@@ -1,6 +1,6 @@
 {
   "name": "tangitweak",
-  "version": "0.40.1-alpha",
+  "version": "0.40.2-alpha",
   "description": "Rewrite requests, responses, and pages in TypeScript.",
   "private": true,
   "license": "MIT",
@@ -31,13 +31,13 @@
     "playwright-core": "^1.64.0",
     "rolldown": "^1.0.0-beta.3",
     "tsx": "^4.23.15",
-    "typescript": "^5.6.3",
+    "typescript": "^6.0.3",
     "vitest": "^2.1.4"
   },
   "dependencies": {
     "acorn": "^8.19.0",
     "eslint-scope": "^9.1.2",
-    "monaco-editor": "^0.52.0",
+    "monaco-editor": "^0.57.0",
     "proxy-compare": "^3.0.1",
     "re2js": "^2.10.0",
     "react": "^19.3.1",
