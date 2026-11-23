@@ -7,43 +7,78 @@
  *   "onDocument" (world "page" / "isolated"); tweak.onOverlay: kind "onOverlay"
  *
  * Each network route is owned by exactly one strategy: its own, required,
- * `strategy` — there is no default.
+ * `strategy` (there is no default).
+ *
+ * Compiling a script turns each registration's argument into a
+ * {@link RouteMeta} ({@link normalizeRoute}, which throws a script error on
+ * anything unusable). The background, the strategies, the page hook and the
+ * `tangitweak/test` harness then match requests and documents against it
+ * ({@link routeMatches}, {@link routeMayMatch}, {@link RouteIndex}) and name
+ * it in log lines ({@link routeLabel}). URL patterns are URLPattern strings
+ * (`shared/matcher.ts`).
+ *
+ * @module
  */
+
 import { hostKeyOf, matchAny, matchGroups, matchPatternError, originMatchAny } from "./matcher";
 
+/**
+ * The mechanism that runs a network handler, named by its route's required
+ * `strategy`.
+ *
+ * @see docs/strategies.md
+ */
 export type Strategy = "page" | "extension" | "debugger" | "helper" | "rules";
+/** Every {@link Strategy}, in the order error messages list them; {@link normalizeRoute} accepts only these. */
 export const STRATEGIES: Strategy[] = ["helper", "page", "extension", "debugger", "rules"];
 
+/** Kind of a network handler: the tweak API that registered it. A strategy runs it. */
 export type NetKind = "onRequest" | "onResponseHeaders" | "replaceResponse" | "onResponseBody";
-/** page handlers (tweak.onSite, tweak.onPage) and overlay handlers (tweak.onOverlay) */
+/** Kind of a page handler (`"onDocument"`: tweak.onSite, tweak.onPage) or an overlay handler (`"onOverlay"`: tweak.onOverlay). */
 export type DocKind = "onDocument" | "onOverlay";
+/** Kind of any handler a route belongs to: network ({@link NetKind}) or page/overlay ({@link DocKind}). */
 export type RouteKind = NetKind | DocKind;
+/** Every {@link NetKind}. */
 export const NET_KINDS: NetKind[] = ["onRequest", "onResponseHeaders", "replaceResponse", "onResponseBody"];
 
-/** a network handler's kind (one that a strategy runs), not a page/overlay one */
+/** Whether `kind` is a network handler's kind (one that a strategy runs), not a page/overlay one. */
 export const isNetKind = (kind: RouteKind): kind is NetKind => kind !== "onDocument" && kind !== "onOverlay";
 
-/** where a page handler's JavaScript runs: a private world (tweak.onPage), or the site's own JS world (tweak.onSite) */
+/** Where a page handler's JavaScript runs: a private (isolated) world (tweak.onPage) or the site's own JS world (tweak.onSite). */
 export type PageWorld = "isolated" | "page";
 
-/** the three places: the site's JS world, the isolated world, the overlay frame */
+/** The API for each of the three places a script's code runs in a tab: the site's JS world, the isolated world, the overlay frame. */
 export type PlaceApi = "onSite" | "onPage" | "onOverlay";
+/** Every {@link PlaceApi}. */
 export const PLACE_APIS: PlaceApi[] = ["onSite", "onPage", "onOverlay"];
+/** The route kind an API registers: `"onOverlay"` for tweak.onOverlay, else `"onDocument"`. */
 export const placeKind = (api: PlaceApi): DocKind => (api === "onOverlay" ? "onOverlay" : "onDocument");
+/** The world an API's code runs in: `"page"` for onSite, `"isolated"` for onPage, undefined for onOverlay (its own frame). */
 export const placeWorld = (api: PlaceApi): PageWorld | undefined => (api === "onSite" ? "page" : api === "onPage" ? "isolated" : undefined);
-/** the API a page/overlay route was registered with */
+/** The API a page/overlay route was registered with (a route without `world` counts as onSite). */
 export const placeOf = (route: Pick<RouteMeta, "kind" | "world">): PlaceApi => (route.kind === "onOverlay" ? "onOverlay" : route.world === "isolated" ? "onPage" : "onSite");
 
 /**
  * Names a script's onSite / onPage / onOverlay handlers (RouteMeta.key) by
  * registration order, per API, in one run of the script's top level:
  * `onPage:1` is the 2nd `tweak.onPage` its code registered. Every world runs
- * the same code in the same order, so the names agree — nothing is
- * rewritten in the source. A call in a library's code (its exported
+ * the same code in the same order, so the names agree (nothing is
+ * rewritten in the source). A call in a library's code (its exported
  * function, called by the script) is counted separately and named after it
  * (`onPage:0@utils/x`).
+ *
+ * @returns A function to call once per registration, in order, with the
+ *   API and the library the call is in (undefined for the script's own code).
  */
-export function placeKeyer(): (api: PlaceApi, lib?: string) => { key: string; n: number } {
+export function placeKeyer(): (
+    api: PlaceApi,
+    lib?: string
+) => {
+    /** The handler's name, e.g. `"onPage:1"` or `"onPage:0@utils/x"` ({@link RouteMeta.key}). */
+    key: string;
+    /** Which of the calls to this API (in this library, if any) it is, 0-based. */
+    n: number;
+} {
     const counts = new Map<string, number>();
     return (api, lib) => {
         const at = `${api}@${lib ?? ""}`;
@@ -53,71 +88,110 @@ export function placeKeyer(): (api: PlaceApi, lib?: string) => { key: string; n:
     };
 }
 
+/**
+ * When a page/overlay handler runs in the document's load, as in a content
+ * script's `run_at`.
+ *
+ * {@link normalizeRoute} defaults it to `"document_start"` for onSite (ahead of
+ * the site's own code) and `"document_end"` for onPage and onOverlay.
+ */
 export type DocumentWhen = "document_start" | "document_end" | "document_idle";
 const DOCUMENT_WHENS: DocumentWhen[] = ["document_start", "document_end", "document_idle"];
 
 /**
- * onSite / onPage / onOverlay: what in-place URL changes (pushState,
- * back/forward, #hash) do. "load" (default): nothing — matched once,
- * against the URL the page loaded with. "match": the run starts when the
- * URL starts matching and ends when it stops. "every": also restarts on
- * each change while it matches.
+ * What in-place URL changes (pushState, back/forward, #hash) do to an
+ * onSite / onPage / onOverlay handler.
+ *
+ * - `"load"` (default): nothing. The route is matched once, against the URL
+ *   the page loaded with.
+ * - `"match"`: the run starts when the URL starts matching and ends when it
+ *   stops.
+ * - `"every"`: also restarts on each change while it matches.
  */
 export type Navigation = "load" | "match" | "every";
 const NAVIGATIONS: Navigation[] = ["load", "match", "every"];
 
-/** webRequest resource type names (also ctx.resourceType) */
+/** webRequest resource type names: the values a route's `resourceTypes` accepts (also ctx.resourceType). */
 export const RESOURCE_TYPES = [
     "main_frame", "sub_frame", "stylesheet", "script", "image", "font", "object",
     "xmlhttprequest", "ping", "csp_report", "media", "websocket", "other",
 ] as const;
 
+/**
+ * A handler's route, validated and normalized ({@link normalizeRoute}): which
+ * requests or documents the handler applies to and how it runs.
+ *
+ * Saved with the script's metadata (`meta.routes`), so code reading a stored
+ * one goes through {@link routePatterns} for its lists.
+ */
 export interface RouteMeta {
+    /** Kind of handler the route belongs to. */
     kind: RouteKind;
-    /** registration order within kind (0-based) */
+    /** Registration order within kind (0-based); onSite and onPage share the `"onDocument"` count. */
     index: number;
-    /** the source line of the tweak.* call that registered it (Problems view) */
+    /** The source line of the tweak.* call that registered it (Problems view). */
     line?: number;
-    /** URLPatterns; [] matches nothing */
+    /** URLPatterns; [] matches nothing. */
     url: string[];
+    /** URLPatterns that exclude a URL the `url` patterns match; [] excludes nothing. */
     exclude: string[];
-    /** uppercase HTTP methods; undefined = any */
+    /** Uppercase HTTP methods; undefined = any. Network routes only. */
     methods?: string[];
-    /** webRequest resource types; undefined = any */
+    /** webRequest resource types ({@link RESOURCE_TYPES}); undefined = any. Network routes only. */
     resourceTypes?: string[];
-    /** the strategy that runs the handler; required on network routes, absent on onDocument */
+    /** The strategy that runs the handler; required on network routes, absent on onDocument and onOverlay. */
     strategy?: Strategy;
-    /** onDocument / onOverlay only */
+    /** onDocument / onOverlay only: when in the document's load it runs. */
     when?: DocumentWhen;
-    /** onDocument / onOverlay: follow in-place URL changes; absent = "load" */
+    /** onDocument / onOverlay: follow in-place URL changes; absent = "load". */
     navigation?: Exclude<Navigation, "load">;
-    /** onDocument: the JavaScript world — "isolated" (tweak.onPage) or "page" (tweak.onSite) */
+    /** onDocument: the JavaScript world, "isolated" (tweak.onPage) or "page" (tweak.onSite). */
     world?: PageWorld;
-    /** the API name it was registered with, when it differs from `kind` (tweak.onSite / tweak.onPage → kind "onDocument") */
+    /** The API name it was registered with, when it differs from `kind` (tweak.onSite / tweak.onPage → kind "onDocument"). */
     api?: "onSite" | "onPage";
-    /** tweak.onSite / tweak.onPage: which of the script's calls to that API it is (0-based), when it differs from `index` */
+    /** tweak.onSite / tweak.onPage: which of the script's calls to that API it is (0-based), when it differs from `index`. */
     n?: number;
-    /** a call in this library's code (a function it exports, called by the script): `n` counts that library's calls */
+    /** Set for a call in this library's code (a function it exports, called by the script): `n` counts that library's calls. */
     lib?: string;
-    /** a call in one of the tweak's modules (its script name), run with the entry's `tweak` */
+    /** Set for a call in one of the tweak's modules (its script name), run with the entry's `tweak`. */
     file?: string;
     /**
      * onSite / onPage / onOverlay: the handler's stable name, `"onPage:2"`
      * (its API and which of the source's calls to it it is): its handle's
-     * id, and what its run's owned things are keyed by
+     * id and what its run's owned things are keyed by. See {@link placeKeyer}.
      */
     key?: string;
-    /** onResponseBody only: which bodies the handler gets (see takesBinary / takesText) */
+    /** onResponseBody only: which bodies the handler gets (see {@link takesBinary} / {@link takesText}). */
     binary?: BinaryOption;
 }
 
-/** onResponseBody `binary`: unset/false = text only (false also silences the "body is binary" warning), true = binary only, "both" */
+/**
+ * The onResponseBody `binary` option.
+ *
+ * - Unset or `false`: text only (`false` also silences the "body is binary"
+ *   warning).
+ * - `true`: binary only.
+ * - `"both"`: text and binary bodies.
+ */
 export type BinaryOption = boolean | "both";
 
-export const takesBinary = (r: { binary?: BinaryOption }): boolean => r.binary === true || r.binary === "both";
-export const takesText = (r: { binary?: BinaryOption }): boolean => r.binary !== true;
+/** Whether an onResponseBody route gets binary bodies (`binary: true` or `"both"`). */
+export const takesBinary = (r: {
+    /** The route's `binary` option. */
+    binary?: BinaryOption;
+}): boolean => r.binary === true || r.binary === "both";
+/** Whether an onResponseBody route gets text bodies (any `binary` but `true`). */
+export const takesText = (r: {
+    /** The route's `binary` option. */
+    binary?: BinaryOption;
+}): boolean => r.binary !== true;
 
-/** the strategy that owns a network route (onDocument/onOverlay routes have none) */
+/**
+ * The strategy that owns a network route.
+ *
+ * onDocument/onOverlay routes have none: for them it returns undefined,
+ * despite the return type.
+ */
 export function effectiveStrategy(route: Pick<RouteMeta, "strategy">): Strategy {
     return route.strategy!;
 }
@@ -133,7 +207,13 @@ function list(v: unknown, what: string, where: string): string[] {
     return out;
 }
 
-/** read a RouteMeta string list defensively (recovers if an older build persisted an array Proxy as `{ "0": ... }`) */
+/**
+ * Reads a RouteMeta string list defensively: recovers if an older build
+ * persisted an array Proxy as `{ "0": ... }`.
+ *
+ * @param v - An array, an object of strings, a single string or anything else.
+ * @returns The strings in it; non-string entries are dropped, anything else gives [].
+ */
 export function routePatterns(v: unknown): string[] {
     if (Array.isArray(v)) return v.filter((x): x is string => typeof x === "string");
     if (v && typeof v === "object") return Object.values(v).filter((x): x is string => typeof x === "string");
@@ -148,8 +228,24 @@ function checkPatterns(ps: string[], what: string, where: string): void {
 }
 
 /**
- * Validate and normalize a registration's route argument. Throws a
- * script error on anything unusable (it surfaces like a syntax error).
+ * Validates and normalizes a registration's route argument.
+ *
+ * - onSite / onPage / onOverlay take a URL pattern, a list of them or
+ *   `{ url, exclude, when, navigation }`; `when` defaults to
+ *   `"document_start"` for onSite and `"document_end"` otherwise.
+ * - Network handlers take `{ url, exclude, methods, resourceTypes, strategy }`
+ *   (plus `binary` for onResponseBody); `strategy` is required, methods are
+ *   uppercased.
+ *
+ * Compiling a script calls it for each registration, in every context that
+ * runs the script's top level.
+ *
+ * @param kind - The handler's kind.
+ * @param raw - The first argument the script passed.
+ * @param index - The registration's order within `kind` (becomes {@link RouteMeta.index}).
+ * @param api - The API that registered it, for onSite / onPage / onOverlay.
+ * @throws A script error on anything unusable (it surfaces like a syntax
+ *   error), naming the `tweak.<api>` call and, where it helps, an example.
  */
 export function normalizeRoute(kind: RouteKind, raw: unknown, index: number, api?: PlaceApi): RouteMeta {
     const name = api || kind;
@@ -212,7 +308,13 @@ export function normalizeRoute(kind: RouteKind, raw: unknown, index: number, api
     return route;
 }
 
-/** exact (stage 2) check: url ∧ ¬exclude ∧ method ∧ type */
+/**
+ * Whether the route matches a request: the exact (stage 2) check, url ∧
+ * ¬exclude ∧ method ∧ type.
+ *
+ * @param method - HTTP method (any case); undefined skips the method check.
+ * @param type - webRequest resource type; undefined skips the type check.
+ */
 export function routeMatches(route: RouteMeta, url: string, method?: string, type?: string): boolean {
     const urls = routePatterns(route.url);
     const exclude = routePatterns(route.exclude);
@@ -223,12 +325,12 @@ export function routeMatches(route: RouteMeta, url: string, method?: string, typ
     return true;
 }
 
-/** the route re-checks its match on in-place URL changes (`navigation: "match" | "every"`) */
+/** Whether the route re-checks its match on in-place URL changes (`navigation: "match" | "every"`). */
 export const followsNav = (route: Pick<RouteMeta, "navigation">): boolean => !!route.navigation;
 
 /**
  * Whether a document at url could run the route, now or after in-place
- * navigation: routeMatches for "load" routes; for routes that follow
+ * navigation: {@link routeMatches} for "load" routes; for routes that follow
  * navigation, only the origin has to match (pushState can't change it).
  */
 export function routeMayMatch(route: RouteMeta, url: string): boolean {
@@ -239,15 +341,27 @@ export function routeMayMatch(route: RouteMeta, url: string): boolean {
 /**
  * Routes bucketed by the hosts their `url` patterns can match, so a request
  * tests only the routes for its hostname (and its parent domains, for
- * `*.domain` hosts) plus the any-host ones — not every route. Results keep
+ * `*.domain` hosts) plus the any-host ones, not every route. Results keep
  * the items' order.
+ *
+ * The index is built once, from the list as given: build a new one (or use
+ * {@link indexRoutes}) when the list changes.
+ *
+ * @typeParam T - The indexed items, e.g. a strategy's handlers.
  */
 export class RouteIndex<T> {
     private readonly exact = new Map<string, number[]>();
     private readonly suffix = new Map<string, number[]>();
     private readonly anyHost: number[] = [];
 
+    /**
+     * Buckets every item by the hosts of its route's `url` patterns.
+     *
+     * @param items - The items, in the order results keep.
+     * @param routeOf - Gets an item's route.
+     */
     constructor(
+        /** The indexed items, as given. */
         readonly items: readonly T[],
         private readonly routeOf: (item: T) => RouteMeta
     ) {
@@ -267,7 +381,11 @@ export class RouteIndex<T> {
         });
     }
 
-    /** the items whose routes could match url (a superset of the matches) */
+    /**
+     * The items whose routes could match url (a superset of the matches).
+     *
+     * A URL that doesn't parse gets every item.
+     */
     candidates(url: string): T[] {
         let host: string;
         try {
@@ -282,11 +400,16 @@ export class RouteIndex<T> {
         return [...new Set(hits.flat())].sort((a, b) => a - b).map((i) => this.items[i]);
     }
 
-    /** the items whose route matches (routeMatches), in order */
+    /** The items whose route matches ({@link routeMatches}), in order. */
     match(url: string, method?: string, type?: string): T[] {
         return this.candidates(url).filter((item) => routeMatches(this.routeOf(item), url, method, type));
     }
 
+    /**
+     * Whether some item's route matches ({@link routeMatches}) and passes `also`.
+     *
+     * @param also - An extra test for each candidate, checked before its route.
+     */
     some(url: string, method?: string, type?: string, also: (item: T) => boolean = () => true): boolean {
         return this.candidates(url).some((item) => also(item) && routeMatches(this.routeOf(item), url, method, type));
     }
@@ -294,19 +417,31 @@ export class RouteIndex<T> {
 
 const indexes = new WeakMap<readonly unknown[], RouteIndex<any>>();
 
-/** the RouteIndex of a list, built once per list (don't mutate an indexed list — assign a new one) */
+/**
+ * The {@link RouteIndex} of a list, built once per list and cached while the
+ * list lives.
+ *
+ * Don't mutate an indexed list (the index wouldn't see it): assign a new one.
+ */
 export function indexRoutes<T>(items: readonly T[], routeOf: (item: T) => RouteMeta): RouteIndex<T> {
     let index = indexes.get(items);
     if (!index) indexes.set(items, (index = new RouteIndex(items, routeOf)));
     return index;
 }
 
-/** ctx.groups for a matched url */
+/**
+ * ctx.groups for a matched url: the named and numbered (`"0"`, `"1"`…
+ * wildcard) groups of the first `url` pattern that matches, from every part
+ * of the URL. Numbering restarts in each part, so a later part's group
+ * replaces an earlier one of the same name.
+ *
+ * @returns The groups; `{}` when no pattern matches.
+ */
 export function routeGroups(route: RouteMeta, url: string): Record<string, string> {
     return matchGroups(routePatterns(route.url), url) || {};
 }
 
-/** union of a script's route urls (badge / "active on this tab") */
+/** Union of a script's route urls, without duplicates (badge / "active on this tab"; the script's `meta.match`). */
 export function scriptUrls(routes: RouteMeta[] | undefined): string[] {
     const out = new Set<string>();
     for (const r of routes || []) for (const u of routePatterns(r.url)) out.add(u);
@@ -314,10 +449,10 @@ export function scriptUrls(routes: RouteMeta[] | undefined): string[] {
 }
 
 /**
- * A URL the routes name (the Editor preview's default page URL): the first
- * pattern made concrete — `*://` → `https://`, a `*.` host prefix and other
- * `*`s dropped, a `*` host → example.com — that its route matches; else
- * the first that parses; else https://example.com/.
+ * A URL the routes name (the default page URL of an overlay previewed in the
+ * Editor): the first pattern made concrete (`*://` → `https://`, a `*.` host
+ * prefix and other `*`s dropped, a `*` host → example.com) that its route
+ * matches; else the first that parses; else https://example.com/.
  */
 export function sampleUrl(routes: RouteMeta[]): string {
     const concrete = (p: string) =>
@@ -342,18 +477,24 @@ export function sampleUrl(routes: RouteMeta[]): string {
 }
 
 /**
- * label for logs: `onResponseBody #2` (an onSite / onPage route is labeled
- * with its API, numbered by its calls to that API; one a library's code
- * registered is numbered in that library: `onPage #1 (utils/x)`)
+ * Labels a route for logs, numbered from 1: `onResponseBody #2`.
+ *
+ * An onSite / onPage route is labeled with its API, numbered by its calls to
+ * that API; one a library's code registered is numbered in that library:
+ * `onPage #1 (utils/x)`.
  */
 export function routeLabel(route: RouteMeta): string {
     return `${route.api || route.kind} #${(route.n ?? route.index) + 1}${route.lib === undefined ? "" : ` (${route.lib})`}`;
 }
 
-/** the world an onDocument route runs in */
+/** The world an onDocument route runs in; a route without `world` runs in `"page"`. */
 export const pageWorld = (route: Pick<RouteMeta, "world">): PageWorld => route.world || "page";
 
-/** can this route ever fire on the hook (page fetch/XHR only)? */
+/**
+ * Whether this route can ever fire on the page hook, which sees only the
+ * page's fetch/XHR: true unless its `resourceTypes` leave out
+ * `"xmlhttprequest"`.
+ */
 export function hookCanSee(route: RouteMeta): boolean {
     return !route.resourceTypes || route.resourceTypes.includes("xmlhttprequest");
 }

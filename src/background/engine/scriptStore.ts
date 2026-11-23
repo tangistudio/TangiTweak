@@ -70,8 +70,33 @@ export function onScriptRenamed(fn: RenameListener): () => void {
     return () => renameListeners.delete(fn);
 }
 
+let holding = 0;
+let held = false;
+
 function notify(): void {
+    if (holding) {
+        held = true;
+        return;
+    }
     listeners.forEach((fn) => fn());
+}
+
+/**
+ * Run `work` with change notifications held: the scripts, data files and
+ * folders it saves announce themselves once, when it's done, so the
+ * pipeline reloads (and pushes to tabs) only the finished state. Nests.
+ * Other saves meanwhile are held too: they reload when `work` ends.
+ */
+export async function holdingChanges<T>(work: () => Promise<T>): Promise<T> {
+    holding++;
+    try {
+        return await work();
+    } finally {
+        if (--holding === 0 && held) {
+            held = false;
+            notify();
+        }
+    }
 }
 
 /** every script in stacking order (= explorer order: depth-first, subfolders before a folder's scripts) */

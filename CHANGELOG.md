@@ -7,6 +7,10 @@ its section below.
 
 ## [Unreleased]
 
+## [0.40.2-alpha] - 2026-11-22
+
+The first published release since 0.36.1-alpha: it also brings the changes under 0.40.1-alpha and 0.37.0-alpha in the [CHANGELOG](CHANGELOG.md).
+
 ### Added
 
 - **`ctx.iframes(selector?, fn)`** in `onPage` and `onSite` handlers runs `fn` in each same-origin iframe, now and as they're added, with its own `signal`, `style`, `patch`, `mount` and more aimed at the iframe's document. It reaches `about:blank` and `srcdoc` editor frames, re-runs when an iframe loads a new document, and keeps state across saves.
@@ -18,9 +22,13 @@ its section below.
 - **Uncaught errors in `onPage` code show in the Log**: an error thrown in a timer, event listener or observer callback, or a promise nobody awaits, is logged as the tweak's (`onPage (uncaught)` / `onPage (unhandled rejection)`) with its source lines. The page's own errors aren't.
 - **`tweak.fetch` in `onPage` code**, to the hosts listed in the tweak's `package.json` `"tangitweak.connect"` and their subdomains only. Any other host rejects and names the host to add ([docs](docs/scripting.md#tweakfetch)). It used to reject everywhere in page code; `onSite` code still can't use it.
 - **Page code can follow single-page apps**: a route's `navigation: "match"` runs an `onPage`, `onSite` or `onOverlay` handler while the URL matches, starting when an in-place URL change (history API, back/forward, `#hash`) makes it match and ending, with its setup undone, when one makes it stop; `"every"` also runs it again on each URL change. `ctx.onNavigate(fn)` now works in `onPage` and `onSite` too ([docs](docs/scripting.md#single-page-apps--navigation)). Routes still match only the URL a page loaded with by default.
+- **A "!" badge on tabs TangiTweak isn't running in**: tabs left open while TangiTweak was installed, updated or reloaded get no page code until they reload, because the browser only adds extensions to pages loaded afterwards. The popup says why and has a **Reload tab** button, or **Allow and reload** when the site's access is turned off in the browser.
 
 ### Changed
 
+- **Folder Sync and Import load everything first, then compile once**: they list and read every file, save it all, then compile the scripts together, so open tabs reload once with the finished set instead of once per file with half-loaded tweaks and missing-import errors in between. The Editor's toolbar shows the progress (listing, reading, saving, compiling) while it takes longer than a moment.
+- **The SDK's typings are documented throughout**: every declaration and member in `index.d.ts`, `tangitweak/test` and the `types/` files they import (such as `types/shared/wire.d.ts`) says what it is, its units, defaults, limits, which world runs it and what happens on failure. `npm run build` fails when something is undocumented (see [Documenting the SDK](docs/development.md#documenting-the-sdk)).
+- **The Editor checks scripts with TypeScript 6** (Monaco 0.57), so newer browser APIs like `navigation`, `URLPattern`, `scheduler.postTask` and `Uint8Array.prototype.toBase64` no longer show false type errors. TypeScript 6 checks strictly by default (`strict`), so scripts may see new errors like implicit `any` parameters or possibly-`null` values.
 - **`npm install` in a synced tweak's folder works before the SDK is on npm**: the synced folder's root `package.json` now lists every tweak and `.tangitweak/sdk/tangitweak` as npm `workspaces`, so a tweak's `tangitweak` dependency installs as the running extension's SDK instead of failing with `No versions available for tangitweak`.
 - **No more "registered no handler at top level" warnings** for a bundle's modules: a module that registers handlers inside a function its entry calls is the normal layout.
 - **No more `tt-api.d.ts`** at the root of the synced folder: each tweak's `tsconfig.json` extends the SDK's, whose `index.d.ts` has the same typings. The one TangiTweak wrote is removed; one you wrote yourself stays.
@@ -32,6 +40,9 @@ its section below.
 
 ### Fixed
 
+- **`onSite` changes reach open tabs after the service worker restarts** (Chrome 135+): a save or folder sync that woke the worker no longer leaves open tabs with "… onSite code isn't on this page: reload the page to run it". Only an extension reload or update still needs the page reloaded.
+- **`about:blank`, `srcdoc` and sandboxed iframes** no longer hold their first fetch/XHR requests for 3 seconds and then send them unhandled, and `onSite` code in them gets its routes. The page hook and the extension couldn't message each other in frames whose origin is `"null"`.
+- **Packages whose `exports` points at a `.js` file with its `.d.ts` beside it** (e.g. `@redux-devtools/instrument`) get their real types in the Editor instead of an `any` stub (`has no exported member 'instrument'`). Packages already stored with a stub are fetched again.
 - **Packages with class static blocks** (e.g. `bson`) no longer fail to load with `this.resetState is not a function`: CommonJS files assigning `exports.x` aren't mistaken for ES modules, and modern class syntax in packages is kept as is.
 - **Two browsers syncing one folder** no longer rewrite `.tweak/stores/*.json` back and forth forever (`changed on disk — applied` every few seconds): a file holding the same data in another key order isn't rewritten.
 - **Bare imports type-check in the Editor**: `import { zip } from "fflate"` in a tweak with `fflate` in its `package.json` `dependencies` gets the package's types instead of `Cannot find module 'fflate'`. Range dependencies like `^0.8.2` now get typings too.
@@ -1172,7 +1183,8 @@ Before `0.0.1-alpha` was tagged, the extension grew from an initial TypeScript p
 - Built the initial TypeScript script engine (in-browser Sucrase transpilation, `res.onRequest` / `res.onDom` / `res.log`, script `console.*` capture), embedded Monaco editor with bundled API typings, movable log panel, popup with per-tab active-script badge, sample scripts, and bundle import/export.
 - Implemented three initial interception tiers (`MAIN`-world `fetch`/XHR hook, MV2 blocking `webRequest`, and `chrome.debugger` `Fetch` for main-frame HTML and subresources with adaptive idle detach), two-way local folder sync via the File System Access API, and the headless Chromium E2E suite.
 
-[Unreleased]: https://github.com/tangistudio/TangiTweak/compare/v0.40.1-alpha...HEAD
+[Unreleased]: https://github.com/tangistudio/TangiTweak/compare/v0.40.2-alpha...HEAD
+[0.40.2-alpha]: https://github.com/tangistudio/TangiTweak/compare/v0.36.1-alpha...v0.40.2-alpha
 [0.40.1-alpha]: https://github.com/tangistudio/TangiTweak/compare/v0.37.0-alpha...v0.40.1-alpha
 [0.37.0-alpha]: https://github.com/tangistudio/TangiTweak/compare/v0.36.1-alpha...v0.37.0-alpha
 [0.36.1-alpha]: https://github.com/tangistudio/TangiTweak/compare/v0.36.0-alpha...v0.36.1-alpha

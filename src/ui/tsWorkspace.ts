@@ -744,12 +744,12 @@ export function createMonacoTsWorkspace(opts: {
     onChecked: () => void;
 }): TsWorkspace {
     const { monaco, getActiveModel, onChecked } = opts;
-    const tsDefaults = monaco.languages.typescript.typescriptDefaults;
+    const tsDefaults = monaco.typescript.typescriptDefaults;
     return createTsWorkspace({
         addExtraLib: (content, uri) => tsDefaults.addExtraLib(content, uri),
         flushExtraLibs: () => new Promise((r) => setTimeout(r, 0)),
         fileUri: (path) => monaco.Uri.file(path).toString(),
-        getWorker: async (uris) => (await monaco.languages.typescript.getTypeScriptWorker())(...uris),
+        getWorker: async (uris) => (await monaco.typescript.getTypeScriptWorker())(...uris),
         getActiveModel,
         modelByUri: (uri) => monaco.editor.getModel(monaco.Uri.parse(uri)),
         getModelMarkers: (uri, owner) => monaco.editor.getModelMarkers({ resource: uri, owner }),

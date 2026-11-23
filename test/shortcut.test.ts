@@ -182,6 +182,17 @@ describe("watchShortcuts", () => {
         press();
         expect(fired).toEqual([]);
     });
+
+    it("stopping doesn't throw once the window went cross-origin (an iframe that navigated away)", () => {
+        const win = {
+            addEventListener: () => {},
+            removeEventListener: () => {
+                throw new DOMException("Blocked a frame from accessing a cross-origin frame.", "SecurityError");
+            },
+        } as unknown as Window;
+        const stop = watchShortcuts(win, () => [], () => true);
+        expect(stop).not.toThrow();
+    });
 });
 
 describe("FrameShortcuts (onPage's ctx.shortcut)", () => {

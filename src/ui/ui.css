@@ -707,6 +707,15 @@ body.dock-dragging iframe, body.dock-dragging #monaco-host { pointer-events: non
 #editor-toolbar:has(#typings-note:not([hidden])) #editor-status { visibility: hidden; }
 #editor-status.dirty { color: var(--warn); }
 #editor-status.error { color: var(--err); }
+/* a folder sync pass or an Import at work (in the status's place) */
+#editor-progress { flex: 1; display: flex; align-items: center; justify-content: flex-end; gap: 8px; color: var(--fg-dim); white-space: nowrap; font-variant-numeric: tabular-nums; }
+#editor-progress .progress-track { width: 80px; height: 4px; background: var(--border); border-radius: 999px; overflow: hidden; flex-shrink: 0; }
+#editor-progress .progress-bar { display: block; height: 100%; background: var(--accent); border-radius: 999px; transition: width 0.15s ease-out; }
+#editor-progress .indeterminate .progress-bar { width: 38%; animation: tt-progress-slide 1.1s ease-in-out infinite; }
+@keyframes tt-progress-slide {
+    0% { transform: translateX(-110%); }
+    100% { transform: translateX(270%); }
+}
 
 /* the Save button is the save indicator: ● unsaved, spinner while saving, ✓ saved */
 #btn-save {

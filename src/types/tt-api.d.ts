@@ -1,11 +1,46 @@
 /**
- * Public `tweak` API typings (`import { tweak } from "tangitweak"`) —
- * shipped into the editor as an extra lib and written into the VS Code
- * folder so scripts get full IntelliSense.
+ * The public API of a tweak script: the `tweak` object scripts get with
+ * `import { tweak } from "tangitweak"`, the `ctx` each handler receives and
+ * every type they mention.
+ *
+ * The same file is used in two places: the Editor loads it as an extra lib
+ * (its hovers, completions and Go to Definition, which shows it read-only),
+ * the SDK package `tangitweak` ships it as its `index.d.ts` (written by
+ * Folder Sync to `.tangitweak/sdk/tangitweak/`, so VS Code and `tsc` type a
+ * synced folder). Declarations here are ambient: nothing is imported.
+ *
+ * How it fits together:
+ * - `namespace TangiTweak` (first block): the shapes handlers see and
+ *   return. Network handlers get a {@link TangiTweak.RequestCtx} and name a
+ *   {@link TangiTweak.Strategy} in their {@link TangiTweak.RouteOptions};
+ *   page code gets a {@link TangiTweak.PageCtx},
+ *   {@link TangiTweak.SiteCtx} or {@link TangiTweak.OverlayCtx} depending on
+ *   its world; then stores, `tweak.fetch` options, package metadata and
+ *   params.
+ * - `namespace TangiTweak` (second block): {@link TangiTweak.Tweak}, the
+ *   type of `tweak` itself, with every registration function.
+ * - `declare module "tangitweak"`: the `tweak` export.
+ * - `declare module "*.svg"` and the like: what importing a data file gives.
+ *
+ * Code runs in one of four places: network handlers in the extension's
+ * background; `tweak.onSite` in the site's own JavaScript world
+ * (untrusted); `tweak.onPage` in an isolated world next to it; and
+ * `tweak.onOverlay` in the script's own frame over the page.
+ *
+ * The Editor's API links (src/ui/apiLinks.ts) look declarations up here by
+ * their qualified names, so renaming or moving one breaks them.
+ *
+ * @see https://github.com/tangistudio/TangiTweak/blob/master/docs/scripting.md
+ * @module
  */
 
+/**
+ * The types of the `tweak` API: what handlers receive (`ctx`), what they
+ * return, their routes and options, stores, params and package metadata.
+ * Scripts use them as `TangiTweak.PageCtx` and the like, with no import.
+ */
 declare namespace TangiTweak {
-    /** A value, or a Promise of it — every handler may be async. */
+    /** A value, or a Promise of it: every handler may be async. */
     type Awaitable<T> = T | Promise<T>;
 
     /** One response header as received from the network. */
@@ -44,7 +79,7 @@ declare namespace TangiTweak {
         /**
          * The request payload, read-only (changing it has no effect).
          * Text or binary is decided like response bodies: by the request's
-         * `Content-Type` against `settings.textTypes` — text arrives as a
+         * `Content-Type` against `settings.textTypes`: text arrives as a
          * UTF-8 string, binary (incl. multipart `FormData`) as a `Uint8Array`.
          * `undefined` when there is no body (GET…), it is over 8 MB, or the
          * strategy can't get it:
@@ -57,7 +92,7 @@ declare namespace TangiTweak {
          * - `extension`: from webRequest; the kind is sniffed (no
          *   `Content-Type` that early), a form post arrives URL-encoded, and
          *   Chromium omits file and very large uploads → `undefined`.
-         * - `rules`: no request — reading it is an error.
+         * - `rules`: no request; reading it is an error.
          *
          * @example
          * tweak.onRequest({ url: "https://api.example.com/*", methods: ["POST"], strategy: "helper" }, (ctx) => {
@@ -68,7 +103,7 @@ declare namespace TangiTweak {
         /**
          * Parses the **request** body (`ctx.requestBody`, bytes decoded as
          * UTF-8) as JSON. `undefined` when there is no body; throws when it
-         * isn't valid JSON. Not the response — `onResponseBody` gets that as
+         * isn't valid JSON. Not the response: `onResponseBody` gets that as
          * its second argument.
          *
          * @example
@@ -82,26 +117,26 @@ declare namespace TangiTweak {
 
     /**
      * Interception strategy that runs a handler. Every network handler
-     * names exactly **one** in its route's required `strategy` — there is no
+     * names exactly **one** in its route's required `strategy`. There is no
      * default and no fallback: when the strategy isn't available, the
      * handler doesn't run and the Log view says why.
      *
-     * - `"helper"` — the local tangitweak-helper (a proxy). Sees every
+     * - `"helper"`: the local tangitweak-helper (a proxy). Sees every
      *   request incl. documents, scripts and service workers; no banner.
      *   Needs the helper installed. Chromium only.
-     * - `"page"` — patches the page's own `fetch`/XHR. Lightest (no banner,
-     *   no helper) but sees **only** page fetch/XHR (`"xmlhttprequest"`) —
+     * - `"page"`: patches the page's own `fetch`/XHR. Lightest (no banner,
+     *   no helper) but sees **only** page fetch/XHR (`"xmlhttprequest"`):
      *   no documents, `<script src>`, images or worker requests, and no
      *   `onResponseHeaders`.
-     * - `"extension"` — the extension handles each request (blocking
+     * - `"extension"`: the extension handles each request (blocking
      *   webRequest). Firefox (reads bodies) and MV2
      *   Chromium (no `onResponseBody`, sync handlers only). On Chromium the
      *   page itself (`main_frame`) can be redirected and its headers changed,
-     *   but a replaced page is served from a `chrome-extension://` URL — use
-     *   `"helper"` or `"debugger"` to rewrite or replace the page in place.
-     * - `"debugger"` — the Chrome debugger. Sees everything; Chrome shows a
+     *   but a replaced page is served from a `chrome-extension://` URL (use
+     *   `"helper"` or `"debugger"` to rewrite or replace the page in place).
+     * - `"debugger"`: the Chrome debugger. Sees everything; Chrome shows a
      *   "started debugging this browser" banner while attached. Chromium only.
-     * - `"rules"` — browser-native rules (declarativeNetRequest): the browser
+     * - `"rules"`: browser-native rules (declarativeNetRequest): the browser
      *   itself blocks, redirects or sets/removes request and response
      *   headers, on every request; no banner, no helper. The handler runs
      *   **once** when scripts load and must return the same result for every
@@ -146,7 +181,7 @@ declare namespace TangiTweak {
 
     /**
      * Where a network handler (`onRequest`, `onResponseHeaders`, `replaceResponse`, `onResponseBody`)
-     * applies and which {@link Strategy} runs it. A bare URL pattern isn't accepted — it names no strategy.
+     * applies and which {@link Strategy} runs it. A bare URL pattern isn't accepted: it names no strategy.
      */
     interface RouteOptions {
         /** URLs this handler applies to. See {@link UrlPatterns}. */
@@ -174,7 +209,7 @@ declare namespace TangiTweak {
          *
          * How much this saves depends on the strategy:
          * - `debugger`: the debugger only pauses these types (`Fetch.enable`
-         *   patterns), so other requests are never stopped — the cheapest
+         *   patterns), so other requests are never stopped: the cheapest
          *   way to keep a route off images, fonts and other assets.
          * - `extension`: checked in the listener before any script runs.
          * - `helper`: checked after the helper pauses the request, so it
@@ -187,7 +222,7 @@ declare namespace TangiTweak {
          */
         resourceTypes?: ResourceType[];
         /**
-         * The strategy that runs this handler — required, there is no
+         * The strategy that runs this handler. Required: there is no
          * default. A single value, no fallback. See {@link Strategy}.
          *
          * @example { url: "*://example.com/app/*.js", resourceTypes: ["script"], strategy: "debugger" }
@@ -208,7 +243,7 @@ declare namespace TangiTweak {
          * - `"both"`: text as a string and binary as a `Uint8Array`
          *
          * Binary bodies are buffered whole and the response waits for the
-         * handler — keep these routes narrow.
+         * handler: keep these routes narrow.
          *
          * @example { url: "*://cdn.example.com/*.png", binary: true }
          * @see https://github.com/tangistudio/TangiTweak/blob/master/docs/scripting.md#binary-bodies
@@ -269,7 +304,7 @@ declare namespace TangiTweak {
      *
      * | | runs in | sees | trusted |
      * |---|---|---|---|
-     * | `tweak.onSite` | the site's JavaScript world | the site's DOM and globals (`window.myApp`) | no — the site can see and tamper with it |
+     * | `tweak.onSite` | the site's JavaScript world | the site's DOM and globals (`window.myApp`) | no: the site can see and tamper with it |
      * | `tweak.onPage` | an isolated world | the site's DOM, none of its globals | yes |
      * | `tweak.onOverlay` | the script's own frame over the page (top frame) | its own DOM | yes |
      */
@@ -279,19 +314,19 @@ declare namespace TangiTweak {
     type Fn = (...args: any[]) => unknown;
 
     /**
-     * A **handle**: the handler's functions, made async — what `tweak.onSite`,
-     * `tweak.onPage` and `tweak.onOverlay` return. A handler that returns a
+     * A **handle**: the handler's functions, made async (what `tweak.onSite`,
+     * `tweak.onPage` and `tweak.onOverlay` return). A handler that returns a
      * plain object of functions exposes them; any other return value
      * (nothing, a string, an element) exposes nothing.
      *
      * Call a handle from `onPage` or `onOverlay` code (trusted code). In
      * `onSite` code a call throws: the site could make it too. A call
-     * waits — with no time limit — until the handler has run in that
+     * waits, with no time limit, until the handler has run in that
      * frame, also across a reload of the script; arguments and results are
      * JSON (≤ 1 MB). It rejects with:
      * - `DisconnectedError`: the other side went away (the frame navigated, the overlay closed);
      * - `AbortError`: the calling code's run ended first (its script reloaded); the call is cancelled;
-     * - `ReloadedError`: the handler's script reloaded while the function ran — call again, the new run answers;
+     * - `ReloadedError`: the handler's script reloaded while the function ran (call again: the new run answers);
      * - `WtCallError`: the function threw, doesn't exist, or the value isn't JSON.
      *
      * Results from an `onSite` handle are the site's data: treat them as untrusted input.
@@ -311,7 +346,7 @@ declare namespace TangiTweak {
      * up. Saving the script runs the handler again (a new run); when it
      * returns, the old run's `signal` aborts, and what the old run set up
      * with `once`, `patch`, `style` and `mount` stays only if the new run
-     * set it up too (a mount re-renders, a patch swaps its function) — the
+     * set it up too (a mount re-renders, a patch swaps its function); the
      * rest is undone. If the new run throws, the old one keeps running.
      */
     interface RunCtx {
@@ -477,7 +512,7 @@ declare namespace TangiTweak {
         mount(ui: unknown): () => void;
         mount(target: string | Element, ui: unknown | ((anchor: Element) => unknown), opts?: MountOptions): () => void;
         /**
-         * Call `fn(...args)` over and over, yielding each answer — for a
+         * Call `fn(...args)` over and over, yielding each answer: for a
          * handle function that answers when something happens. A call cut
          * by the other side's reload is made again; the loop ends when this
          * run does.
@@ -515,6 +550,14 @@ declare namespace TangiTweak {
     /** What an `onPage` handler's `ctx.iframes` passes `fn`: a run in one iframe. */
     interface PageIframeCtx extends TrustedRunCtx, IframeInfo, IframesCtx<PageIframeCtx>, Pick<PageCtx, "shortcut"> {}
 
+    /**
+     * `ctx.iframes`, on `onSite` and `onPage` contexts and on the iframe
+     * runs it starts (so nested iframes can be followed level by level).
+     *
+     * @typeParam F The context `fn` gets in each iframe:
+     *   {@link SiteIframeCtx} in `onSite` code, {@link PageIframeCtx} in
+     *   `onPage` code.
+     */
     interface IframesCtx<F> {
         /**
          * Run `fn` in every same-origin iframe of this document (or only
@@ -559,14 +602,46 @@ declare namespace TangiTweak {
     }
 
     /**
-     * Which iframes a shortcut also listens in: `true` (all), a selector,
-     * or `{ selector, shadow, crossOrigin }`.
+     * Which iframes a shortcut also listens in: `true` (all child iframes,
+     * same-origin only), `false` (none, like leaving it out), a selector,
+     * or `{ selector, shadow, crossOrigin }`. Any other value makes
+     * `ctx.shortcut` throw a `TypeError`.
+     *
+     * @example { iframes: true }
+     * @example { iframes: "iframe.editor" }
+     * @example { iframes: { selector: "iframe.editor", crossOrigin: true } }
+     * @see https://github.com/tangistudio/TangiTweak/blob/master/docs/scripting.md#keyboard-shortcuts
      */
-    type ShortcutIframes = boolean | string | { selector?: string; shadow?: boolean; crossOrigin?: boolean };
+    type ShortcutIframes = boolean | string | {
+        /** Only iframes this CSS selector matches. Omit for all; a non-string or invalid selector throws. */
+        selector?: string;
+        /**
+         * Also iframes inside shadow roots (closed ones not in MV3 `onPage`,
+         * see {@link ElementsOptions.shadow}).
+         *
+         * @defaultValue `false`
+         */
+        shadow?: boolean;
+        /**
+         * Also iframes from other sites. TangiTweak listens inside them and
+         * runs `fn` in this frame, as usual. There the key is always kept
+         * from the iframe's page (`"pass"` can't give it back). Iframes nested in them and pages
+         * they wipe with `document.open()` aren't followed.
+         *
+         * @defaultValue `false`
+         */
+        crossOrigin?: boolean;
+    };
 
     /** Options for `ctx.shortcut`. */
     interface ShortcutOptions {
-        /** `"before-page"` (default): beat the page; `"after-page"`: only if the page didn't handle the key. */
+        /**
+         * `"before-page"`: beat the page, which never sees the key;
+         * `"after-page"`: run only if the page didn't handle the key (didn't
+         * call `preventDefault` or stop it).
+         *
+         * @defaultValue `"before-page"`
+         */
         priority?: "before-page" | "after-page";
         /**
          * Also count keys pressed in child iframes (nested ones too, the
@@ -637,22 +712,44 @@ declare namespace TangiTweak {
         remove?: string[];
     }
 
-    /** A synthesized response: the `onRequest` → `{ replaceResponse }` result (a replacement). */
+    /**
+     * A synthesized response: the `onRequest` → `{ replaceResponse }`
+     * result (a replacement). The request never reaches the server.
+     *
+     * The `extension` strategy serves only status 200 (any other status
+     * isn't served: the request goes through unchanged, with a Log warning)
+     * and ignores `headers`.
+     *
+     * @example
+     * tweak.onRequest({ url: "*://api.example.com/flags", strategy: "helper" }, () => ({
+     *     replaceResponse: { body: { beta: true }, headers: { set: { "cache-control": "no-store" } } },
+     * }));
+     */
     interface ReplacementOptions {
         /**
-         * Response body. Strings and bytes are sent as-is; any other object
-         * is JSON-serialized.
+         * Response body. A string is sent as-is; any other object is
+         * JSON-serialized. A `Uint8Array` is sent as-is by the `extension`
+         * strategy but decoded as UTF-8 text by the others, so it suits text
+         * only there.
          */
         body: string | Uint8Array | object;
-        /** HTTP status. Default `200`. */
+        /**
+         * HTTP status.
+         *
+         * @defaultValue `200`
+         */
         status?: number;
         /**
          * Content-Type. Default: guessed from the request URL's extension
-         * (`application/json` for objects).
+         * (`.js`, `.json`, `.css`, `.html`, `.xml`), else `application/json`
+         * (whatever the body is).
          */
         mime?: string;
-        /** Extra response headers. */
-        headers?: { set?: { [name: string]: string } };
+        /** Extra response headers (not on the `extension` strategy). */
+        headers?: {
+            /** Headers to send with the replacement (`name → value`). */
+            set?: { [name: string]: string };
+        };
     }
 
     /**
@@ -660,7 +757,7 @@ declare namespace TangiTweak {
      * `redirect`, `block` or `headers` (or nothing, to leave the request alone).
      * The first three are **final** (the first handler to return one wins);
      * `headers` is not. To change a redirected request's headers, add an
-     * `onRequest` handler for the redirect target — on most strategies the
+     * `onRequest` handler for the redirect target: on most strategies the
      * redirected request runs through `onRequest` again.
      */
     type RequestResult =
@@ -681,8 +778,13 @@ declare namespace TangiTweak {
               headers: HeaderMod;
           }>;
 
-    /** `T`, with every other `onRequest` result key forbidden */
+    /** `T`, with every other `onRequest` result key forbidden. */
     type OnlyOne<K extends RequestResultKey, T> = T & { [O in Exclude<RequestResultKey, K>]?: never };
+    /**
+     * The keys of an `onRequest` result. A result with more than one is
+     * kept to the first in this order (a throttled Log warning names the
+     * dropped ones).
+     */
     type RequestResultKey = "replaceResponse" | "redirect" | "block" | "headers";
 
     /** `onResponseHeaders` context: the request plus the response head. */
@@ -711,10 +813,22 @@ declare namespace TangiTweak {
         status?: number;
     }
 
-    /** Per-script persistent key/value storage (JSON-serializable values). */
+    /**
+     * Per-script persistent key/value storage (JSON-serializable values),
+     * the type of `tweak.storage`. Each script has its own, kept by the
+     * background in the extension's local storage and lasts across reloads
+     * and browser restarts. Background
+     * handlers, `onPage`, `onOverlay` and `onSite` code all reach the same
+     * one.
+     *
+     * Keys starting with `$store:` hold the saved copies of
+     * {@link Tweak.globalStore}s (`"$store:<name>"`); `set` on one logs a
+     * warning, since the store overwrites it on its next save.
+     */
     interface Storage {
         /**
-         * Read a value; resolves to `undefined` when the key was never set.
+         * Read a value; resolves to `undefined` when the key was never set
+         * (in `onPage` code, also when the background can't be reached).
          *
          * @example
          * const hits = (await tweak.storage.get("hits")) ?? 0;
@@ -722,6 +836,8 @@ declare namespace TangiTweak {
         get(key: string): Promise<any>;
         /**
          * Store a value (persists across reloads and browser restarts).
+         * In `onPage` code it resolves even when the background can't be
+         * reached and nothing was stored.
          *
          * @example
          * await tweak.storage.set("hits", hits + 1);
@@ -742,14 +858,20 @@ declare namespace TangiTweak {
         persist?: boolean | (keyof T & string)[];
     }
 
-    /** `tweak.fetch` options: `RequestInit` plus where the request comes from. */
+    /**
+     * `tweak.fetch` options: `RequestInit` plus where the request comes
+     * from. `signal` is ignored (it can't reach the background) and
+     * `credentials` defaults to `"include"`. Request and response bodies
+     * are capped at 10 MB each (a `RangeError` past it).
+     */
     interface FetchInit extends RequestInit {
         /**
          * `"background"`: the extension fetches, with its host permissions
          * (no CORS) and the browser's cookies. `"page"`: the page fetches (its
-         * origin, cookies and CORS) — from an overlay only. Default:
-         * `"page"` in an overlay, `"background"` elsewhere. An overlay's own
-         * `fetch()` is the page's too.
+         * origin, cookies and CORS), from an overlay only (elsewhere it
+         * rejects). Default: `"page"` in an overlay, `"background"` elsewhere.
+         * An overlay's own `fetch()` is the page's too. Any other value is a
+         * `TypeError`.
          */
         from?: "page" | "background";
         /** Skip every script's handlers (this script's too) for this request; the Log shows it as `bypass`. */
@@ -778,7 +900,7 @@ declare namespace TangiTweak {
          * | `"document_end"` *(onPage, onOverlay)* | at `DOMContentLoaded` (DOM parsed) | whole DOM queryable; images/iframes may still load |
          * | `"document_idle"` | after the page's `load` event | every subresource finished |
          *
-         * **`"document_start"`** — runs while the HTML is still being parsed,
+         * **`"document_start"`**: runs while the HTML is still being parsed,
          * so `querySelector` finds (almost) nothing. Use it to get in *ahead*
          * of page code: stub or wrap globals (`window.fetch`, `navigator.*`),
          * observe `document` with a `MutationObserver`, add capture-phase
@@ -787,10 +909,10 @@ declare namespace TangiTweak {
          *   reliably beats the page's scripts. In the MV3 build a cold service
          *   worker can take ~50–100 ms to answer, so early inline `<script>`s
          *   **may already have run**. Don't rely on winning the race for
-         *   correctness — use `onResponseBody` when you must change what page
+         *   correctness: use `onResponseBody` when you must change what page
          *   code sees.
          *
-         * **`"document_end"`** — at `DOMContentLoaded` (DOM parsed):
+         * **`"document_end"`**: at `DOMContentLoaded` (DOM parsed):
          * `defer`/module scripts have run; images,
          * stylesheets and iframes may still be loading, and frameworks (React,
          * Vue, …) may not have hydrated yet, so a re-render can overwrite your
@@ -798,7 +920,7 @@ declare namespace TangiTweak {
          * the page is already past this point when the script arrives (slow
          * bundle, bfcache restore), the handler runs immediately.
          *
-         * **`"document_idle"`** — after the page's `load` event. Best for
+         * **`"document_idle"`**: after the page's `load` event. Best for
          * reading final layout/sizes or tweaking content that page scripts
          * build during load. The slowest choice: one hanging image or ad
          * iframe delays it. Runs immediately if `load` already fired. Unlike
@@ -809,7 +931,7 @@ declare namespace TangiTweak {
          * - Runs **once** per document load, per matching frame. SPA route
          *   changes (`pushState`) don't re-run it unless the route sets
          *   `navigation` (then `when` is the earliest it starts); framework
-         *   re-renders never do — start a `MutationObserver` inside the
+         *   re-renders never do: start a `MutationObserver` inside the
          *   handler to keep re-applying.
          * - Saving the script while the page is open runs the handler again
          *   **immediately**, regardless of `when` (a new run): what it sets
@@ -859,22 +981,42 @@ declare namespace TangiTweak {
 
     // ---- tweak.params: typed, user-adjustable parameters ----
 
-    /** An on/off switch — a checkbox in the ⚙ dialog. */
-    /** a tweak's package.json fields as TangiTweak reads them (`name` is `tangitweak.displayName`, else the npm name) */
+    /**
+     * A tweak's package.json fields as TangiTweak reads them: the npm
+     * fields (`name`, `version`, `description`, `author`, `license`,
+     * `homepage`) and the `"tangitweak"` block (`displayName`, `icon`,
+     * `updateURL`, `connect`, `minTangiTweakVersion`).
+     *
+     * @see https://github.com/tangistudio/TangiTweak/blob/master/docs/packages.md
+     */
     interface Metadata {
-        /** shown when installing and in the Explorer (default: the file name) */
+        /**
+         * Shown when installing and in the Explorer: `tangitweak.displayName`,
+         * else the npm `name`. Without either, the tweak's folder name.
+         */
         name?: string;
-        /** dotted version ("1.2.0"); an update to a lower one waits for review */
+        /** Dotted version, e.g. `"1.2.0"`. An update to a lower one waits for review. */
         version?: string;
-        /** minimum TangiTweak version required ("0.35.0"); warns on import/install and holds auto-updates if this browser has an older TangiTweak */
+        /**
+         * Minimum TangiTweak version required, e.g. `"0.35.0"`: the lowest
+         * version `dependencies.tangitweak` allows, else
+         * `tangitweak.minTangiTweakVersion`. Warns on import and install, and
+         * holds auto-updates while this browser has an older TangiTweak.
+         */
         minTangiTweakVersion?: string;
-        /** one line about what it does: the Editor's and popup's tooltip */
+        /** One line about what the tweak does: its tooltip in the Editor and popup. */
         description?: string;
-        /** icon shown in the Explorer and popup: a relative .svg/.png/… path, data: or https:// URL, or inline <svg> */
+        /**
+         * `tangitweak.icon`, shown in the Explorer and popup: a relative
+         * `.svg`/`.png`/… path in the tweak, a `data:` or `https://` URL, or
+         * inline `<svg>` markup.
+         */
         icon?: string;
-        /** a link shown when installing */
+        /** A link shown when installing. */
         homepage?: string;
+        /** Who made it, shown as "by …" when installing: the npm `author` string or the `name` of an `{ "name": … }` object. */
         author?: string;
+        /** The license, e.g. `"MIT"`, shown when installing. */
         license?: string;
         /**
          * Where updates come from, instead of where it was installed from: a
@@ -884,18 +1026,25 @@ declare namespace TangiTweak {
          * from it too. An update that changes it waits for review.
          */
         updateURL?: string;
-        /** hosts the bundle's tweak.fetch calls reach (onPage code: only these and their subdomains) — an update that adds one waits for review */
+        /**
+         * `tangitweak.connect`: the hosts the tweak's `tweak.fetch` calls
+         * reach from `onPage` code (these and their subdomains; names are
+         * lowercased). The install page lists them. An update that adds one
+         * waits for review.
+         */
         connect?: string[];
     }
 
+    /** An on/off switch: a checkbox in the ⚙ dialog. */
     interface ParamDefBoolean {
+        /** Picks this kind of param. A stored value that isn't a boolean falls back to the default. */
         type: "boolean";
         /** Default `false`. */
         default?: boolean;
         /** Shown next to the control and in settings.json. */
         description?: string;
         /**
-         * Turn the raw value into what the script receives — the param's
+         * Turn the raw value into what the script receives: the param's
          * type becomes this function's return type. The ⚙ dialog, Editor and
          * settings.json keep editing the raw value; `parse` re-runs whenever
          * it changes. A throw is a script error naming the param.
@@ -905,8 +1054,9 @@ declare namespace TangiTweak {
          */
         parse?: (raw: boolean) => unknown;
     }
-    /** A number — a number input in the ⚙ dialog. */
+    /** A number: a number input in the ⚙ dialog. */
     interface ParamDefNumber {
+        /** Picks this kind of param. A stored value that isn't a finite number falls back to the default. */
         type: "number";
         /** Default `0`. */
         default?: number;
@@ -919,7 +1069,7 @@ declare namespace TangiTweak {
         /** Step for the number input. Default `1`; use e.g. `0.1` for decimals. */
         step?: number;
         /**
-         * Turn the raw value into what the script receives — the param's
+         * Turn the raw value into what the script receives: the param's
          * type becomes this function's return type. The ⚙ dialog, Editor and
          * settings.json keep editing the raw value; `parse` re-runs whenever
          * it changes. A throw is a script error naming the param.
@@ -929,8 +1079,9 @@ declare namespace TangiTweak {
          */
         parse?: (raw: number) => unknown;
     }
-    /** Free text — a text input (or textarea) in the ⚙ dialog. */
+    /** Free text: a text input (or textarea) in the ⚙ dialog. */
     interface ParamDefString {
+        /** Picks this kind of param. A stored value that isn't a string falls back to the default. */
         type: "string";
         /**
          * Edit in a textarea. Multi-line string parameter.
@@ -941,7 +1092,7 @@ declare namespace TangiTweak {
         /** Shown next to the control and in settings.json. */
         description?: string;
         /**
-         * Turn the raw value into what the script receives — the param's
+         * Turn the raw value into what the script receives: the param's
          * type becomes this function's return type. The ⚙ dialog, Editor and
          * settings.json keep editing the raw value; `parse` re-runs whenever
          * it changes. A throw is a script error naming the param.
@@ -951,17 +1102,18 @@ declare namespace TangiTweak {
          */
         parse?: (raw: string) => unknown;
     }
-    /** One of fixed choices — a dropdown in the ⚙ dialog. */
+    /** One of fixed choices: a dropdown in the ⚙ dialog. */
     interface ParamDefEnum {
+        /** Picks this kind of param. A stored value not among `choices` falls back to the default. */
         type: "enum";
         /** The allowed values; the param is typed as their union. */
         choices: string[];
-        /** Default: the first choice. */
+        /** Default: the first choice (`""` when `choices` is empty). */
         default?: string;
         /** Shown next to the control and in settings.json. */
         description?: string;
         /**
-         * Turn the raw value into what the script receives — the param's
+         * Turn the raw value into what the script receives: the param's
          * type becomes this function's return type. The ⚙ dialog, Editor and
          * settings.json keep editing the raw value; `parse` re-runs whenever
          * it changes. A throw is a script error naming the param.
@@ -973,15 +1125,16 @@ declare namespace TangiTweak {
          */
         parse?: (raw: string) => unknown;
     }
-    /** A list of strings — one entry per line in the ⚙ dialog. */
+    /** A list of strings: one entry per line in the ⚙ dialog. */
     interface ParamDefStringList {
+        /** Picks this kind of param. A stored value that isn't a list of strings falls back to the default; `parse` gets a copy. */
         type: "stringList";
         /** Default `[]`. */
         default?: string[];
         /** Shown next to the control and in settings.json. */
         description?: string;
         /**
-         * Turn the raw value into what the script receives — the param's
+         * Turn the raw value into what the script receives: the param's
          * type becomes this function's return type. The ⚙ dialog, Editor and
          * settings.json keep editing the raw value; `parse` re-runs whenever
          * it changes. A throw is a script error naming the param.
@@ -992,7 +1145,7 @@ declare namespace TangiTweak {
         parse?: (raw: string[]) => unknown;
     }
     /**
-     * Keys for {@link PageCtx.shortcut} — the ⚙ dialog records them as
+     * Keys for {@link PageCtx.shortcut}: the ⚙ dialog records them as
      * you press them, with buttons to remove the shortcut and reset it to
      * the default. The value is the keys ("Mod+Shift+K", Mod being Cmd on
      * macOS and Ctrl elsewhere), or `""` once removed.
@@ -1004,13 +1157,14 @@ declare namespace TangiTweak {
      * });
      */
     interface ParamDefShortcut {
+        /** Picks this kind of param. A stored value that isn't a shortcut falls back to the default. */
         type: "shortcut";
         /** Default `""` (none). A default that isn't a shortcut is a script error. */
         default?: string;
         /** Shown next to the control and in settings.json. */
         description?: string;
         /**
-         * Turn the raw value into what the script receives — the param's
+         * Turn the raw value into what the script receives: the param's
          * type becomes this function's return type. The ⚙ dialog, Editor and
          * settings.json keep editing the raw value; `parse` re-runs whenever
          * it changes. A throw is a script error naming the param.
@@ -1028,7 +1182,7 @@ declare namespace TangiTweak {
         readonly [key: string]: ParamDef | ParamGroup;
     }
 
-    /** The raw (stored, edited) value type of a param def — what `parse` receives. */
+    /** The raw (stored, edited) value type of a param def: what `parse` receives. */
     type ParamRawValue<D extends ParamDef> = D extends ParamDefBoolean
         ? boolean
         : D extends ParamDefNumber
@@ -1047,9 +1201,21 @@ declare namespace TangiTweak {
      * The value type a param def resolves to: `parse`'s return type when
      * the def has one, else {@link TangiTweak.ParamRawValue}.
      */
-    type ParamValue<D extends ParamDef> = D extends { parse: (raw: never) => infer R } ? R : ParamRawValue<D>;
+    type ParamValue<D extends ParamDef> = D extends {
+        /** The def's parser, whose return type `R` is the param's type. */
+        parse: (raw: never) => infer R;
+    } ? R : ParamRawValue<D>;
 
-    type ParamIsReadonly<V> = V extends ParamDef ? (V extends { parse: Function } ? true : false) : true;
+    /**
+     * `true` when a {@link ParamsOf} entry is read-only from code: a param
+     * with `parse` (code sees the parsed value, not the stored one) or a
+     * section (assign to its params instead).
+     */
+    type ParamIsReadonly<V> = V extends ParamDef ? (V extends {
+        /** Any parser makes the param read-only. */
+        parse: Function;
+    } ? true : false) : true;
+    /** The value of one {@link ParamsOf} entry: a param's {@link ParamValue} or a section's own {@link ParamsOf}. */
     type ParamEntryValue<V> = V extends ParamDef ? ParamValue<V> : V extends ParamGroup ? ParamsOf<V> : never;
 
     /**
@@ -1066,13 +1232,18 @@ declare namespace TangiTweak {
 
 }
 
+/**
+ * The `tweak` object's type, {@link TangiTweak.Tweak}. A second block of the
+ * same namespace, so the registration functions read apart from the types
+ * they use.
+ */
 declare namespace TangiTweak {
     /**
      * The script API: `import { tweak } from "tangitweak"`.
      *
      * A script is a file that registers handlers at top level. Each handler
-     * takes its own **route** first — a URL pattern, a list, or a route object
-     * (`url`, `exclude`, `methods`, `resourceTypes`, `strategy`) — then the handler:
+     * takes its own **route** first (a URL pattern, a list or a route object
+     * with `url`, `exclude`, `methods`, `resourceTypes`, `strategy`), then the handler:
      *
      * ```ts
      * tweak.onRequest({ url: "*://api.example.com/*", strategy: "helper" }, (ctx) => ({ headers: { set: { "x-debug": "1" } } }));
@@ -1081,23 +1252,25 @@ declare namespace TangiTweak {
      * The tweak's entry registers them; its other files are *modules*: they
      * run when the entry imports them, and what they register is the tweak's.
      *
-     * **Stacking** — when several handlers match one request they run in list
+     * **Stacking.** When several handlers match one request they run in list
      * order (scripts top to bottom in the Editor, then registration order):
      * - `onRequest`: the first *final* result (`replaceResponse`/`redirect`/
      *   `block`) wins and stops the chain; headers-only or `void` results
      *   don't stop it.
      * - `onResponseHeaders`: **all** matching handlers run; `set` is applied in
      *   order (later overwrites), `remove` accumulates.
-     * - `onResponseBody`: transforms **compose** — each output is the next input.
+     * - `onResponseBody`: transforms **compose**: each output is the next input.
      * - `replaceResponse`: the first handler returning a body wins.
      *
      * Handlers on different strategies run independently, each on its own
      * strategy (see {@link TangiTweak.Strategy}).
      *
-     * **Async** — every handler may return a Promise. On Chromium's
+     * **Async.** Every handler may return a Promise. On Chromium's
      * `"extension"` strategy `onRequest`/`onResponseHeaders` must be
      * synchronous (an async result is ignored with a warning); every other
      * strategy awaits it.
+     *
+     * @see https://github.com/tangistudio/TangiTweak/blob/master/docs/scripting.md#multiple-handlers--how-they-stack
      */
     interface Tweak {
         /**
@@ -1106,16 +1279,18 @@ declare namespace TangiTweak {
          * (a combination is a type error; at runtime only the first, in that
          * order, applies and a warning is logged).
          *
-         * **Final** results — the first one wins and stops the chain:
-         * - `replaceResponse` — synthesize the response; the network is never contacted.
+         * **Final** results (the first one wins and stops the chain):
+         * - `replaceResponse`: synthesize the response; the network is never contacted.
          *   On Chromium's `"extension"` strategy it is served as a data-URL
          *   redirect, so only status 200 is possible there.
-         * - `redirect` — continue at another URL.
-         * - `block` — fail the request.
+         * - `redirect`: continue at another URL.
+         * - `block`: fail the request.
          *
-         * **Not final:** `{ headers }` — applied, and later handlers still run.
+         * **Not final:** `{ headers }` is applied and later handlers still run.
          *
-         * @param route Where it applies — see {@link TangiTweak.RouteOptions}.
+         * A handler that throws is logged and skipped: the next one runs.
+         *
+         * @param route Where it applies: see {@link TangiTweak.RouteOptions}.
          * @param handler Called once per matching request with its context.
          *
          * @example
@@ -1137,7 +1312,7 @@ declare namespace TangiTweak {
          * Not available on the `"page"` strategy (the page can't change headers
          * before the browser enforces them).
          *
-         * @param route Where it applies — see {@link TangiTweak.RouteOptions}.
+         * @param route Where it applies: see {@link TangiTweak.RouteOptions}.
          * @param handler Called when the response headers arrive.
          *
          * @example
@@ -1154,11 +1329,19 @@ declare namespace TangiTweak {
         ): void;
 
         /**
-         * Replace the response body completely. Return a string, `Uint8Array`,
-         * an object (sent as JSON), or `{ file: "<path or data url>" }`; return
-         * nothing to leave the response alone.
+         * Replace the response body completely. Return a string (sent as-is),
+         * an object (sent as JSON) or `{ file }`; return nothing (`undefined`
+         * or `null`) to leave the response alone. The first handler to return
+         * a body wins; one that throws is logged and the next one runs.
          *
-         * @param route Where it applies — see {@link TangiTweak.RouteOptions}.
+         * - A `Uint8Array` is sent as bytes on the `extension` strategy only;
+         *   the others JSON-serialize it like any other object.
+         * - The Content-Type comes from the request URL's extension (`.js`,
+         *   `.json`, `.css`, `.html`, `.xml`), else the resource type (HTML
+         *   for documents and frames, CSS, JavaScript), else
+         *   `application/json`.
+         *
+         * @param route Where it applies: see {@link TangiTweak.RouteOptions}.
          * @param handler Called per matching response; its result becomes the body.
          *
          * @example
@@ -1173,7 +1356,16 @@ declare namespace TangiTweak {
          */
         replaceResponse(
             route: TangiTweak.RouteOptions,
-            handler: (ctx: TangiTweak.ReplaceCtx) => TangiTweak.Awaitable<string | Uint8Array | object | { file: string } | null | void>
+            handler: (ctx: TangiTweak.ReplaceCtx) => TangiTweak.Awaitable<string | Uint8Array | object | {
+                /**
+                 * A `data:` URL (base64 or percent-encoded), decoded and served
+                 * with its media type (`text/plain` when it has none). Any
+                 * other string is served as the body itself: no file is read.
+                 *
+                 * @example { file: "data:text/html;base64,PGgxPkhpPC9oMT4=" }
+                 */
+                file: string;
+            } | null | void>
         ): void;
 
         /**
@@ -1181,20 +1373,20 @@ declare namespace TangiTweak {
          * the new one. Matching transforms compose in order.
          *
          * The handler gets text bodies (a string) only, unless its route sets
-         * `binary: true` — binary bodies (images, video, …) only, as a
-         * `Uint8Array` — or `binary: "both"`. `binary: false` keeps text only
+         * `binary: true` (binary bodies such as images and video only, as a
+         * `Uint8Array`) or `binary: "both"`. `binary: false` keeps text only
          * and silences the "body is binary" warning. Which Content-Types are
          * text: `settings.textTypes`.
          *
          * Needs a strategy that reads bodies: `"helper"`, `"debugger"`, `"page"`
          * (page fetch/XHR only) or `"extension"` on Firefox. Chromium's
-         * `"extension"` strategy can't read bodies — the handler doesn't run there and
+         * `"extension"` strategy can't read bodies: the handler doesn't run there and
          * the Log view says so.
          *
-         * @param route Where it applies — see {@link TangiTweak.RouteOptions}.
+         * @param route Where it applies: see {@link TangiTweak.RouteOptions}.
          * @param transform Receives the context and the original body; returns
          * the new body, or nothing (`undefined` / `null`) to leave it as it is.
-         * Any body returned counts as a change — even the same one: it's
+         * Any body returned counts as a change, even the same one: it's
          * re-encoded and served in place of the original.
          *
          * @example
@@ -1202,18 +1394,24 @@ declare namespace TangiTweak {
          *     return body.replace("DEBUG=false", "DEBUG=true");
          * });
          * @example
-         * // binary: true — swap an image
+         * // binary: true, to swap an image
          * tweak.onResponseBody({ url: "*://example.com/logo.png", binary: true, strategy: "helper" }, async (ctx, body) => {
          *     const res = await fetch("https://example.org/other.png");
          *     return new Uint8Array(await res.arrayBuffer());
          * });
          */
         onResponseBody(
-            route: TangiTweak.BodyRouteOptions & { binary?: false },
+            route: TangiTweak.BodyRouteOptions & {
+                /** Unset or `false`: text bodies only, as a string. */
+                binary?: false;
+            },
             transform: (ctx: TangiTweak.BodyCtx, body: string) => TangiTweak.Awaitable<string | Uint8Array | void>
         ): void;
         onResponseBody(
-            route: TangiTweak.BodyRouteOptions & { binary: true },
+            route: TangiTweak.BodyRouteOptions & {
+                /** Binary bodies only, as a `Uint8Array`. */
+                binary: true;
+            },
             transform: (ctx: TangiTweak.BodyCtx, body: Uint8Array) => TangiTweak.Awaitable<string | Uint8Array | void>
         ): void;
         onResponseBody(
@@ -1245,17 +1443,17 @@ declare namespace TangiTweak {
         onSite<T = void>(route: TangiTweak.PageRoute, handler: (ctx: TangiTweak.SiteCtx) => TangiTweak.Awaitable<T>): TangiTweak.Remote<T>;
 
         /**
-         * Run a handler in the page — the resilient way to change titles, text
+         * Run a handler in the page: the resilient way to change titles, text
          * and DOM content. Works no matter how the response arrived
          * (service-worker-served HTML, cached pages, hydration). Strategies
          * don't apply.
          *
          * Runs once per document load in every frame whose URL matches the
-         * route — by default at `DOMContentLoaded` (`when: "document_end"`), in
+         * route, by default at `DOMContentLoaded` (`when: "document_end"`), in
          * an isolated world that shares the page's DOM but not its JavaScript.
-         * It's trusted: it has the script's stores and calls its handles —
-         * read the site's globals through a {@link onSite} handle, draw on the
-         * overlay through an {@link onOverlay} one (top frame). On Chrome
+         * It's trusted: it has the script's stores and calls its handles
+         * (read the site's globals through a {@link onSite} handle, draw on the
+         * overlay through an {@link onOverlay} one, top frame). On Chrome
          * (MV3) it runs through user scripts, which must be turned on (the
          * Editor shows how).
          *
@@ -1321,14 +1519,14 @@ declare namespace TangiTweak {
          * Declare adjustable parameters, editable from the popup's ⚙ dialog,
          * the Editor and settings.json without touching the script. Returns
          * the current values (stored values over your defaults), typed from
-         * your defs. Routes may be built from them — a change re-runs the
+         * your defs. Routes may be built from them: a change re-runs the
          * script. Libraries may declare params too (listed in the popup; one
          * that registers handlers only for some value becomes a script then).
          * Definitions may come from an import (`{ env: envParam }`, `{ ...defs }`).
          *
          * The values can be changed, like a valtio proxy: assign one
          * (`cfg.enabled = false`) or change a list in place
-         * (`cfg.hosts.push("a.com")`) from a handler — onPage, onOverlay or
+         * (`cfg.hosts.push("a.com")`) from a handler: onPage, onOverlay or
          * network code, not onSite code and not the top level. The value is
          * checked against its type (a wrong one throws), seen right away, and
          * saved like a ⚙ change: logged, written to settings.json, and the
@@ -1375,7 +1573,12 @@ declare namespace TangiTweak {
         params<const T extends TangiTweak.ParamGroup>(defs: T): TangiTweak.ParamsOf<T>;
 
         /**
-         * Per-script key/value storage (async, persistent).
+         * Per-script key/value storage (async, persistent): see
+         * {@link TangiTweak.Storage}. It works in network handlers, `onPage`,
+         * `onOverlay` and `onSite` code, all reaching the same copy in the
+         * background. In `onSite` code the site can see the values and send
+         * its own `get`/`set` calls, so keep secrets out of a script with
+         * `onSite` handlers.
          *
          * @example
          * tweak.onRequest({ url: "*://example.com/*", strategy: "helper" }, async () => {
@@ -1389,13 +1592,13 @@ declare namespace TangiTweak {
          * Reactive [valtio](https://valtio.dev) store shared across the entire browser.
          *
          * - **Lifetime:** One copy across all tabs and pages. Survives reloads,
-         *   navigations, closing tabs, script saves, and — by default (`persist: true`
-         *   or `persist: ["field"]`) — browser restarts (saved in the tweak's `.tweak/stores/<id>.json`).
+         *   navigations, closing tabs and script saves; by default (`persist: true`
+         *   or `persist: ["field"]`) also browser restarts (saved in the tweak's `.tweak/stores/<id>.json`).
          *   With `{ persist: false }`, resets when the browser quits.
          * - **Handlers:** All network handlers (`rules`, `page`, `debugger`,
-         *   `extension`, `helper` — sync and after `await`), `tweak.onPage`,
+         *   `extension`, `helper`, sync and after `await`), `tweak.onPage`,
          *   `tweak.onOverlay`, and top-level/timer code. **Throws in `tweak.onSite`**
-         *   (untrusted site world — use {@link siteStore}).
+         *   (untrusted site world: use {@link siteStore}).
          *
          * Call at top level; values must be JSON (≤ 1 MB).
          *
@@ -1418,7 +1621,7 @@ declare namespace TangiTweak {
          *   top tab's copy). **Survives page reloads, cross-page navigations, and
          *   script saves** in that tab; dropped when the tab closes or the browser
          *   quits (never persisted to a store file).
-         * - **Handlers:** All network handlers (`rules` included — builds per-tab
+         * - **Handlers:** All network handlers (`rules` included: builds per-tab
          *   `tabIds` / `excludedTabIds` session rules on change; on `page`,
          *   `debugger`, `extension`, and `helper`, **read/write synchronously before
          *   the first `await`**), `tweak.onPage`, and `tweak.onOverlay`. **Throws in
@@ -1470,7 +1673,7 @@ declare namespace TangiTweak {
          *   **Throws in all network handlers** (`onRequest`, `replaceResponse`,
          *   `onResponseHeaders`, `onResponseBody` on every strategy) and inside
          *   imported libraries.
-         * - **Trust:** Untrusted page data — the site's own scripts can read, mutate,
+         * - **Trust:** Untrusted page data: the site's own scripts can read, mutate,
          *   or forge its values. Keep private/trusted state in {@link globalStore},
          *   {@link tabStore}, or {@link pageStore}.
          *
@@ -1488,22 +1691,40 @@ declare namespace TangiTweak {
 
         /**
          * `fetch` for scripts. By default it runs in the background with the
-         * extension's host permissions (no CORS) and the browser's cookies.
-         * `bypass: true` keeps every script's handlers — this one's too — off
-         * the request, e.g. to get the real response a mock replaces.
+         * extension's host permissions (no CORS) and the browser's cookies
+         * (`credentials` defaults to `"include"`) and returns a normal
+         * `Response`. `bypass: true` keeps every script's handlers (this
+         * one's too) off the request, e.g. to get the real response a mock
+         * replaces; the Log lists it as a `bypass`.
          *
-         * In `onPage` code it reaches only the hosts in package.json's
-         * `"tangitweak.connect"` and their subdomains (the page's process
-         * runs that code, so it can't send the background anywhere else).
-         * In `onSite` code it rejects: use the page's `fetch`.
+         * - The URL must be absolute for a background fetch (a `TypeError`
+         *   otherwise); `onPage` code and `from: "page"` resolve relative
+         *   URLs against the page.
+         * - Request and response bodies are capped at 10 MB each (a
+         *   `RangeError` past it).
+         * - `init.signal` is ignored: an abort can't reach the background.
+         * - In `onPage` code it reaches only the hosts in package.json's
+         *   `"tangitweak.connect"` and their subdomains (the page's process
+         *   runs that code, so it can't send the background anywhere else);
+         *   any other host rejects, naming the host to add.
+         * - In `onSite` code it rejects: use the page's `fetch`.
          *
+         * @see https://github.com/tangistudio/TangiTweak/blob/master/docs/scripting.md#tweakfetch
          * @example
          * const real = await (await tweak.fetch("https://api.example.com/user", { bypass: true })).json();
          */
         fetch(input: string | URL | Request, init?: TangiTweak.FetchInit): Promise<Response>;
 
         /**
-         * Log to the Editor's Log view for the current tab.
+         * Write an info line to the Editor's Log view, tagged with this
+         * script's name (`[name] tweak.log: …`). Lines from page code are
+         * tied to its tab; lines from network handlers and top-level code
+         * aren't tied to a tab.
+         *
+         * The arguments are joined with spaces: strings as they are, errors
+         * as their stack, functions as `[function name]` and anything else
+         * as JSON (or `String()` when it can't be). A line is cut at 4000
+         * characters. The script's `console.*` calls reach the Log too.
          *
          * @example
          * tweak.log("request to", ctx.url, { method: ctx.method });
@@ -1562,85 +1783,25 @@ declare namespace TangiTweak {
  * `siteStore` calls.
  */
 declare module "tangitweak" {
+    /**
+     * This file's `tweak` object: see {@link TangiTweak.Tweak}. Outside the
+     * browser (the SDK's own `index.js`, in plain Vitest tests) it's a
+     * stand-in: handlers are recorded but never called, params return their
+     * defaults and stores are plain valtio objects.
+     *
+     * @example
+     * import { tweak } from "tangitweak";
+     * tweak.onPage("*://example.com/*", () => { document.title = "🎯 " + document.title; });
+     */
     export const tweak: TangiTweak.Tweak;
 }
-
-/*
- * Newer web platform APIs that the editor's bundled TypeScript doesn't know
- * yet. TangiTweak targets current browsers, so scripts may use them freely.
- */
-
-/** Input accepted by `URLPattern` (each URL component as a pattern string). */
-interface URLPatternInit {
-    protocol?: string;
-    username?: string;
-    password?: string;
-    hostname?: string;
-    port?: string;
-    pathname?: string;
-    search?: string;
-    hash?: string;
-    baseURL?: string;
-}
-
-interface URLPatternOptions {
-    /** Match case-insensitively. */
-    ignoreCase?: boolean;
-}
-
-type URLPatternInput = string | URLPatternInit;
-
-interface URLPatternComponentResult {
-    input: string;
-    groups: Record<string, string | undefined>;
-}
-
-interface URLPatternResult {
-    inputs: [URLPatternInput] | [URLPatternInput, string];
-    protocol: URLPatternComponentResult;
-    username: URLPatternComponentResult;
-    password: URLPatternComponentResult;
-    hostname: URLPatternComponentResult;
-    port: URLPatternComponentResult;
-    pathname: URLPatternComponentResult;
-    search: URLPatternComponentResult;
-    hash: URLPatternComponentResult;
-}
-
-/**
- * Matches URLs against a pattern, e.g. `new URLPattern("https://*.example.com/users/:id")`.
- * The same syntax as handler routes (`tweak.onRequest({ url: pattern, strategy }, fn)`).
- *
- * @see https://developer.mozilla.org/en-US/docs/Web/API/URL_Pattern_API
- */
-interface URLPattern {
-    /** Whether `input` matches the pattern. */
-    test(input?: URLPatternInput, baseURL?: string): boolean;
-    /** The matched components and their named groups (`:id`, `*` → `"0"`), or null. */
-    exec(input?: URLPatternInput, baseURL?: string): URLPatternResult | null;
-    readonly protocol: string;
-    readonly username: string;
-    readonly password: string;
-    readonly hostname: string;
-    readonly port: string;
-    readonly pathname: string;
-    readonly search: string;
-    readonly hash: string;
-    /** Whether any component uses a custom regular expression group. */
-    readonly hasRegExpGroups: boolean;
-}
-
-declare var URLPattern: {
-    prototype: URLPattern;
-    new (input: URLPatternInput, baseURL: string, options?: URLPatternOptions): URLPattern;
-    new (input?: URLPatternInput, options?: URLPatternOptions): URLPattern;
-};
 
 /**
  * An `.svg` data file imports as its markup, a string:
  * `import logo from "./icons/logo.svg"; el.innerHTML = logo;`
  */
 declare module "*.svg" {
+    /** The file's SVG markup (`'<svg …>…</svg>'`), e.g. for `innerHTML`. */
     const markup: string;
     export default markup;
 }
@@ -1650,6 +1811,7 @@ declare module "*.svg" {
  * `import readme from "./README.md";`
  */
 declare module "*.md" {
+    /** The file's Markdown source text. */
     const markdown: string;
     export default markdown;
 }
@@ -1659,30 +1821,43 @@ declare module "*.md" {
  * `import icon from "./icon.png"; img.src = icon;`
  */
 declare module "*.png" {
+    /** The image as a `data:image/png;base64,…` URL. */
     const url: string;
     export default url;
 }
+/** A `.jpg` data file imports as its `data:` URL (see the `.png` module). */
 declare module "*.jpg" {
+    /** The image as a `data:image/jpeg;base64,…` URL. */
     const url: string;
     export default url;
 }
+/** A `.jpeg` data file imports as its `data:` URL (see the `.png` module). */
 declare module "*.jpeg" {
+    /** The image as a `data:image/jpeg;base64,…` URL. */
     const url: string;
     export default url;
 }
+/** A `.gif` data file imports as its `data:` URL (see the `.png` module). */
 declare module "*.gif" {
+    /** The image as a `data:image/gif;base64,…` URL. */
     const url: string;
     export default url;
 }
+/** A `.webp` data file imports as its `data:` URL (see the `.png` module). */
 declare module "*.webp" {
+    /** The image as a `data:image/webp;base64,…` URL. */
     const url: string;
     export default url;
 }
+/** A `.ico` data file imports as its `data:` URL (see the `.png` module). */
 declare module "*.ico" {
+    /** The image as a `data:image/x-icon;base64,…` URL. */
     const url: string;
     export default url;
 }
+/** A `.avif` data file imports as its `data:` URL (see the `.png` module). */
 declare module "*.avif" {
+    /** The image as a `data:image/avif;base64,…` URL. */
     const url: string;
     export default url;
 }

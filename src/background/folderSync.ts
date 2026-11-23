@@ -29,9 +29,10 @@
  */
 import { computeEvents, contentHash, loadSavedHandle, clearSavedHandle, saveHandle, type FileSig } from "../shared/folderSync";
 import {
-    saveScript, deleteScript, newId, listScripts, onScriptsChanged, type Script,
+    saveScript, saveScriptsBatch, holdingChanges, deleteScript, newId, listScripts, onScriptsChanged, type Script,
     listDataFiles, saveDataFile, deleteDataFile, newDataFileId, listFolders, createFolder, deleteFolder,
 } from "./engine/scriptStore";
+import { progressReporter, type ProgressReporter } from "./engine/progress";
 import type { DataFile } from "./engine/dataFiles";
 import { getSettingsText, applySettingsText, settingsTextParses } from "./settingsFile";
 import { applyTweakDataFile, getDataFolder, tweakDataFiles, tweakTargets } from "./tweakDataFiles";
@@ -188,16 +189,17 @@ async function clearPersistedState(): Promise<void> {
  * (.json, except tooling config) and folders (key ending in "/"), by path,
  * recursively. Dot-entries and node_modules are skipped.
  */
-async function scanFolder(handle: any = dirHandle, prefix = "", seen = new Map<string, FileSig>()): Promise<Map<string, FileSig>> {
+async function scanFolder(handle: any = dirHandle, prefix = "", seen = new Map<string, FileSig>(), progress?: ProgressReporter): Promise<Map<string, FileSig>> {
     for await (const entry of handle.values()) {
         const path = prefix + entry.name;
         if (entry.kind === "directory") {
             if (entry.name.startsWith(".") || entry.name === "node_modules" || entry.name === "__tests__" || folderPathProblem(path)) continue;
             if (entry.name === dataFolder && (await isTweakDir(handle))) continue;
             seen.set(path + "/", FOLDER_SIG);
-            await scanFolder(entry, path + "/", seen);
+            await scanFolder(entry, path + "/", seen, progress);
             continue;
         }
+        progress?.step("listing", seen.size);
         if (entry.kind !== "file" || !isSyncedFile(path)) continue;
         let f: File;
         try {
@@ -366,6 +368,56 @@ function caseClash(file: string, scripts: Script[], except?: string): Script | u
 
 // ---- disk → storage ----
 
+type DiskSave = { id: string; code: string; name: string };
+
+/** the script saves of the sync pass running now (see syncPass); null outside one */
+let staged: Map<string, DiskSave> | null = null;
+
+/** save a script read from disk: staged in a sync pass, else right away */
+async function saveFromDisk(save: DiskSave): Promise<void> {
+    if (staged) staged.set(save.id, save);
+    else await saveScript(save);
+}
+
+/** the stored scripts with the running pass's staged saves applied (their names and code) */
+async function scriptsNow(): Promise<Script[]> {
+    const list = await listScripts();
+    if (!staged?.size) return list;
+    const out = list.map((s) => {
+        const p = staged!.get(s.id);
+        return p ? { ...s, code: p.code, meta: { ...s.meta, name: p.name } } : s;
+    });
+    const now = Date.now();
+    for (const p of staged.values()) {
+        if (list.some((s) => s.id === p.id)) continue;
+        out.push({ id: p.id, code: p.code, enabled: true, createdAt: now, updatedAt: now, error: null, meta: { name: p.name, active: false, routes: [], match: [] } });
+    }
+    return out;
+}
+
+/**
+ * Apply a pass of disk changes as one change: its script saves are staged
+ * and compiled together at the end (after the data files and folders they
+ * may import), and the store announces the change once, so open tabs only
+ * ever get the finished state.
+ */
+async function syncPass<T>(progress: ProgressReporter, work: () => Promise<T>): Promise<T> {
+    if (staged) return work();
+    return holdingChanges(async () => {
+        staged = new Map();
+        try {
+            return await work();
+        } finally {
+            const batch = [...staged.values()];
+            staged = null;
+            if (batch.length) {
+                progress.step("compiling", 0, batch.length);
+                await saveScriptsBatch(batch);
+            }
+        }
+    });
+}
+
 /** a file's new text arrives for script `s` (edit on disk, or a re-added file) */
 async function pullChange(file: string, text: string, s: Script): Promise<boolean> {
     const h = contentHash(text);
@@ -392,32 +444,46 @@ async function pullChange(file: string, text: string, s: Script): Promise<boolea
         await backup(file, s.code, `"${file}" changed on disk while script "${s.meta.name}" also changed in the extension; the file wins`);
     }
     owned.set(s.id, { file, hash: h });
-    await saveScript({ id: s.id, code: text, name: s.meta.name });
+    await saveFromDisk({ id: s.id, code: text, name: s.meta.name });
     dlogLevel("sync", "info", `Folder sync: "${file}" changed on disk — script "${s.meta.name}" updated`);
     return true;
 }
 
 async function applyEvents(events: ReturnType<typeof computeEvents>): Promise<void> {
     if (!events.changed.length && !events.added.length && !events.removed.length) return;
-    await writingAs("receiving", async () => {
-        if (!(await applyFolderEvents(events))) return;
-        // the store's settings.json / schema follow the scripts now, as part
-        // of receiving — the store-change reconcile then finds nothing to write
-        await exportSettings();
-    });
+    const progress = progressReporter("sync");
+    try {
+        await writingAs("receiving", async () => {
+            if (!(await syncPass(progress, () => applyFolderEvents(events, progress)))) return;
+            // the store's settings.json / schema follow the scripts now, as part
+            // of receiving — the store-change reconcile then finds nothing to write
+            await exportSettings();
+        });
+    } finally {
+        progress.end();
+    }
 }
 
 /** apply disk changes to the store; true when a script, data file or folder changed */
-async function applyFolderEvents(events: ReturnType<typeof computeEvents>): Promise<boolean> {
+async function applyFolderEvents(events: ReturnType<typeof computeEvents>, progress: ProgressReporter): Promise<boolean> {
     const changed = events.changed.filter(isScriptFile);
     const added = events.added.filter(isScriptFile);
     const removed = events.removed.filter(isScriptFile);
-    let scripts = await listScripts();
+    let scripts = await scriptsNow();
     const texts = new Map<string, string | null>();
     const read = async (f: string) => {
         if (!texts.has(f)) texts.set(f, await readTextOrNull(f));
         return texts.get(f)!;
     };
+    // read every changed or new file first (several at once: a branch switch, a copied folder)
+    const toRead = [...events.changed, ...events.added].filter((f) => isScriptFile(f) || isDataFile(f));
+    if (toRead.length > 1) {
+        for (const [i, f] of toRead.entries()) {
+            progress.step("reading", i, toRead.length);
+            await read(f);
+        }
+        progress.step("reading", toRead.length, toRead.length);
+    }
     let touched = false;
     const announce = (file?: string) => {
         touched = true;
@@ -447,14 +513,14 @@ async function applyFolderEvents(events: ReturnType<typeof computeEvents>): Prom
                 break;
             }
             owned.set(s.id, { file: canonicalFileName(name), hash: contentHash(t) });
-            await saveScript({ id: s.id, code: t, name });
+            await saveFromDisk({ id: s.id, code: t, name });
             await adoptCanonicalName(f, name, t);
             dlogLevel("sync", "info", `Folder sync: "${old}" renamed to "${f}" — script renamed to "${name}"`);
             announce(f);
             break;
         }
     }
-    if (touched) scripts = await listScripts();
+    if (touched) scripts = await scriptsNow();
 
     for (const file of changed) {
         const s = ownerOf(file, scripts);
@@ -479,9 +545,9 @@ async function applyFolderEvents(events: ReturnType<typeof computeEvents>): Prom
         }
         const id = newId();
         owned.set(id, { file: canonicalFileName(name), hash: contentHash(text) });
-        await saveScript({ id, code: text, name });
+        await saveFromDisk({ id, code: text, name });
         await adoptCanonicalName(file, name, text);
-        scripts = await listScripts();
+        scripts = await scriptsNow();
         dlogLevel("sync", "info", `Folder sync: new file "${file}" imported as script "${name}"`);
         announce(file);
     }
@@ -499,6 +565,7 @@ async function applyFolderEvents(events: ReturnType<typeof computeEvents>): Prom
             continue;
         }
         owned.delete(s.id);
+        staged?.delete(s.id);
         await deleteScript(s.id);
         dlogLevel("sync", "info", `Folder sync: "${file}" deleted on disk — script "${s.meta.name}" removed`);
         announce(file);
@@ -524,7 +591,7 @@ async function applyFolderEvents(events: ReturnType<typeof computeEvents>): Prom
     for (const path of goneFolders.sort((a, b) => b.length - a.length)) {
         if (known.has(path + "/") || !(await listFolders()).includes(path)) continue;
         const inside = (p: string) => isInFolder(p, path);
-        if ((await listScripts()).some((x) => inside(x.meta.name)) || (await listDataFiles()).some((d) => inside(d.path))) continue;
+        if ((await scriptsNow()).some((x) => inside(x.meta.name)) || (await listDataFiles()).some((d) => inside(d.path))) continue;
         await deleteFolder(path);
         dlogLevel("sync", "info", `Folder sync: folder "${path}" deleted on disk — removed`);
         announce(path + "/");
@@ -814,14 +881,45 @@ export interface FolderPreview {
  * is kept in the backup folder. `dry`: only report what would happen.
  */
 async function initialSync(opts: { dry?: boolean; handle?: any; base?: Map<string, Owned> } = {}): Promise<FolderPreview> {
+    const progress = progressReporter("sync");
+    try {
+        if (opts.dry) return await reconcile(opts, progress);
+        const out = await syncPass(progress, () => reconcile(opts, progress));
+        known = new Map([...known].filter(([k]) => !k.endsWith("/")));
+        await reconcileFoldersToDisk();
+        const live = new Set((await listScripts()).map((s) => s.id));
+        for (const id of [...owned.keys()]) if (!live.has(id)) owned.delete(id);
+        const liveData = new Set((await listDataFiles()).map((d) => d.id));
+        for (const id of [...ownedData.keys()]) if (!liveData.has(id)) ownedData.delete(id);
+        dlogLevel("sync", "info", `Folder sync: reconciled — ${out.imported.length} file(s) imported, ${out.written.length} file(s) written from scripts, ${out.conflicts.length} conflict(s)`);
+        if (out.imported.length || out.conflicts.some((c) => c.winner === "file")) broadcastToUi({ type: "scriptsChanged", source: "folder" } as any);
+        return out;
+    } finally {
+        progress.end();
+    }
+}
+
+/**
+ * initialSync's reconcile, in steps: list everything in the folder, read
+ * every file, then apply them (data files and folders first; the scripts
+ * are staged and compile together when the pass ends).
+ */
+async function reconcile(opts: { dry?: boolean; handle?: any; base?: Map<string, Owned> }, progress: ProgressReporter): Promise<FolderPreview> {
     const dry = !!opts.dry;
     const handle = opts.handle ?? dirHandle;
-    const all = await scanFolder(handle);
+    const all = await scanFolder(handle, "", undefined, progress);
+    const files = [...all.keys()].filter((f) => isScriptFile(f) || isDataFile(f));
+    const texts = new Map<string, string>();
+    for (const [i, f] of files.entries()) {
+        progress.step("reading", i, files.length);
+        texts.set(f, await readDiskContent(f, handle));
+    }
+    progress.step("reading", files.length, files.length);
     const seen = new Map([...all].filter(([f]) => isScriptFile(f)));
     const scripts = await listScripts();
     const byFile = new Map(scripts.map((s) => [canonicalFileName(s.meta.name), s]));
     const out: FolderPreview = { imported: [], written: [], conflicts: [] };
-    const readFrom = (name: string) => readDiskContent(name, handle);
+    const readFrom = async (name: string) => texts.get(name) ?? readDiskContent(name, handle);
     /** files of scripts renamed while the folder wasn't watched (unchanged on disk since): script id → old file */
     const movedFrom = new Map<string, string>();
     for (const [fileName, sig] of seen) {
@@ -845,7 +943,7 @@ async function initialSync(opts: { dry?: boolean; handle?: any; base?: Map<strin
             if (dry) continue;
             const id = newId();
             owned.set(id, { file: canonicalFileName(name), hash: contentHash(text) });
-            await saveScript({ id, code: text, name });
+            await saveFromDisk({ id, code: text, name });
             await adoptCanonicalName(fileName, name, text);
             continue;
         }
@@ -870,7 +968,7 @@ async function initialSync(opts: { dry?: boolean; handle?: any; base?: Map<strin
         if (pull) {
             if (conflict) await backup(fileName, s.code, `script "${s.meta.name}" and "${fileName}" both changed; the newer file wins`);
             owned.set(s.id, { file: fileName, hash: hd });
-            await saveScript({ id: s.id, code: text, name: s.meta.name });
+            await saveFromDisk({ id: s.id, code: text, name: s.meta.name });
         } else {
             if (conflict) await backup(fileName, text, `script "${s.meta.name}" and "${fileName}" both changed; the newer script wins`);
             await writeFile(fileName, s.code);
@@ -903,14 +1001,6 @@ async function initialSync(opts: { dry?: boolean; handle?: any; base?: Map<strin
             dlogLevel("sync", "warn", `Folder sync: folder "${path}" not added — ${e?.message || e}`);
         }
     }
-    known = new Map([...known].filter(([k]) => !k.endsWith("/")));
-    await reconcileFoldersToDisk();
-    const live = new Set((await listScripts()).map((s) => s.id));
-    for (const id of [...owned.keys()]) if (!live.has(id)) owned.delete(id);
-    const liveData = new Set((await listDataFiles()).map((d) => d.id));
-    for (const id of [...ownedData.keys()]) if (!liveData.has(id)) ownedData.delete(id);
-    dlogLevel("sync", "info", `Folder sync: reconciled — ${out.imported.length} file(s) imported, ${out.written.length} file(s) written from scripts, ${out.conflicts.length} conflict(s)`);
-    if (out.imported.length || out.conflicts.some((c) => c.winner === "file")) broadcastToUi({ type: "scriptsChanged", source: "folder" } as any);
     return out;
 }
 

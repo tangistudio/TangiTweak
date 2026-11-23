@@ -1,29 +1,42 @@
 /**
  * The `rules` strategy's translation layer (pure, unit-tested against
- * URLPattern itself):
+ * URLPattern itself).
  *
- *   patternToRegex — a route's URLPattern string → one anchored RE2-safe
- *                    regex over the full URL (declarativeNetRequest
- *                    `regexFilter`), following URLPattern's semantics:
- *                    optionals, named groups, custom regexps, modifiers
- *   rulesForProbe  — a handler's one-time ("probe") result → rule specs,
- *                    or why it can't be a rule
+ * - {@link patternToRegex}: a route's URLPattern string → one anchored
+ *   RE2-safe regex over the full URL (declarativeNetRequest `regexFilter`),
+ *   following URLPattern's semantics: optionals, named groups, custom
+ *   regexps, modifiers.
+ * - {@link rulesForProbe}: a handler's one-time ("probe") result → rule
+ *   specs or why it can't be a rule.
+ *
+ * The probe (`shared/rulesProbe.ts`) runs where handlers live (MV3 sandbox,
+ * MV2 background) and calls these; the background's rules strategy turns
+ * the specs into session rules and uses the rest to explain them
+ * ({@link regexProblemText}, {@link substitute}, {@link ruleErrorLine}). The
+ * `tangitweak/test` harness uses the same functions.
  *
  * The URLPattern tokenizer/parser below follows
  * https://urlpattern.spec.whatwg.org (constructor string parser, pattern
  * parser, "generate a regular expression and name list"); the generated
  * per-component regexps are fenced in by the URL delimiters around them
  * so they can be joined into one full-URL regex.
+ *
+ * @see docs/strategies.md
+ * @module
  */
+
 import { RESOURCE_TYPES, routeLabel, type NetKind, type RouteMeta } from "./route";
 
 // ---- placeholders the probe hands to a rules handler ----
 
-/** what ctx.groups[name] returns in the probe run (private-use + mixed case: survives only if used as-is) */
+/**
+ * What ctx.groups[name] returns in the probe run: a placeholder made of
+ * private-use characters and mixed case, so it survives only if used as-is.
+ */
 export function captureToken(name: string): string {
     return `\uE000Wt${name}x\uE001`;
 }
-/** what ctx.url returns in the probe run (U+E002 can't occur in a group name) */
+/** What ctx.url returns in the probe run (U+E002 can't occur in a group name, so it differs from every {@link captureToken}). */
 export const URL_TOKEN = "\uE000Wt\uE002x\uE001";
 const ANY_TOKEN = /\uE000Wt(?:\uE002|[^\uE000\uE001]*?)x\uE001/g;
 const HAS_TOKEN = new RegExp(ANY_TOKEN.source);
@@ -223,6 +236,7 @@ function parsePattern(input: string, opts: CompOptions, encode: (s: string) => s
 
 // ---- constructor string parser ----
 
+/** The URLPattern components, in the order they appear in a URL. */
 export const COMPONENTS = ["protocol", "username", "password", "hostname", "port", "pathname", "search", "hash"] as const;
 type Comp = (typeof COMPONENTS)[number];
 type State = Comp | "init" | "authority" | "done";
@@ -411,7 +425,7 @@ function optionsFor(c: Comp, special: boolean): CompOptions {
 }
 
 /**
- * characters that end each component in a request URL: a component's regex
+ * Characters that end each component in a request URL: a component's regex
  * may not cross them. Request URLs have no fragment, so "#" never needs
  * excluding (each excluded character costs RE2 memory).
  */
@@ -428,7 +442,7 @@ const TERMINATORS: Record<Comp, string> = {
 
 // ---- regex generation ----
 
-/** a user's custom group regexp, fenced in by the component's terminators */
+/** A user's custom group regexp, fenced in by the component's terminators. */
 function fenceUserRegex(v: string, term: string): string {
     if (!term) return v;
     const t = escapeClass(term);
@@ -494,14 +508,14 @@ function partsToRegex(parts: Part[], opts: CompOptions, term: string, capture: (
     return out;
 }
 
-/** "<all_urls>" and "*" match every URL (as in matcher.ts) */
+/** `"<all_urls>"` and `"*"` match every URL (as in matcher.ts). */
 const ALL_URLS = new Set(["<all_urls>", "*"]);
 
 interface ParsedPattern {
     comps: Record<Comp, string>;
     parts: Record<Comp, Part[]>;
     options: Record<Comp, CompOptions>;
-    /** group name → the component whose value ctx.groups[name] carries (the last one defining it) */
+    /** Group name → the component whose value ctx.groups[name] carries (the last one defining it). */
     owner: Map<string, Comp>;
     special: boolean;
 }
@@ -523,13 +537,20 @@ function parse(pattern: string): ParsedPattern {
     return { comps, parts, options, owner, special };
 }
 
+/** A group a URL pattern yields in ctx.groups. */
 export interface PatternGroup {
+    /** The group's ctx.groups name: its `:name` or its number (`"0"`, `"1"`…) for a wildcard or unnamed regexp. */
     name: string;
-    /** may be missing (undefined in ctx.groups): a `?` / `*` group */
+    /** Whether it may be missing (undefined in ctx.groups): a `?` / `*` group. */
     optional: boolean;
 }
 
-/** the ctx.groups names a pattern yields (last-component-wins, as matchGroups merges them) */
+/**
+ * The ctx.groups names a pattern yields (last-component-wins, as
+ * matchGroups merges them).
+ *
+ * @throws A TypeError on an invalid pattern.
+ */
 export function patternGroups(pattern: string): PatternGroup[] {
     const p = parse(pattern);
     return [...p.owner].map(([name, c]) => {
@@ -538,19 +559,22 @@ export function patternGroups(pattern: string): PatternGroup[] {
     });
 }
 
+/** A URL pattern as one regex, from {@link patternToRegex}. */
 export interface PatternRegex {
-    /** anchored, case-sensitive; RE2 syntax except inside custom group regexps */
+    /** The regex: anchored, case-sensitive; RE2 syntax except inside custom group regexps. */
     regex: string;
-    /** capture name → its group number in `regex` (only the requested ones capture) */
+    /** Capture name → its group number in `regex` (only the requested ones capture). */
     index: Record<string, number>;
 }
 
 /**
- * A URLPattern string (constructor syntax, or an all-URLs alias) → one
+ * A URLPattern string (constructor syntax or an all-URLs alias) → one
  * regex over a request URL (which never has a fragment) that matches
  * exactly what URLPattern.test does.
- * `capture` lists the ctx.groups names that should be numbered groups;
- * everything else is non-capturing. Throws on an invalid pattern.
+ *
+ * @param capture - The ctx.groups names that should be numbered groups;
+ *   everything else is non-capturing.
+ * @throws A TypeError on an invalid pattern.
  */
 export function patternToRegex(pattern: string, capture: string[] = []): PatternRegex {
     const p = parse(pattern);
@@ -592,47 +616,79 @@ export function patternToRegex(pattern: string, capture: string[] = []): Pattern
 
 // ---- probe result → rule specs ----
 
-/** a rules handler's one-time run, as reported by the probe (serializable) */
+/**
+ * A rules handler's one-time run, as reported by the probe (serializable,
+ * so it can leave the MV3 sandbox). {@link rulesForProbe} turns it into rules.
+ */
 export interface RuleProbe {
+    /** The handler's kind. */
     kind: NetKind;
+    /** The handler's route. */
     route: RouteMeta;
-    /** threw / timed out / can't run on rules at all */
+    /** Why it has no usable result: it threw, timed out or can't run on rules at all. */
     error?: string;
-    /** ctx properties read besides groups and url */
+    /** ctx properties read besides groups and url. */
     forbidden?: string[];
-    /** ctx.groups names read */
+    /** ctx.groups names read. */
     captures: string[];
+    /** Whether the handler read ctx.url (or enumerated ctx, which counts as reading everything). */
     urlRead: boolean;
-    /** read dynamic state (`params` / `globalStore` / `tabStore`), so returning nothing means "currently off" */
+    /** Set when it read dynamic state (`params` / `globalStore` / `tabStore`), so returning nothing means "currently off". */
     conditional?: boolean;
-    /** `tweak.tabStore` names read during the probe */
+    /** `tweak.tabStore` names read during the probe. */
     tabStores?: string[];
-    /** optional captures whose fallback differs from "" (what a rule substitutes for a missing one) */
+    /** Optional captures whose fallback differs from "" (what a rule substitutes for a missing one). */
     optionalMismatch?: string[];
+    /** What the handler returned, as plain data; null when it returned nothing, absent when it threw or never ran. */
     result?: ProbeResult | null;
 }
 
+/**
+ * A rules handler's result as plain data: only the parts a rule can express.
+ * Placeholders ({@link captureToken}, {@link URL_TOKEN}) stay in the strings.
+ */
 export interface ProbeResult {
+    /** Set when the result had a `replaceResponse`, which rules can't do. */
     replaceResponse?: boolean;
+    /** The redirect URL, as a string. */
     redirect?: string;
+    /** Set when the result blocks the request. */
     block?: boolean;
-    headers?: { set?: Record<string, string>; remove?: string[] };
+    /** Header edits: request headers for onRequest, response headers for onResponseHeaders. */
+    headers?: {
+        /** Header name → value (stringified) to set. */
+        set?: Record<string, string>;
+        /** Header names to remove. */
+        remove?: string[];
+    };
 }
 
+/**
+ * One declarativeNetRequest rule to install for a handler, minus its id and
+ * priority (the rules strategy assigns those).
+ */
 export interface RuleSpec {
-    /** block / redirect (first script wins) vs modifyHeaders (later handlers win) */
+    /** Block / redirect (first script wins) vs modifyHeaders (later handlers win). */
     final: boolean;
-    /** the url pattern this rule came from */
+    /** The url pattern this rule came from. */
     pattern: string;
+    /** The rule's declarativeNetRequest action: `block`, `redirect` (a `url` or a `regexSubstitution`) or `modifyHeaders`. */
     action: any;
+    /**
+     * The rule's declarativeNetRequest condition: the pattern's case-sensitive
+     * `regexFilter`, its `resourceTypes` (the route's, else every
+     * {@link RESOURCE_TYPES} one) and, when the route has methods, its
+     * lowercase `requestMethods`.
+     */
     condition: any;
-    /** network-view line: "block", "redirect → …", "request headers (set x)" */
+    /** Network-view line: "block", "redirect → …", "request headers (set x)". */
     summary: string;
 }
 
-/** declarativeNetRequest's request methods */
+/** declarativeNetRequest's request methods. */
 const DNR_METHODS = ["connect", "delete", "get", "head", "options", "patch", "post", "put", "other"];
 
+/** The reason {@link rulesForProbe} gives when a handler uses captures or ctx.url other than as-is in a redirect URL. */
 export const AS_IS = "on `rules`, captures can only be inserted into the redirect URL as-is";
 
 function hasHeaderMods(h: ProbeResult["headers"]): boolean {
@@ -655,10 +711,19 @@ function headerSummary(kind: NetKind, h: NonNullable<ProbeResult["headers"]>): s
 }
 
 /**
- * A probed rules handler → its rule specs (one per url pattern), or why it
- * can't be a rule. The reason is shown as "onRequest #2: <reason>".
+ * A probed rules handler → its rule specs (one per url pattern) or why it
+ * can't be a rule. The reason is shown as "onRequest #2: <reason>"
+ * ({@link ruleErrorLine}).
  */
-export function rulesForProbe(o: RuleProbe): { rules: RuleSpec[] } | { error: string } {
+export function rulesForProbe(o: RuleProbe):
+    | {
+          /** One rule per url pattern; [] when a conditional handler returned nothing (currently off). */
+          rules: RuleSpec[];
+      }
+    | {
+          /** Why the handler can't be a rule. */
+          error: string;
+      } {
     const fail = (error: string) => ({ error });
     if (o.error) return fail(o.error);
     if (o.kind === "onResponseBody" || o.kind === "replaceResponse") return fail(`${o.kind} is not supported on rules — use another strategy for this handler`);
@@ -737,7 +802,12 @@ export function rulesForProbe(o: RuleProbe): { rules: RuleSpec[] } | { error: st
     return { rules };
 }
 
-/** where a regexSubstitution redirect sends `url` (network view) */
+/**
+ * Where a regexSubstitution redirect sends `url` (network view): `\N` is
+ * replaced by group N ("" when it didn't take part), `\\` by a backslash.
+ *
+ * @returns The redirect URL; null when `regex` is invalid or doesn't match `url`.
+ */
 export function substitute(regex: string, substitution: string, url: string): string | null {
     let re: RegExp;
     try {
@@ -750,15 +820,20 @@ export function substitute(regex: string, substitution: string, url: string): st
     return substitution.replace(/\\(\\|\d)/g, (_, d) => (d === "\\" ? "\\" : m[Number(d)] ?? ""));
 }
 
-/** "onRequest #2: reason" */
+/** Prefixes a reason a handler can't be a rule with its route's label: `"onRequest #2: reason"`. */
 export function ruleErrorLine(route: RouteMeta, reason: string): string {
     return `${routeLabel(route)}: ${reason}`;
 }
 
 /**
  * Why a url pattern's regex can't be a rule, from the browser's answer
- * (isRegexSupported's `reason`). `capturesOnly`: it fits without the
- * redirect's captures.
+ * (isRegexSupported's `reason`).
+ *
+ * @param reason - isRegexSupported's `reason`: `"memoryLimitExceeded"`
+ *   gets a size breakdown and a fix, anything else is reported as RE2
+ *   rejecting the syntax.
+ * @param requireCapturing - Whether the rule needs the redirect's captures.
+ * @param capturesOnly - Whether it fits without the redirect's captures.
  */
 export function regexProblemText(regex: string, pattern: string, reason: string, requireCapturing: boolean, capturesOnly = false): string {
     if (reason === "memoryLimitExceeded") {
@@ -773,8 +848,15 @@ export function regexProblemText(regex: string, pattern: string, reason: string,
     return `url pattern "${pattern}" can't be a rule: the browser's regex engine (RE2) rejects its regex ${regex} (${reason}) — no lookahead, lookbehind or backreferences in custom groups`;
 }
 
-/** what drives a regex's compiled size: character classes (incl. `.`) and groups */
-export function regexCost(regex: string): { classes: number; groups: number; captures: number } {
+/** What drives a regex's compiled size: character classes (incl. `.`) and groups. */
+export function regexCost(regex: string): {
+    /** Bracket classes and `.`s. */
+    classes: number;
+    /** Every group, capturing or not. */
+    groups: number;
+    /** Capturing groups (a `(` not followed by `?`). */
+    captures: number;
+} {
     let classes = 0, groups = 0, captures = 0, inClass = false;
     for (let i = 0; i < regex.length; i++) {
         const c = regex[i];

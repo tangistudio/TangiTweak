@@ -167,6 +167,20 @@ describe("chrome.userScripts (MV3 isolated onPage)", () => {
         expect(m.us.execute).not.toHaveBeenCalled();
     });
 
+    it("onSite: a restarted service worker still runs a save's new units in open tabs (only an extension reload or update skips them)", async () => {
+        const m = mockChrome();
+        const session: Record<string, any> = {};
+        m.chrome.storage = { session: { get: vi.fn(async (k: string) => ({ [k]: session[k] })), set: vi.fn(async (o: object) => void Object.assign(session, o)) } };
+        m.us.execute = vi.fn(async () => []);
+        m.chrome.tabs = { query: vi.fn(async () => [{ id: 1 }]) };
+        await syncUserScripts([], [{ id: "s1", units: ["u1"] }]);
+        expect(m.us.execute).not.toHaveBeenCalled();
+        // the worker stops; a folder sync wakes it with changed code
+        resetUserScripts();
+        await syncUserScripts([], [{ id: "s1", units: ["u2"] }]);
+        expect(m.us.execute.mock.calls.map(([a]: any) => [a.target.tabId, a.js.map((j: any) => j.code)])).toEqual([[1, ["u2"]]]);
+    });
+
     it("registrations under an older version's ids are removed", async () => {
         const m = mockChrome();
         m.registered.set("wt-iso-s1", { id: "wt-iso-s1" });

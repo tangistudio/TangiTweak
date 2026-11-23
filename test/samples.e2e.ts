@@ -86,7 +86,7 @@ const VERIFY: Record<string, (p: Page) => Promise<[boolean, string]>> = {
         await f.evaluate(() => (document.querySelectorAll("#tt-outline a")[3] as HTMLElement).click());
         const scrolled = await until(() => p.evaluate(() => scrollY), (y) => y > 500);
         await p.keyboard.press("Alt+Shift+O");
-        const hidden = await until(() => f.evaluate(() => (document.getElementById("tt-outline") as HTMLElement).hidden), (h) => h);
+        const hidden = await until(() => f.evaluate(() => (document.getElementById("tt-outline") as HTMLElement).hidden === true), (h) => h);
         return [links > 3 && scrolled > 500 && hidden, JSON.stringify({ links, scrolled, hidden })];
     },
     "Redirect a URL": async (p) => {

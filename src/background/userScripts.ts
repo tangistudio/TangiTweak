@@ -60,8 +60,23 @@ let status: { value: UserScriptsStatus; at: number } | null = null;
 let checking: Promise<UserScriptsStatus> | null = null;
 const listeners: ((s: UserScriptsStatus) => void)[] = [];
 let wanted: { iso: IsoScript[]; site: SiteScript[] } = { iso: [], site: [] };
-/** a sync went through since the worker started (the first one doesn't push units into open tabs: an extension update leaves no hook there) */
+/**
+ * A sync went through since the extension loaded. The first one doesn't push
+ * units into open tabs: an extension update leaves no hook there. Kept in
+ * `chrome.storage.session` too ({@link SYNCED_KEY}), which a service-worker
+ * restart keeps and an extension reload or update clears: a worker woken by a
+ * save (e.g. a folder sync) must still push the new units.
+ */
 let synced = false;
+const SYNCED_KEY = "userScriptsSynced";
+async function syncedBefore(): Promise<boolean> {
+    if (synced) return true;
+    try {
+        return !!(await chrome.storage.session.get(SYNCED_KEY))[SYNCED_KEY];
+    } catch {
+        return false;
+    }
+}
 let syncing: Promise<void> = Promise.resolve();
 
 const api = (): any => {
@@ -166,6 +181,7 @@ async function doSync({ iso: want, site }: typeof wanted): Promise<void> {
     if (add.length) await us.register(add);
     dlogLevel("userScripts", "debug", `user scripts: ${want.length} registered (${add.length} new, ${change.length} changed, ${have.size} removed)${perWorld ? "" : ", shared world"}`);
     await syncSite(us, site, registered.filter((r) => r.id.startsWith(SITE_PREFIX)));
+    if (!synced) chrome.storage?.session?.set({ [SYNCED_KEY]: true }).catch(() => {});
     synced = true;
 }
 
@@ -187,7 +203,7 @@ async function syncSite(us: any, want: SiteScript[], registered: any[]): Promise
     if (add.length) await us.register(add);
     const fresh = [...new Set(want.flatMap((s) => s.units))].filter((u) => !old.has(u));
     dlogLevel("userScripts", "debug", `user scripts (onSite): ${want.length} registered (${add.length} new, ${change.length} changed, ${have.size} removed)`);
-    if (!synced || !fresh.length || typeof us.execute !== "function") return;
+    if (!fresh.length || typeof us.execute !== "function" || !(await syncedBefore())) return;
     // open pages: the hook takes the new units and runs the hot update the bundle brings
     const tabs = await chrome.tabs.query({ url: ["*://*/*"] }).catch(() => [] as chrome.tabs.Tab[]);
     await Promise.all(

@@ -30,7 +30,7 @@ import { checkRulesStrategy, rulesServerRoute } from "./rulesE2e";
 import { checkFoldersAndDataFiles, foldersServerRoute } from "./foldersE2e";
 import { deleteTweak, saveTweak } from "./e2eTweak";
 import { bundlePkg } from "./bundleHelper";
-import { checkPlaces, checkOverlayPreview, checkOverlays, checkEarlyRequests, checkHotReload, checkOverlayShortcuts, checkPageShortcuts, checkPageStores, checkIsoStores, checkSiteHandles, checkSiteStores, overlayServerRoute } from "./overlayE2e";
+import { checkPlaces, checkOverlayPreview, checkOverlays, checkEarlyRequests, checkHotReload, checkOverlayShortcuts, checkPageShortcuts, checkCrossOriginShortcuts, checkPageStores, checkIsoStores, checkSiteHandles, checkSiteStores, overlayServerRoute } from "./overlayE2e";
 import { checkPackages, packagesServerRoute } from "./packagesE2e";
 import { readExportZip } from "../src/shared/exportZip";
 
@@ -342,6 +342,7 @@ try {
         await checkEarlyRequests(ctx, mgr, ORIGIN, check, { label: " (MV3)" });
         await checkOverlayShortcuts(ctx, mgr, ORIGIN, check, { label: " (MV3)" });
         await checkPageShortcuts(ctx, mgr, ORIGIN, check, { label: " (MV3)", separateWorlds: true });
+        await checkCrossOriginShortcuts(ctx, mgr, ORIGIN, check, { label: " (MV3)" });
         await checkOverlayPreview(ctx, mgr, ORIGIN, check, { label: " (MV3)" });
         for (const id of on) await send({ type: "setEnabled", id, enabled: true });
     }

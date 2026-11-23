@@ -48,6 +48,7 @@ import { getTextTypes, setTextTypes } from "../../shared/bodyKind";
 import { packBytes, unpackBytes } from "../../shared/bytesPack";
 import type { RequestBody } from "../../shared/requestBody";
 import { pushBundleUpdate } from "./bridgePorts";
+import { importFiles } from "./importFiles";
 import { installPages, pages, pagesReady } from "./pages";
 import { pushIsoUpdate, pushPreviewUpdate, revalidateOverlayLinks, setupOverlayLinks, type IsoRun, type OverlayRun } from "./overlayLinks";
 import { onUserScriptsStatus, syncUserScripts, userScriptsStatus, type IsoScript, type SiteScript } from "../userScripts";
@@ -855,6 +856,13 @@ export function createPipeline(
         }
         if (msg && msg.type === "deleteScript") {
             deleteScript(msg.id).then(() => sendResponse({}));
+            return true;
+        }
+        // the Editor's Import…: everything picked, as one change
+        if (msg && msg.type === "importFiles") {
+            importFiles(msg.files)
+                .then((r) => sendResponse(r))
+                .catch((e) => sendResponse({ error: String(e?.message || e) }));
             return true;
         }
         if (msg && msg.type === "setEnabled") {

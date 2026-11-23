@@ -2,16 +2,19 @@ import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
 import { Popup } from "../src/ui/popup/Popup";
 import type { PopupApi, ScriptInfo, ScriptParams } from "../src/ui/popup/api";
+import type { TabStatus } from "../src/shared/tabStatus";
 
 afterEach(cleanup);
 
-function fakeApi(scripts: ScriptInfo[], params: Record<string, ScriptParams> = {}, active: string[] = []): PopupApi & { calls: any[] } {
+function fakeApi(scripts: ScriptInfo[], params: Record<string, ScriptParams> = {}, active: string[] = [], tab: TabStatus = "ok"): PopupApi & { calls: any[] } {
     const calls: any[] = [];
     let list = scripts.map((s) => ({ ...s }));
     return {
         calls,
         listScripts: vi.fn(async () => list.map((s) => ({ ...s }))),
         activeOnTab: vi.fn(async () => [...active]),
+        tabStatus: vi.fn(async () => tab),
+        fixTab: vi.fn(async (s: TabStatus) => void calls.push(["fixTab", s])),
         setEnabled: vi.fn(async (id: string, enabled: boolean) => {
             calls.push(["setEnabled", id, enabled]);
             list = list.map((s) => (s.id === id ? { ...s, enabled } : s));
@@ -76,6 +79,15 @@ describe("Popup", () => {
         const { container } = render(<Popup api={fakeApi([script("a", "Alpha")])} />);
         await screen.findByText("Alpha");
         expect(container.querySelector("#active-summary")).toBeNull();
+        expect(container.querySelector("#tab-notice")).toBeNull();
+    });
+
+    it("explains a tab TangiTweak isn't running in and reloads it", async () => {
+        const api = fakeApi([script("a", "Alpha")], {}, [], "reload");
+        render(<Popup api={api} />);
+        await screen.findByText("TangiTweak isn't running on this tab.");
+        fireEvent.click(screen.getByRole("button", { name: "Reload tab" }));
+        expect(api.calls).toContainEqual(["fixTab", "reload"]);
     });
 
     it("shows the empty state", async () => {

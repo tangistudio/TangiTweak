@@ -16,6 +16,7 @@ import { localPackage } from "../shared/localPackage";
 import { writeZip } from "../shared/zip";
 import { buildExportZip, emptyFolders, EXPORT_ZIP_NAME, filesGoneFrom, readExportZip, type ExportContents } from "../shared/exportZip";
 import { isInFolder, movedPath } from "../shared/folders";
+import { progressText, type ProgressMessage } from "../shared/progress";
 import { baseName, folderPathOfRowId, folderRowId, isFolderRowId, movedCollapsed, type TreeRow } from "./explorerTree";
 import { dataPathOfDecl } from "./jsonTypes";
 import { dialogs, openHelp, openSettings, pickItems, resolveConflict } from "./state/dialogs";
@@ -1170,6 +1171,7 @@ function connectLogs(): void {
                 if (data && dirty && m && baselines.get(m.uri.toString()) !== data.text) status("data file changed on disk — the Code view has unsaved edits", "dirty");
             })();
         }
+        if (msg.type === "progress") showProgress(msg);
         if (msg.type === "sync") {
             renderFolderSync(msg.status);
             syncActive = msg.status.active;
@@ -1576,6 +1578,28 @@ let folderNeedsGrant = false; // a saved folder waits for a permission click
 /** folder sync is on; syncPath: the synced folder's absolute path, for ↗ */
 let syncActive = false;
 let syncPath = "";
+/** shown once a pass lasts a moment (quick ones would only flash) */
+const PROGRESS_DELAY_MS = 300;
+let progressTimer: ReturnType<typeof setTimeout> | null = null;
+let progressNext: typeof toolbar.progress = null;
+
+/** a folder sync pass's or an Import's step (shared/progress) in the toolbar */
+function showProgress(msg: ProgressMessage): void {
+    if (msg.phase === null) {
+        if (progressTimer) clearTimeout(progressTimer);
+        progressTimer = null;
+        toolbar.progress = progressNext = null;
+        return;
+    }
+    progressNext = { text: progressText(msg), value: msg.total && msg.phase !== "compiling" ? msg.done / msg.total : null };
+    if (toolbar.progress) toolbar.progress = progressNext;
+    else
+        progressTimer ??= setTimeout(() => {
+            progressTimer = null;
+            toolbar.progress = progressNext;
+        }, PROGRESS_DELAY_MS);
+}
+
 function renderFolderSync(st: { active: boolean; path?: string; paused?: boolean; activity?: string }): void {
     if (st.active) folderNeedsGrant = false;
     else if (st.paused) folderNeedsGrant = true;
@@ -1840,12 +1864,6 @@ async function exportBundle(): Promise<void> {
     ];
     status(`exported ${parts.join(" + ")} ✓`);
 }
-// an imported script replaces the existing script of the same name
-const saveImported = async (item: { code: string; name?: string; enabled?: boolean }) => {
-    // file names are case-insensitive on Windows/macOS: "Foo" replaces "foo"
-    const existing = item.name ? scripts.find((s) => scriptFileKey(s.meta.name) === scriptFileKey(item.name!)) : undefined;
-    await send({ type: "saveScript", id: existing?.id ?? uuid(), code: item.code, name: item.name, enabled: item.enabled });
-};
 const existsBadge = (name?: string) => (name && scripts.some((s) => scriptFileKey(s.meta.name) === scriptFileKey(name)) ? "replaces existing" : "new");
 /** Import…: a zip (pick what of it to import) */
 function importBundle(): void {
@@ -1942,22 +1960,18 @@ async function importZip(file: File): Promise<void> {
     const pickedGone = chosen.filter((i) => i >= goneAt).map((i) => gone[i - goneAt]);
     const withSettings = settingsAt >= 0 && chosen.includes(settingsAt);
     const pickedTweakData = chosen.filter((i) => i >= tweakAt && i < foldersAt).map((i) => tweakIn[i - tweakAt]);
-    // folders and data files first: the scripts compile against them
-    const failed: string[] = [];
-    for (const f of pickedFolders) {
-        if (existingFolders.some((e) => e.toLowerCase() === f.toLowerCase())) continue;
-        const r = await send({ type: "createFolder", path: f });
-        if (r?.error) failed.push(r.error);
-    }
-    for (const d of pickedData) {
-        const r = await send({ type: "saveDataFile", id: dataFileIn(d.path)?.id, path: d.path, text: d.text });
-        if (r?.error) failed.push(r.error);
-    }
-    for (const s of pickedScripts) await saveImported({ name: s.name, code: s.code });
-    for (const f of pickedGone) {
-        const r = await send({ type: f.kind === "script" ? "deleteScript" : "deleteDataFile", id: f.id });
-        if (r?.error) failed.push(`can't delete "${f.path}": ${r.error}`);
-    }
+    // one change: folders and data files first, then the scripts compile together against them
+    const r = await send({
+        type: "importFiles",
+        files: {
+            folders: pickedFolders.filter((f) => !existingFolders.some((e) => e.toLowerCase() === f.toLowerCase())),
+            dataFiles: pickedData.map((d) => ({ id: dataFileIn(d.path)?.id, path: d.path, text: d.text })),
+            // file names are case-insensitive on Windows/macOS: "Foo" replaces "foo"
+            scripts: pickedScripts.map((s) => ({ id: scripts.find((x) => scriptFileKey(x.meta.name) === scriptFileKey(s.name))?.id ?? uuid(), name: s.name, code: s.code })),
+            deletes: pickedGone.map((f) => ({ kind: f.kind, id: f.id, path: f.path })),
+        },
+    });
+    const failed: string[] = r?.error ? [r.error] : r?.failed ?? [];
     await refresh();
     const parts = [plural(pickedScripts.length, "script"), ...(pickedData.length ? [plural(pickedData.length, "data file")] : []), ...(pickedFolders.length ? [plural(pickedFolders.length, "folder")] : []), ...(pickedGone.length ? [`${plural(pickedGone.length, "file")} deleted`] : [])];
     // settings apply through the real path; storage.onChanged refreshes the settings UI
@@ -2302,7 +2316,7 @@ async function traceDefinition(trigger: string, pos?: IPosition): Promise<void> 
         const model = editor.getModel();
         const p = pos ?? editor.getPosition();
         if (!model || !p) return navLog(`${trigger}: no model/position`, "warn");
-        const getWorker = await m.languages.typescript.getTypeScriptWorker();
+        const getWorker = await m.typescript.getTypeScriptWorker();
         const worker = await getWorker(model.uri);
         const defs = await worker.getDefinitionAtPosition(model.uri.toString(), model.getOffsetAt(p));
         navLog(`${trigger}: worker definitions at ${model.uri.toString()}:${p.lineNumber}:${p.column} = ${JSON.stringify(defs)}`);

@@ -1,6 +1,7 @@
 /**
- * Monaco loader + editor configuration. Uses the classic AMD build (copied
- * into dist/lib/monaco) and wires TS IntelliSense to the `tweak` API typings.
+ * Monaco loader + editor configuration. Loads the Monaco bundle
+ * (src/ui/monacoBundle.ts → dist/lib/monaco) and wires TS IntelliSense to
+ * the `tweak` API typings.
  */
 
 import {
@@ -34,7 +35,7 @@ import type { ParamTree } from "../shared/scriptDef";
 
 /** JSON validation: package.json files, the root settings.json and each tweak's data folder settings.json (`uri`: its model's) */
 export function updateJsonSchemas(tweakSettings: { uri: string; defs?: ParamTree }[] = []): void {
-    monacoApi?.languages.json?.jsonDefaults?.setDiagnosticsOptions({
+    monacoApi?.json?.jsonDefaults?.setDiagnosticsOptions({
         validate: true,
         schemas: [
             { uri: "tangitweak://schema/package.json", fileMatch: ["**/" + MANIFEST_FILE], schema: MANIFEST_SCHEMA },
@@ -54,7 +55,6 @@ export const apiTypingsText = (): string => ttApiDts;
 export function editorCompilerOptions(ts: { ScriptTarget: any; ModuleKind: any; ModuleResolutionKind: any }): Record<string, any> {
     return {
         // scripts run in current browsers: offer the newest JS/DOM APIs
-        // (tt-api.d.ts adds web APIs newer than the bundled TypeScript)
         target: ts.ScriptTarget.ESNext,
         // Monaco passes options straight to the TS API (no tsconfig parsing),
         // so libs must be file names — "dom" alone silently loads nothing
@@ -79,6 +79,10 @@ export function editorCompilerOptions(ts: { ScriptTarget: any; ModuleKind: any; 
         // (setPackageTypings). Monaco passes options raw, so the target is an
         // absolute file:/// path rather than one relative to a baseUrl
         paths: { ...packagePaths(`file:///${TYPINGS_ROOT}`), ...BUILTIN_PATHS },
+        // paths' base (what tsconfig parsing would set). Monaco's host has no
+        // current directory, and without a base TypeScript 6 crashes writing
+        // module specifiers (e.g. Go to Definition on an import)
+        pathsBasePath: "file:///",
     };
 }
 
@@ -89,33 +93,35 @@ const BUILTIN_PATHS = builtinPaths(BUILTIN_ROOT);
 export async function loadMonaco(): Promise<any> {
     if (monacoApi) return monacoApi;
 
-    // Monaco's AMD build wraps workers in a blob URL, which the extension CSP
-    // blocks — point it at the real worker file instead.
+    // one module worker per language service (bundled by scripts/build.mjs)
+    const workers: Record<string, string> = { typescript: "ts", javascript: "ts", json: "json" };
     (window as any).MonacoEnvironment = {
-        getWorkerUrl: () =>
-            chrome.runtime.getURL("lib/monaco/vs/base/worker/workerMain.js"),
+        getWorkerUrl: (_: string, label: string) => chrome.runtime.getURL(`lib/monaco/${workers[label] ?? "editor"}.worker.js`),
     };
 
-    ttApiDts = await fetch(chrome.runtime.getURL("lib/tt-api.d.ts")).then((r) => r.text());
-
-    await new Promise<void>((resolve, reject) => {
-        (window as any).require.config({ paths: { vs: "lib/monaco/vs" } });
-        (window as any).require(["vs/editor/editor.main"], () => resolve(), reject);
-    });
+    const load = (el: HTMLScriptElement | HTMLLinkElement) =>
+        new Promise((resolve, reject) => {
+            el.onload = resolve;
+            el.onerror = () => reject(new Error(`Couldn't load ${"src" in el ? el.src : el.href}`));
+            document.head.append(el);
+        });
+    const css = Object.assign(document.createElement("link"), { rel: "stylesheet", href: "lib/monaco/editor.main.css" });
+    const js = Object.assign(document.createElement("script"), { src: "lib/monaco/editor.main.js" });
+    [ttApiDts] = await Promise.all([fetch(chrome.runtime.getURL("lib/tt-api.d.ts")).then((r) => r.text()), load(css), load(js)]);
 
     monacoApi = (window as any).monaco;
 
-    monacoApi.languages.typescript.typescriptDefaults.setExtraLibs([
+    monacoApi.typescript.typescriptDefaults.setExtraLibs([
         {
             content: ttApiDts,
             filePath: API_TYPINGS_URI,
         },
         { content: JSON_FALLBACK_DTS, filePath: "file:///__tt__/json-modules.d.ts" },
     ]);
-    monacoApi.languages.typescript.typescriptDefaults.setCompilerOptions(editorCompilerOptions(monacoApi.languages.typescript));
+    monacoApi.typescript.typescriptDefaults.setCompilerOptions(editorCompilerOptions(monacoApi.typescript));
     // the worker gets every script's model when it (re)starts, not only the
     // one being checked: imports resolve at once instead of briefly failing
-    monacoApi.languages.typescript.typescriptDefaults.setEagerModelSync(true);
+    monacoApi.typescript.typescriptDefaults.setEagerModelSync(true);
     registerTsHover(monacoApi);
     updateJsonSchemas();
 
@@ -204,10 +210,10 @@ interface DrillState {
  * buttons are hidden in ui.css.
  */
 function registerTsHover(monaco: any): void {
-    const defaults = monaco.languages.typescript.typescriptDefaults;
+    const defaults = monaco.typescript.typescriptDefaults;
     // tsWorkspace owns diagnostics so scripts are checked only once workspace typings and models are staged
     defaults.setModeConfiguration({ ...defaults.modeConfiguration, hovers: false, completionItems: false, signatureHelp: false, diagnostics: false });
-    const workerFor = async (uri: any) => (await monaco.languages.typescript.getTypeScriptWorker())(uri);
+    const workerFor = async (uri: any) => (await monaco.typescript.getTypeScriptWorker())(uri);
     const completionKind = (k: string) => monaco.languages.CompletionItemKind[KIND[k] ?? "Property"];
 
     // the typings never change at runtime: index their declarations once

@@ -55,6 +55,7 @@ import type { RanApi } from "../shared/netTypes";
     // ctx.elements/mount/iframes { shadow }: closed shadow roots too (Chrome: chrome.dom; Firefox: the element's own method)
     const dom = (globalThis as any).chrome?.dom;
     setShadowResolver((el) => (typeof dom?.openOrClosedShadowRoot === "function" ? dom.openOrClosedShadowRoot(el) : ((el as any).openOrClosedShadowRoot?.() ?? null)) ?? null);
+    // window messages target "/" (this window's own origin), not location.origin: that's "null" in about:blank, srcdoc, data: and sandboxed frames, where posting to it throws
     const MAIN_SOURCE = "res-override-bridge";
     const HOOK_SOURCE = "res-override-hook";
 
@@ -109,7 +110,7 @@ import type { RanApi } from "../shared/netTypes";
         if (dead) return;
         dead = true;
         try {
-            window.postMessage({ source: MAIN_SOURCE, kind: "extensionDead" }, window.location.origin);
+            window.postMessage({ source: MAIN_SOURCE, kind: "extensionDead" }, "/");
         } catch {}
         try {
             for (const s of [...overlays.keys()]) removeOverlay(s, "the extension reloaded");
@@ -175,7 +176,7 @@ import type { RanApi } from "../shared/netTypes";
         if (data.kind === "alive?") {
             // the hook's watchdog: is this call still waiting on the extension?
             // (if the extension's end dies, sendMessage's callback says so)
-            if (hookCalls.has(data.reqId)) window.postMessage({ source: MAIN_SOURCE, kind: "alive", reqId: data.reqId }, window.location.origin);
+            if (hookCalls.has(data.reqId)) window.postMessage({ source: MAIN_SOURCE, kind: "alive", reqId: data.reqId }, "/");
             return;
         }
         if (data.kind === "claim") {
@@ -187,7 +188,7 @@ import type { RanApi } from "../shared/netTypes";
             // onPage code was shipped to this frame may use its storage
             if (typeof data.scriptId !== "string" || !pageScriptIds.has(data.scriptId)) {
                 dlog("warn", `refused a page storage ${data.op} for a script not running in this frame's page world`);
-                window.postMessage({ source: MAIN_SOURCE, kind: "callResult", reqId: data.reqId, result: null }, window.location.origin);
+                window.postMessage({ source: MAIN_SOURCE, kind: "callResult", reqId: data.reqId, result: null }, "/");
                 return;
             }
             const storageType = data.op === "storageGet" ? "scriptStorageGet" : "scriptStorageSet";
@@ -198,7 +199,7 @@ import type { RanApi } from "../shared/netTypes";
                     hookCalls.delete(data.reqId);
                     window.postMessage(
                         { source: MAIN_SOURCE, kind: "callResult", reqId: data.reqId, result: resp || null },
-                        window.location.origin
+                        "/"
                     );
                 }
             );
@@ -214,7 +215,7 @@ import type { RanApi } from "../shared/netTypes";
                     hookCalls.delete(data.reqId);
                     window.postMessage(
                         { source: MAIN_SOURCE, kind: "callResult", reqId: data.reqId, result: unpackBytes(resp) || null },
-                        window.location.origin
+                        "/"
                     );
                 }
             );
@@ -287,7 +288,7 @@ import type { RanApi } from "../shared/netTypes";
                 ...(typeof resp?.siteOff === "string" ? { siteOff: resp.siteOff } : {}),
                 ...(hot ? { hot: true } : {}),
             },
-            window.location.origin
+            "/"
         );
     }
 
@@ -425,7 +426,7 @@ import type { RanApi } from "../shared/netTypes";
     // ---- `tweak.siteStore`: the hook holds them; mirrors here (MV2 onPage code,
     // the onSite fallback) and in the overlays (relayed) connect over window messages ----
     let siteMirrors: SiteMirrors | null = null;
-    const postSite = (m: SiteUp) => window.postMessage({ source: MAIN_SOURCE, ...m }, location.origin);
+    const postSite = (m: SiteUp) => window.postMessage({ source: MAIN_SOURCE, ...m }, "/");
     const siteStores = () => (siteMirrors ??= new SiteMirrors({ ctx: "bridge", post: postSite, log: (s, msg, level) => scriptLog(s, level, msg, "isolated") }));
     /** an overlay's subscriptions: sub → its script */
     const overlaySubs = new Map<string, string>();
@@ -1132,7 +1133,7 @@ import type { RanApi } from "../shared/netTypes";
     /** a call into the script's main-world onPage code (L4) */
     function callHook(s: string, call: RpcCall, reply: (r: RpcResult) => void): void {
         l4Pending.set(call.cid, { s, reply });
-        window.postMessage({ source: MAIN_SOURCE, kind: "rpc.call", s, call }, window.location.origin);
+        window.postMessage({ source: MAIN_SOURCE, kind: "rpc.call", s, call }, "/");
     }
 
     /** onPage code → its script's onSite handlers; the answers are page data */
@@ -1187,7 +1188,7 @@ import type { RanApi } from "../shared/netTypes";
         if (navWatching) return;
         navWatching = true;
         // without the Navigation API this world can't see history.pushState: the hook nudges (`nav`)
-        window.postMessage({ source: MAIN_SOURCE, kind: "watchNav" }, window.location.origin);
+        window.postMessage({ source: MAIN_SOURCE, kind: "watchNav" }, "/");
         watchUrl((url) => {
             for (const o of overlays.values()) o.ep?.push("nav", { url });
         });

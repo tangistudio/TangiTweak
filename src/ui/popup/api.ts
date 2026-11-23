@@ -3,6 +3,7 @@ import { PACKAGES_KEY } from "../../shared/packageModel";
 import type { ParamTree } from "../../shared/scriptDef";
 import type { ScriptHealthInput } from "../../shared/scriptHealth";
 import type { ScriptRole } from "../../shared/tweakBundle";
+import type { TabStatus } from "../../shared/tabStatus";
 
 export interface ScriptInfo {
     id: string;
@@ -33,6 +34,10 @@ export interface PopupApi {
     listScripts(): Promise<ScriptInfo[]>;
     /** ids of the scripts counted in the badge for the current tab (matched the page or one of its requests) */
     activeOnTab(): Promise<string[]>;
+    /** is TangiTweak running in the current tab (see tabStatus.ts) */
+    tabStatus(): Promise<TabStatus>;
+    /** the notice's button: grant site access if that's missing, then reload the tab */
+    fixTab(status: TabStatus): Promise<void>;
     setEnabled(id: string, enabled: boolean): Promise<void>;
     clearError(id: string): Promise<void>;
     getParams(scriptId: string): Promise<ScriptParams>;
@@ -44,6 +49,9 @@ export interface PopupApi {
     onChange?(fn: () => void): () => void;
 }
 
+// the tab tabStatus() looked at, for fixTab()
+let noticeTab: chrome.tabs.Tab | undefined;
+
 export const chromePopupApi: PopupApi = {
     // sendWake: the first message may race the SW's wake-up (MV3)
     listScripts: async () => (await sendWake<ScriptInfo[]>({ type: "listScripts" })) || [],
@@ -51,6 +59,24 @@ export const chromePopupApi: PopupApi = {
         const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
         if (tab?.id === undefined) return [];
         return (await send<string[]>({ type: "activeScripts", tabId: tab.id })) || [];
+    },
+    tabStatus: async () => {
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        noticeTab = tab;
+        if (tab?.id === undefined) return "ok";
+        return (await sendWake<TabStatus>({ type: "tabStatus", tabId: tab.id })) || "ok";
+    },
+    fixTab: async (status) => {
+        const tab = noticeTab;
+        if (tab?.id === undefined) return;
+        if (status === "no-access" && tab.url) {
+            // first thing in the click: the request needs its user gesture
+            const origins = [new URL(tab.url).origin + "/*"];
+            const granted = await new Promise<boolean>((resolve) => chrome.permissions.request({ origins }, (ok) => resolve(!chrome.runtime.lastError && !!ok)));
+            if (!granted) return;
+        }
+        chrome.tabs.reload(tab.id);
+        window.close();
     },
     setEnabled: async (id, enabled) => void (await send({ type: "setEnabled", id, enabled })),
     clearError: async (id) => void (await send({ type: "clearScriptError", scriptId: id })),

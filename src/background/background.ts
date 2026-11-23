@@ -18,7 +18,9 @@ import { collectDiagnostics } from "./diagnostics";
 import { getSettingsText, applySettingsText, applySettingsDoc } from "./settingsFile";
 import { applyTweakDataFile, getDataFolder, setDataFolder, tweakDataFiles } from "./tweakDataFiles";
 import { badgeSetText, badgeSetColor, actionSetTitle, tabsQueryAll, tabsGet } from "../shared/chromeApi";
-import { createBadgeCounter, badgeLook } from "./badgeCounter";
+import { createBadgeCounter, badgeLook, BADGE_WARN } from "./badgeCounter";
+import { frameHasHook } from "../shared/missedTap";
+import { tabStatus, TAB_NOTICE, type TabStatus } from "../shared/tabStatus";
 import { actionIconView, createBusyIndicator } from "./busyIcon";
 import { onBusyChange } from "./engine/busy";
 import { addBridgePort } from "./engine/bridgePorts";
@@ -254,6 +256,7 @@ if (chrome.debugger) {
 chrome.tabs.onRemoved.addListener((tabId) => {
     clearTab(tabId);
     badge.forget(tabId);
+    tabNotices.delete(tabId);
     saveBadge();
 });
 
@@ -335,6 +338,28 @@ chrome.runtime.onMessage.addListener((msg: any, _s, sendResponse) => {
     return true;
 });
 
+// tabs TangiTweak isn't running in (see tabStatus.ts): a "!" badge, explained in the popup
+const tabNotices = new Map<number, Exclude<TabStatus, "ok">>();
+const hasSiteAccess = (origin: string) =>
+    new Promise<boolean>((resolve) => {
+        if (!chrome.permissions?.contains) return resolve(true);
+        chrome.permissions.contains({ origins: [origin + "/*"] }, (ok) => resolve(!chrome.runtime.lastError && ok !== false));
+    });
+async function checkTab(tabId: number, tab: chrome.tabs.Tab | undefined): Promise<TabStatus> {
+    const s = await tabStatus(tab, () => frameHasHook(chrome.tabs, () => chrome.runtime.lastError, tabId), hasSiteAccess);
+    if (s === "ok") tabNotices.delete(tabId);
+    else tabNotices.set(tabId, s);
+    return s;
+}
+chrome.runtime.onMessage.addListener((msg: any, _s, sendResponse) => {
+    if (msg?.type !== "tabStatus" || typeof msg.tabId !== "number") return false;
+    tabsGet(msg.tabId).then(async (tab) => {
+        sendResponse(await checkTab(msg.tabId, tab));
+        void updateTabBadge(msg.tabId, tab?.url);
+    });
+    return true;
+});
+
 /** Redraw a tab's badge (`url`: the tab's page). */
 async function updateTabBadge(tabId: number, url: string | undefined): Promise<void> {
     await badgeRestored;
@@ -342,28 +367,36 @@ async function updateTabBadge(tabId: number, url: string | undefined): Promise<v
     const problems = ids.length ? await getScriptProblems() : new Map();
     const names = ids.map((id) => cachedScripts.find((s) => s.id === id)?.meta.name || id);
     const look = badgeLook(names, ids.map((id) => problems.get(id)));
-    await badgeSetColor(look.color, tabId);
-    await badgeSetText(ids.length ? String(ids.length) : "", tabId);
-    await actionSetTitle(look.title, tabId);
+    const notice = tabNotices.get(tabId);
+    await badgeSetColor(notice ? BADGE_WARN : look.color, tabId);
+    await badgeSetText(notice ? "!" : ids.length ? String(ids.length) : "", tabId);
+    await actionSetTitle(notice ? TAB_NOTICE[notice].lines.join("\n") : look.title, tabId);
 }
 
-async function updateAllTabs(reread = true): Promise<void> {
+/** `check`: ping every tab too (at startup: tabs open before TangiTweak started have no bridge) */
+async function updateAllTabs(reread = true, check = false): Promise<void> {
     if (reread) await refreshCache();
     for (const tab of await tabsQueryAll()) {
-        if (tab.id !== undefined) void updateTabBadge(tab.id, tab.url);
+        const id = tab.id;
+        if (id === undefined) continue;
+        if (check) void checkTab(id, tab).then(() => updateTabBadge(id, tab.url));
+        else void updateTabBadge(id, tab.url);
     }
 }
 
 chrome.tabs.onActivated.addListener(({ tabId }) => {
-    tabsGet(tabId).then((tab) => updateTabBadge(tabId, tab?.url));
+    tabsGet(tabId).then(async (tab) => {
+        await checkTab(tabId, tab);
+        await updateTabBadge(tabId, tab?.url);
+    });
 });
 chrome.tabs.onUpdated.addListener((tabId, info, tab) => {
-    if (info.url !== undefined || info.status === "complete") {
-        void updateTabBadge(tabId, tab.url);
-    }
+    if (info.status === "loading") tabNotices.delete(tabId);
+    if (info.status === "complete") void checkTab(tabId, tab).then(() => updateTabBadge(tabId, tab.url));
+    else if (info.url !== undefined) void updateTabBadge(tabId, tab.url);
 });
 onScriptsChanged(() => void updateAllTabs());
-void updateAllTabs();
+void updateAllTabs(true, true);
 
 // opening a *.tangitweak.ts URL or any package URL marked with
 // #tangitweak:install offers to install it, like a userscript manager

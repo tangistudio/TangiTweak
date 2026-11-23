@@ -159,7 +159,7 @@ async function checkExplorerUi(ctx: any, mgr: any, check: Check, t: (s: string) 
             const m = monaco.editor.getModels().find((x: any) => x.uri.path === "/limiter/index.ts");
             const mi = monaco.editor.getModels().find((x: any) => x.uri.path === "/limiter/mock/index.ts");
             if (m && mi) {
-                const w = await (await monaco.languages.typescript.getTypeScriptWorker())(m.uri);
+                const w = await (await monaco.typescript.getTypeScriptWorker())(m.uri);
                 // (no named helpers in here: tsx would wrap them in __name)
                 for (const [key, x] of [["root", m], ["inner", mi]]) {
                     const all = [...(await w.getSyntacticDiagnostics(x.uri.toString())), ...(await w.getSemanticDiagnostics(x.uri.toString()))];
@@ -270,7 +270,7 @@ async function checkExplorerUi(ctx: any, mgr: any, check: Check, t: (s: string) 
         for (let i = 0; i < 40; i++) {
             const m = monaco.editor.getModels().find((x: any) => x.uri.path === "/ui-folder/index.ts");
             if (m) {
-                const w = await (await monaco.languages.typescript.getTypeScriptWorker())(m.uri);
+                const w = await (await monaco.typescript.getTypeScriptWorker())(m.uri);
                 const all = [...(await w.getSyntacticDiagnostics(m.uri.toString())), ...(await w.getSemanticDiagnostics(m.uri.toString()))];
                 const info = await w.getQuickInfoAtPosition(m.uri.toString(), m.getValue().indexOf("logo;") + 1);
                 out = { diags: all.map((d: any) => (typeof d.messageText === "string" ? d.messageText : d.messageText.messageText)), type: (info?.displayParts || []).map((p: any) => p.text).join("") };

@@ -20,6 +20,8 @@ import {
     PACKAGE_MODULES_KEY,
     PACKAGE_ORIGIN,
     PACKAGE_TYPINGS_KEY,
+    TYPINGS_FORMAT,
+    withoutStubs,
     aliasTarget,
     builtinFallbacks,
     builtinMessage,
@@ -129,6 +131,7 @@ export function loadPackages(force = false): Promise<void> {
             state = { aliases: m?.aliases || {}, modules: m?.modules || {} };
             const t = d[PACKAGE_TYPINGS_KEY];
             typings = { files: t?.files || {}, tops: t?.tops || {} };
+            if (t && t.v !== TYPINGS_FORMAT) typings = withoutStubs(typings);
             rebuildSnapshot();
         });
     return loaded;
@@ -536,7 +539,7 @@ export async function prunePackages(items: Iterable<ImportingScript>): Promise<v
         if (Object.keys(tops).length === Object.keys(typings.tops).length) return;
         const used = new Set(Object.values(tops).flat());
         typings = { files: Object.fromEntries(Object.entries(typings.files).filter(([p]) => used.has(p))), tops };
-        await storageSet({ [PACKAGE_TYPINGS_KEY]: typings });
+        await storageSet({ [PACKAGE_TYPINGS_KEY]: { ...typings, v: TYPINGS_FORMAT } });
     }));
 }
 
@@ -561,7 +564,7 @@ function ensureTypings(tops: string[]): void {
                 dlogLevel("packages", "warn", `fetching the typings of ${u} failed: ${e?.message ?? e}`);
             }
         }
-        if (changed) await storageSet({ [PACKAGE_TYPINGS_KEY]: typings });
+        if (changed) await storageSet({ [PACKAGE_TYPINGS_KEY]: { ...typings, v: TYPINGS_FORMAT } });
     }).finally(() => {
         for (const u of todo) typingsPending.delete(u);
     });

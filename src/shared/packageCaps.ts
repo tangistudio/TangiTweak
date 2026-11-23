@@ -1,29 +1,61 @@
 /**
- * What a package can do, read off its entries' compiled routes and metadata:
- * the install page shows it, and an update that can do more than the
- * installed version waits for approval instead of applying itself.
+ * What an installed tweak package can do, read off its entries' compiled
+ * routes and its package.json.
+ *
+ * The background computes {@link Capabilities} with {@link capabilitiesOf}
+ * when it analyzes a package (install, import or update check) and stores
+ * them with the installed package. The install page lists them for people
+ * with {@link describeCapabilities}, riskiest first. When an update arrives,
+ * {@link addedCapabilities} compares it with the installed version: an update
+ * that can do more waits for approval instead of applying itself.
+ * `tangitweak/test` exposes the same object as a loaded tweak's
+ * `capabilities`.
+ *
+ * @module
  */
+
 import { builtinSpec } from "./builtinSpecs";
 import type { ResMeta } from "./metaParser";
 import { routePatterns } from "./route";
 
+/**
+ * What a package can do, as plain data: stored with the installed package,
+ * compared across updates and shown on the install page.
+ *
+ * Every list is deduplicated and sorted by {@link capabilitiesOf}.
+ */
 export interface Capabilities {
-    /** URL patterns its handlers run on */
+    /** URL match patterns its handlers run on (`"*://example.com/*"`, `"<all_urls>"`), from every route's `url`. */
     urls: string[];
-    /** network strategies it intercepts with */
+    /** Network strategies its network handlers intercept with (`"helper"`, `"debugger"`, …); page and overlay handlers add none. */
     strategies: string[];
-    /** onSite code: runs in the site's own JavaScript world */
+    /** Whether it registers `tweak.onSite` code, which runs in the site's own JavaScript world (an `onDocument` route whose world isn't `"isolated"`). */
     pageJs: boolean;
-    /** draws an overlay */
+    /** Whether it registers a `tweak.onOverlay` handler, which draws an overlay over pages. */
     overlay: boolean;
-    /** hosts its tweak.fetch reaches, as its metadata declares (`connect`) */
+    /** Hosts its `tweak.fetch` calls reach, as package.json's `tangitweak.connect` declares them. */
     connect: string[];
-    /** npm packages it depends on (its package.json dependencies, built-ins aside), downloaded from unpkg */
+    /**
+     * npm packages it depends on, downloaded from unpkg: its package.json
+     * `dependencies` names, without TangiTweak's built-in modules
+     * (`tangitweak`, React and valtio).
+     */
     packages: string[];
 }
 
 const sorted = (xs: Iterable<string>) => [...new Set(xs)].sort();
 
+/**
+ * Reads what a package can do off its compiled routes and package.json.
+ *
+ * Runs in the background when a package is analyzed for install, import or
+ * an update and in `tangitweak/test`.
+ *
+ * @param routes The compiled routes of the package's entry scripts.
+ * @param connect The hosts its package.json's `tangitweak.connect` lists.
+ * @param dependencies Its package.json `dependencies` (name → range); names of TangiTweak's built-in modules are left out of {@link Capabilities.packages}.
+ * @returns The capabilities, each list deduplicated and sorted.
+ */
 export function capabilitiesOf(routes: ResMeta["routes"], connect: string[], dependencies: Record<string, string> = {}): Capabilities {
     const packages = Object.keys(dependencies).filter((n) => !builtinSpec(n));
     return {
@@ -39,13 +71,36 @@ export function capabilitiesOf(routes: ResMeta["routes"], connect: string[], dep
 const ALL_URLS = /^(<all_urls>|\*:\/\/\*\/\*|\*:\/\/\*(:\*)?\/\*|https?\*?:\/\/\*\/\*|\*)$/;
 const cleanUrls = (urls: unknown): string[] => (Array.isArray(urls) ? urls.flatMap(routePatterns) : routePatterns(urls));
 
-/** a pattern that matches every site */
+/**
+ * Whether a URL match pattern matches every site: `<all_urls>`, `*`,
+ * `*://*\/*` (optionally with `:*` after the host), `http://*\/*` or
+ * `https://*\/*`.
+ */
 export const isAllUrls = (pattern: string): boolean => typeof pattern === "string" && ALL_URLS.test(pattern.trim());
 
+/** How risky a capability is, as {@link describeCapabilities} rates it for the install page. */
 export type Risk = "high" | "medium" | "low";
 
-/** the capabilities, as lines for people, riskiest first */
-export function describeCapabilities(c: Capabilities): { text: string; risk: Risk }[] {
+/**
+ * Describes capabilities as lines for people, riskiest first: what the
+ * install page lists under what the tweak can do.
+ *
+ * - `high`: running on every site ({@link isAllUrls}), the `debugger` strategy.
+ * - `medium`: `tweak.onSite` code, the `helper` strategy.
+ * - `low`: the other sites it runs on, the other strategies, overlays,
+ *   `connect` hosts and npm packages.
+ *
+ * With none of these it returns one line saying it registers no handlers.
+ *
+ * @param c The capabilities, as {@link capabilitiesOf} returns them.
+ * @returns One entry per line, sorted by risk.
+ */
+export function describeCapabilities(c: Capabilities): {
+    /** The line to show: a capitalized sentence without a final period, e.g. `"Runs on every site"`. */
+    text: string;
+    /** How risky this capability is. */
+    risk: Risk;
+}[] {
     const out: { text: string; risk: Risk }[] = [];
     const urls = cleanUrls(c.urls);
     if (urls.some(isAllUrls)) out.push({ text: "Runs on every site", risk: "high" });
@@ -64,7 +119,18 @@ export function describeCapabilities(c: Capabilities): { text: string; risk: Ris
     return out.sort((a, b) => rank[a.risk] - rank[b.risk]);
 }
 
-/** what `next` can do that `prev` couldn't (empty: same or less) */
+/**
+ * Lists what `next` can do that `prev` couldn't: new sites, strategies,
+ * `tweak.onSite` code, an overlay, `connect` hosts or npm packages.
+ *
+ * The background uses it on update: a non-empty result makes the update wait
+ * for review and its lines are joined into the reason. New sites don't count
+ * when `prev` already ran on every site.
+ *
+ * @param prev The installed version's capabilities.
+ * @param next The update's capabilities.
+ * @returns Lowercase phrases such as `"runs on *://a.com/*"`; empty when `next` can do the same or less.
+ */
 export function addedCapabilities(prev: Capabilities, next: Capabilities): string[] {
     const out: string[] = [];
     const prevUrls = cleanUrls(prev.urls);

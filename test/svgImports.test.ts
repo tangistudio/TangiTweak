@@ -52,9 +52,9 @@ describe(".svg data files", () => {
         expect(requireFrom("main")("./icons/logo.svg")).toBe(LOGO);
     });
 
-    it("build.mjs keeps Monaco's xml and markdown basic-language bundles for .svg and .md models", () => {
-        const buildSrc = readFileSync("scripts/build.mjs", "utf8");
-        const langs = [...(buildSrc.match(/MONACO_BASIC_LANGUAGES\s*=\s*new Set\(\[([^\]]+)\]/)?.[1] ?? "").matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+    it("the Monaco bundle registers the xml and markdown languages for .svg and .md models", () => {
+        const bundleSrc = readFileSync("src/ui/monacoBundle.ts", "utf8");
+        const langs = [...bundleSrc.matchAll(/languages\/definitions\/(\w+)\/register/g)].map((m) => m[1]);
         expect(langs).toEqual(expect.arrayContaining(["typescript", "javascript", "xml", "markdown"]));
     });
 });

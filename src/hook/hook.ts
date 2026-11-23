@@ -51,6 +51,7 @@ import { watchCall, type CallWatch } from "../shared/callWatch";
         });
     } catch {}
     const BRIDGE_SOURCE = "res-override-bridge";
+    // window messages target "/" (this window's own origin), not location.origin: that's "null" in about:blank, srcdoc, data: and sandboxed frames, where posting to it throws
     const HOOK_SOURCE = "res-override-hook";
 
     let active = false; // any body scripts exist (bundle metadata says so)
@@ -196,14 +197,14 @@ import { watchCall, type CallWatch } from "../shared/callWatch";
     /** hook diagnostics → extension debug log (never the page console) */
     function logUp(msg: string, level: ScriptLogLevel = "info"): void {
         try {
-            window.postMessage({ source: HOOK_SOURCE, kind: "log", msg, level, src: "page" }, window.location.origin);
+            window.postMessage({ source: HOOK_SOURCE, kind: "log", msg, level, src: "page" }, "/");
         } catch {}
     }
 
     /** a user script's own output (tweak.log / console.* / errors) → extension LOG, attributed to the script */
     function scriptLogUp(scriptId: string | null, level: ScriptLogLevel, msg: string): void {
         try {
-            window.postMessage({ source: HOOK_SOURCE, kind: "scriptLog", scriptId, level, msg }, window.location.origin);
+            window.postMessage({ source: HOOK_SOURCE, kind: "scriptLog", scriptId, level, msg }, "/");
         } catch {}
     }
 
@@ -217,13 +218,13 @@ import { watchCall, type CallWatch } from "../shared/callWatch";
             const watch = watchCall({
                 checkMs: 15000,
                 graceMs: 5000,
-                ask: () => window.postMessage({ source: HOOK_SOURCE, kind: "alive?", reqId }, window.location.origin),
+                ask: () => window.postMessage({ source: HOOK_SOURCE, kind: "alive?", reqId }, "/"),
                 onLost: () => settle(reqId, null),
             });
             watches.set(reqId, watch);
             pending.set(reqId, resolve);
             try {
-                window.postMessage({ source: HOOK_SOURCE, kind: "call", reqId, ...msg }, window.location.origin);
+                window.postMessage({ source: HOOK_SOURCE, kind: "call", reqId, ...msg }, "/");
             } catch {
                 settle(reqId, null);
             }
@@ -252,7 +253,7 @@ import { watchCall, type CallWatch } from "../shared/callWatch";
             // this too, but only reaches what the page could call itself
             const reply = (result: RpcResult) => {
                 try {
-                    window.postMessage({ source: HOOK_SOURCE, kind: "rpc.result", s: data.s, result }, window.location.origin);
+                    window.postMessage({ source: HOOK_SOURCE, kind: "rpc.result", s: data.s, result }, "/");
                 } catch {}
             };
             // before the first status (isolated code at document_start): wait for the handlers
@@ -430,7 +431,7 @@ import { watchCall, type CallWatch } from "../shared/callWatch";
         if (cspBlocked) {
             logUp("page CSP blocks eval in the page world — running onSite handlers in the isolated world instead", "info");
             try {
-                window.postMessage({ source: HOOK_SOURCE, kind: "cspBlocked" }, window.location.origin);
+                window.postMessage({ source: HOOK_SOURCE, kind: "cspBlocked" }, "/");
             } catch {}
         }
         if (compiledDocument.length === 0 && !navSets.some((n) => n.dom.some((h) => followsNav(h.route)))) {
@@ -446,7 +447,7 @@ import { watchCall, type CallWatch } from "../shared/callWatch";
                 scriptLogUp(scriptId, "debug", scriptLogLine(name, "onSite", `running (${when}) on ${url} [${document.readyState}], hook injected via ${injected}`));
                 const report = (e: unknown) => scriptLogUp(scriptId, "error", formatScriptError(name, e, "onSite"));
                 fireRun(life, gen, d, (signal) => ({ ...makeCtx(url, "GET"), onNavigate: navsOf(scriptId).onNavigate(signal, report) }), exposer, report);
-                window.postMessage({ source: HOOK_SOURCE, kind: "scriptRan", scriptId, name, api: "onSite" }, window.location.origin);
+                window.postMessage({ source: HOOK_SOURCE, kind: "scriptRan", scriptId, name, api: "onSite" }, "/");
             } catch (e: any) {
                 scriptLogUp(scriptId, "error", formatScriptError(name, e, "onSite"));
             }
@@ -488,7 +489,7 @@ import { watchCall, type CallWatch } from "../shared/callWatch";
         const nudge = () => {
             checkUrl();
             try {
-                window.postMessage({ source: HOOK_SOURCE, kind: "nav" }, window.location.origin);
+                window.postMessage({ source: HOOK_SOURCE, kind: "nav" }, "/");
             } catch {}
         };
         for (const m of ["pushState", "replaceState"] as const) {
@@ -503,7 +504,7 @@ import { watchCall, type CallWatch } from "../shared/callWatch";
 
     function requestStatus(): void {
         try {
-            window.postMessage({ source: HOOK_SOURCE, kind: "status?" }, window.location.origin);
+            window.postMessage({ source: HOOK_SOURCE, kind: "status?" }, "/");
         } catch {}
     }
 
@@ -516,7 +517,7 @@ import { watchCall, type CallWatch } from "../shared/callWatch";
     const siteStores = new SiteStoreHost({
         post: (m) => {
             try {
-                window.postMessage({ source: HOOK_SOURCE, ...m }, window.location.origin);
+                window.postMessage({ source: HOOK_SOURCE, ...m }, "/");
             } catch {}
         },
         log: (s, msg, level) => scriptLogUp(s, level, msg),
@@ -553,7 +554,7 @@ import { watchCall, type CallWatch } from "../shared/callWatch";
 
     function claim(url: string): void {
         try {
-            window.postMessage({ source: HOOK_SOURCE, kind: "claim", url }, window.location.origin);
+            window.postMessage({ source: HOOK_SOURCE, kind: "claim", url }, "/");
         } catch {}
     }
 
@@ -726,7 +727,7 @@ import { watchCall, type CallWatch } from "../shared/callWatch";
     /** a binary body no route takes: pass it through, and say why (the "never ran" warning) */
     function skipBinary(response: Response, url: string, method: string, contentType: string): Response {
         try {
-            window.postMessage({ source: HOOK_SOURCE, kind: "bodySkip", url, method, why: "binary", contentType }, window.location.origin);
+            window.postMessage({ source: HOOK_SOURCE, kind: "bodySkip", url, method, why: "binary", contentType }, "/");
         } catch {}
         return response;
     }

@@ -41,9 +41,18 @@ export function EditorToolbar() {
                 <span className="file-icon dts" aria-hidden="true">d.ts</span>tt-api.d.ts<span className="muted">read-only</span>
             </span>
             {" "}
-            <span id="editor-status" className={[status.cls, status.onClick && "clickable"].filter(Boolean).join(" ")} onClick={() => status.onClick?.()}>
-                {status.text}
-            </span>
+            {t.progress ? (
+                <span id="editor-progress" role="status">
+                    <span className="progress-text">{t.progress.text}</span>
+                    <span className={cls("progress-track", t.progress.value === null && "indeterminate")} aria-hidden="true">
+                        <span className="progress-bar" style={t.progress.value === null ? undefined : { width: `${Math.round(t.progress.value * 100)}%` }} />
+                    </span>
+                </span>
+            ) : (
+                <span id="editor-status" className={[status.cls, status.onClick && "clickable"].filter(Boolean).join(" ")} onClick={() => status.onClick?.()}>
+                    {status.text}
+                </span>
+            )}
             {" "}
             <button id="btn-save" disabled={t.save.disabled} className={cls(t.save.dim && "dim")} data-state={t.save.state} title={saveTitle(t.save.state)} onClick={() => actions.save()}>
                 <span className="save-ind" aria-hidden="true" />

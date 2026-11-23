@@ -15,6 +15,8 @@ export const toolbar = proxy({
     /** the status line; with `onClick` it is a link-like action */
     status: { text: "", cls: "", onClick: null as (() => void) | null },
     sync: { state: "off" as SyncState, path: "" },
+    /** a folder sync pass or an Import at work: its step, and how far (0 to 1; null: no measure) */
+    progress: null as { text: string; value: number | null } | null,
     /** folder sync is on and a file is open: ↗ can open it */
     canOpen: false,
 });

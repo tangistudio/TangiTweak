@@ -1,12 +1,19 @@
 /**
- * The test loader's request walk (plan §6.6): a request goes through the
- * strategies as layers, in the browser's order (precedence.ts LAYERS), each
- * seeing it only if that browser would let it. `rules` applies the fixed
- * browser rules the handlers were probed into, without calling them. The
- * first block, redirect or replacement stops the request; the layers in
- * front then run their response handlers. Everything a handler didn't get
- * to run for is listed with the extension's own words.
+ * The test loader's request walk (plan §6.6), used by `simulate` when
+ * `realLimits` is on and the request names no `strategy`.
+ *
+ * A request goes through the strategies as layers, in the browser's order
+ * (`LAYERS` in precedence.ts: `page`, `rules`, `extension`, `debugger`,
+ * `helper`) and each layer sees it only if that browser would let it. The
+ * `rules` layer applies the fixed browser rules the handlers were probed
+ * into, without calling the handlers. The first block, redirect or
+ * replacement stops the request; the layers in front of it then run their
+ * response handlers, nearest first. Every handler that didn't get to run is
+ * listed with the extension's own words for why.
+ *
+ * @module
  */
+
 import { bodyKind } from "../shared/bodyKind";
 import { resolveFileRef, runOp, type OpEnv, type OpScript } from "../shared/bodyOps";
 import { debuggerMissedLine, isLoopbackUrl, MISSED_REASONS, routeProblem } from "../shared/missedTap";
@@ -16,40 +23,70 @@ import { substitute, type RuleSpec } from "../shared/dnrRules";
 import type { Routed } from "../shared/compile";
 import { NET_KINDS } from "../shared/route";
 
+/** The browser a test pretends to be: Chrome MV3, a Chromium MV2 build or Firefox. */
 export type BrowserName = "chrome" | "chromium-mv2" | "firefox";
 
-export const BROWSER_ENV: Record<BrowserName, { firefox: boolean; mv3: boolean }> = {
+/** What each {@link BrowserName} is, in the terms `routeProblem` checks a route against. */
+export const BROWSER_ENV: Record<
+    BrowserName,
+    {
+        /** Whether the browser is Firefox. */
+        firefox: boolean;
+        /** Whether the extension runs as Manifest V3 (only `"chrome"`). */
+        mv3: boolean;
+    }
+> = {
     chrome: { firefox: false, mv3: true },
     "chromium-mv2": { firefox: false, mv3: false },
     firefox: { firefox: true, mv3: false },
 };
 
-/** a handler that didn't run for a request, and why */
+/** A handler that didn't run for a request and why. */
 export interface SkippedHandler {
-    /** `onResponseBody #1` */
+    /** The handler's label, such as `onResponseBody #1`. */
     handler: string;
+    /** The strategy the handler's route runs with. */
     strategy: Strategy;
+    /** The name of the script the handler belongs to. */
     script: string;
+    /** The reason, in the words the extension shows for it. */
     why: string;
 }
 
-/** the handler whose block, redirect or replacement ended the request */
+/** The handler whose block, redirect or replacement ended the request. */
 export interface DecidedBy {
+    /** The layer that answered (`"rules"` for a probed browser rule). */
     strategy: Strategy;
+    /** The handler's label, such as `onRequest #1` or `<kind> #<n>` when its route isn't known. */
     handler: string;
+    /** The name of the script the handler belongs to. */
     script: string;
+    /** What it did: answered the request itself, blocked it or redirected it. */
     outcome: "replace" | "block" | "redirect";
 }
 
-/** a script's probed `rules` handler, as Chrome took it */
+/** A script's probed `rules` handler, as the browser took it. */
 export interface RuleGroupRef {
+    /** The id of the script the handler belongs to. */
     scriptId: string;
+    /** The name of that script. */
     scriptName: string;
+    /** The handler's route. */
     route: RouteMeta;
+    /** The declarativeNetRequest rules the probe produced, in order. */
     specs: RuleSpec[];
 }
 
-/** `resourceType` as tests write it → the webRequest type */
+/**
+ * Turns `resourceType` as tests write it into the webRequest type.
+ *
+ * `undefined`, `"fetch"` and `"xhr"` become `"xmlhttprequest"`, `"document"`
+ * becomes `"main_frame"` and `"iframe"` becomes `"sub_frame"`. Anything else
+ * is returned as it is.
+ *
+ * @param t - The `resourceType` a test passed, if any.
+ * @returns The webRequest type.
+ */
 export function webRequestType(t: string | undefined): string {
     if (!t || t === "fetch" || t === "xhr") return "xmlhttprequest";
     if (t === "document") return "main_frame";
@@ -58,16 +95,36 @@ export function webRequestType(t: string | undefined): string {
 }
 
 /**
- * A tweak's handlers as `browser` runs them: the routes it turns off (with
- * the Problems view's text) and the ones left. On Chromium MV2 an
- * `extension` handler's async result is ignored (blocking webRequest can't
- * wait for it).
+ * Returns a tweak's handlers as `browser` runs them: the routes it turns off
+ * (with the Problems view's text) and the ones left.
+ *
+ * On Chromium MV2 an `extension` handler's async result is ignored, since
+ * blocking webRequest can't wait for it: the promise's rejection is
+ * swallowed, `onAsync` is called and the handler counts as returning
+ * nothing.
+ *
+ * @param scripts - The compiled scripts, in load order.
+ * @param browser - The browser to run them as.
+ * @param onAsync - Called each time an ignored async result comes back.
+ * @returns The scripts without their turned-off routes, the routes left and the routes turned off.
  */
 export function layerScripts(
     scripts: OpScript[],
     browser: BrowserName,
     onAsync: (s: OpScript, route: RouteMeta) => void
-): { scripts: OpScript[]; refs: RouteRef[]; disabled: { ref: RouteRef; why: string }[] } {
+): {
+    /** The scripts with only the routes `browser` runs, MV2 `extension` handlers wrapped. */
+    scripts: OpScript[];
+    /** Every route that runs, in script order. */
+    refs: RouteRef[];
+    /** Every route `browser` turns off. */
+    disabled: {
+        /** The route. */
+        ref: RouteRef;
+        /** Why it is off, as the Problems view says it. */
+        why: string;
+    }[];
+} {
     const env = { ...BROWSER_ENV[browser], dnr: true };
     const refs: RouteRef[] = [];
     const disabled: { ref: RouteRef; why: string }[] = [];
@@ -98,41 +155,81 @@ export function layerScripts(
     return { scripts: out, refs, disabled };
 }
 
+/** A request as {@link requestThroughLayers} walks it. */
 export interface LayerRequest {
+    /** The full request URL. */
     url: string;
+    /** The HTTP method, in upper case. */
     method: string;
+    /** The tab the request comes from. */
     tabId: number;
+    /** The id of the page the request comes from (`simulate` defaults it to `tab:<tabId>`). */
     page: string;
+    /** The URL of the tab's page. */
     tabUrl: string;
-    /** the webRequest type */
+    /** The webRequest type, as {@link webRequestType} gives it. */
     resourceType: string;
+    /** The request headers, with lower-case names. */
     requestHeaders: Record<string, string>;
+    /** The request body, as handlers receive it. */
     requestBody?: unknown;
-    /** a document request in a tab that had none before (the debugger may miss it) */
+    /** Whether this is a document request in a tab that had none before (the debugger may miss it). */
     firstDocument?: boolean;
 }
 
+/** A response: the server's or one a handler or rule made. */
 export interface UpstreamAnswer {
+    /** The HTTP status. */
     status: number;
+    /** The response headers, with lower-case names. */
     headers: Record<string, string>;
+    /** The response body. */
     body: string | Uint8Array;
 }
 
+/** What {@link requestThroughLayers} needs to know about the tweak and the browser. */
 export interface LayerEnv {
+    /** The browser to act as. */
     browser: BrowserName;
+    /** The scripts to run, as {@link layerScripts} returned them. */
     scripts: OpScript[];
+    /** The routes that run, from {@link layerScripts}. */
     refs: RouteRef[];
-    disabled: { ref: RouteRef; why: string }[];
+    /** The routes the browser turns off, from {@link layerScripts}. */
+    disabled: {
+        /** The route. */
+        ref: RouteRef;
+        /** Why it is off, as the Problems view says it. */
+        why: string;
+    }[];
+    /** Every script's probed `rules` handlers. */
     rules: RuleGroupRef[];
+    /** Where handlers' log lines (and optional trace lines) go. */
     opEnv: OpEnv;
+    /**
+     * Fetches the real response when no layer answers.
+     *
+     * @param requestHeaders - The request headers after every layer's edits.
+     * @returns The server's response.
+     */
     upstream(requestHeaders: Record<string, string>): Promise<UpstreamAnswer>;
 }
 
+/** What came of a request: the response the page gets and how it got there. */
 export interface LayerResult extends UpstreamAnswer {
+    /**
+     * What happened to the request: `"blocked"` (status 0), `"redirected"`
+     * (status 307), `"replaced"` (a handler or rule answered), `"modified"`
+     * (headers or body changed) or `"passthrough"`.
+     */
     action: "passthrough" | "modified" | "replaced" | "redirected" | "blocked";
+    /** The redirect target or `null` when there was no redirect. */
     redirectedTo: string | null;
+    /** The request headers after every layer's edits. */
     requestHeaders: Record<string, string>;
+    /** Every matching handler that didn't run and why. */
     skipped: SkippedHandler[];
+    /** The handler that blocked, redirected or answered the request (`null` when none did). */
     decidedBy: DecidedBy | null;
 }
 
@@ -146,7 +243,7 @@ function specMatches(spec: RuleSpec, req: LayerRequest): boolean {
     return true;
 }
 
-/** apply declarativeNetRequest header ops */
+/** Applies declarativeNetRequest header ops to `headers` and returns whether anything changed. */
 function applyOps(headers: Record<string, string>, ops: any[] | undefined): boolean {
     let changed = false;
     for (const o of ops || []) {
@@ -183,7 +280,31 @@ function applyEdits(headers: Record<string, string>, edits: { set?: Record<strin
 const enc = new TextEncoder();
 const dec = new TextDecoder();
 
-/** walk `req` through the layers (see the top of this file) */
+/**
+ * Walks `req` through the layers, as described at the top of this file.
+ *
+ * Matching routes the browser turns off are listed as skipped first. Then,
+ * layer by layer:
+ *
+ * - `rules` applies the probed rules' request header edits. Its first
+ *   block or redirect ends the walk instead (dropping those edits); a
+ *   redirect to a `data:` URL becomes a replacement with status 200.
+ * - `page` only sees `xmlhttprequest` requests and `helper` never sees
+ *   loopback URLs; their handlers are listed as skipped otherwise.
+ * - For a tab's first document, `debugger` handlers are listed as ones
+ *   that "may miss it" but still run.
+ * - Every other layer runs its request handlers, then its replacements.
+ *   The first answer, block or redirect ends the walk.
+ *
+ * A block answers with status 0 and a redirect with status 307 and a
+ * `location` header. Otherwise the response (the replacement or
+ * `env.upstream`'s) goes back through the layers in front of the one that
+ * answered, nearest first, each running its header and body handlers.
+ *
+ * @param env - The tweak and browser to walk the request with.
+ * @param req - The request.
+ * @returns The response the page gets, with what decided it and what was skipped.
+ */
 export async function requestThroughLayers(env: LayerEnv, req: LayerRequest): Promise<LayerResult> {
     const { url, method, resourceType: type } = req;
     const mv3 = env.browser === "chrome";

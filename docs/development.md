@@ -77,6 +77,54 @@ Before the first automated publish, a maintainer does this once:
 
 After that, pushing a `vX.Y.Z` tag publishes that version.
 
+### Documenting the SDK
+
+Everything the SDK ships is public: `index.d.ts` (`src/types/tt-api.d.ts`),
+`tangitweak/test` and every file under `types/` they import, such as
+`types/shared/wire.d.ts` (emitted from `src/shared/wire.ts`). Readers land in
+any of them through hovers and go-to-definition, so each one is documented
+like an API reference. `npm run build` fails when something there has no doc
+comment; `node scripts/sdkTypings.mjs [wire]` lists what's missing (all files,
+or the ones whose path has `wire` in it) without a full build.
+
+- **File overview.** Each file starts with a `/** … */` saying what the module
+  is for, who uses it and how its parts fit, then `@module`, then a blank line.
+  Without the blank line it reads as the first declaration's comment. The
+  build puts it back at the top of the `.d.ts`, which declaration emit doesn't.
+- **Members on their own lines.** Declaration emit drops comments on members
+  of one-line object types (`{ a: string; b: number }`), so give each
+  documented member its own line.
+- **Every declaration and member.** Types, interfaces, functions, classes,
+  constants, enum members and properties, including those of object types
+  nested in other types. Not needed: private members, index and call
+  signatures, and `WireOps` entries' `req`, `res` and `push` keys (the op's
+  comment covers them; their fields still need their own).
+- **Summary first.** One sentence, capitalized and ending with a period, saying
+  what it is or does. Don't repeat the name or the type.
+- **Then the details a caller needs**, the ones the type can't say: units (ms,
+  bytes), defaults (`@defaultValue`), limits, which world or context runs it
+  (background, bridge, page MAIN world, `onSite`), who sends a message and who
+  answers it, timing and ordering, what happens on failure (`@throws`, or what
+  it returns instead), and what lasts how long.
+- **Tags.** `@param` for each parameter whose meaning isn't plain from its name
+  and type, `@returns` when the result needs explaining, `@example` for
+  anything a tweak calls directly, and `{@link Other}` for related symbols
+  (`@see` for docs pages).
+- **Facts from the code.** Every detail must match what the code and its tests
+  do. Name constants (`{@link WIRE_TIMEOUT_MS}`) rather than copying their
+  values, so the comment can't go stale.
+
+```ts
+/**
+ * How long {@link Endpoint.call} waits for an answer when
+ * {@link EndpointOptions.timeoutMs} isn't set, in milliseconds.
+ *
+ * Past it, the call rejects with a `TimeoutError`. Closing the link rejects
+ * pending calls right away with a `DisconnectedError` instead.
+ */
+export const WIRE_TIMEOUT_MS = 30000;
+```
+
 The helper is versioned separately in `helper/Cargo.toml`: bump it only when
 the helper changes. When the extension starts depending on new helper
 behavior, also raise `MIN_HELPER_VERSION` in `src/shared/helperInstall.ts` —

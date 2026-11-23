@@ -270,14 +270,13 @@ export function watchShortcuts(win: Window, find: (e: KeyboardEvent) => Shortcut
         if (now.length === hits.length) return;
         // after the page's own window listeners
         win.removeEventListener("keydown", bubble);
-        win.addEventListener("keydown", bubble);
+        win.addEventListener("keydown", bubble, { signal: stop.signal });
     };
-    win.addEventListener("keydown", capture, true);
-    win.addEventListener("keydown", bubble);
-    return () => {
-        win.removeEventListener("keydown", capture, true);
-        win.removeEventListener("keydown", bubble);
-    };
+    // stopping aborts rather than calling win.removeEventListener: an iframe's `win` may have navigated cross-origin by then, where touching it throws
+    const stop = new AbortController();
+    win.addEventListener("keydown", capture, { capture: true, signal: stop.signal });
+    win.addEventListener("keydown", bubble, { signal: stop.signal });
+    return () => stop.abort();
 }
 
 /** `ctx.shortcut`'s `iframes` option */

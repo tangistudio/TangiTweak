@@ -17,6 +17,7 @@ import { cp, mkdir, rm, writeFile, copyFile, readFile, readdir } from "node:fs/p
 import { existsSync, readFileSync } from "node:fs";
 import { execSync } from "node:child_process";
 import path from "node:path";
+import { sdkDeclarations, undocumented } from "./sdkTypings.mjs";
 
 const root = path.resolve(new URL(".", import.meta.url).pathname, "..");
 
@@ -176,22 +177,136 @@ async function buildOnce(dist, mv3) {
 }
 
 /**
- * Monaco files the editor can load: models are only ever "typescript"
- * (scripts, diff editor), "json" (settings.json, stores.json, data files),
- * "xml" (.svg data files), "markdown" (.md files) and "plaintext" (raster
- * image data files) — see monacoSetup.ts and editor.ts — so other languages'
- * modes/workers are skipped. The
- * nls.messages.<locale> files load only when a locale is configured
- * (we don't), so the editor stays English.
+ * lib/monaco/: Monaco's ESM build, bundled.
+ *
+ *   editor.main.js/.css  src/ui/monacoBundle.ts (window.monaco), and the codicon font
+ *   *.worker.js          its module workers (monacoSetup.ts's getWorkerUrl)
+ *   ts.libs.js           the TS worker's lib .d.ts files
+ *
+ * The TS worker's compiler is our typescript (6.x), not the TS 5.9 Monaco bundles,
+ * so newer web APIs (navigation, URLPattern, …) type-check. Its libs are
+ * the `lib:` list in monacoSetup.ts plus everything that `/// <reference lib>`s,
+ * in their own file so every file stays under AMO's 5 MB per-file limit and
+ * the Firefox build can be signed.
+ *
+ * Built once per change of its inputs (into node_modules/.cache) and copied
+ * into each dist.
  */
-const MONACO_BASIC_LANGUAGES = new Set(["typescript", "javascript", "xml", "markdown"]);
-const MONACO_SKIPPED_LANGUAGES = new Set(["css", "html"]);
-function keepMonacoFile(rel) {
-    const parts = rel.split(path.sep);
-    if (parts.length === 1 && /^nls\.messages\..+\.js$/.test(parts[0])) return false;
-    if (parts[0] === "basic-languages" && parts.length > 1 && !parts[1].startsWith("_") && !MONACO_BASIC_LANGUAGES.has(parts[1])) return false;
-    if (parts[0] === "language" && parts.length > 1 && MONACO_SKIPPED_LANGUAGES.has(parts[1])) return false;
-    return true;
+const MONACO_ESM = path.join(root, "node_modules/monaco-editor/esm/vs");
+const MONACO_CACHE = path.join(root, "node_modules/.cache/tangitweak-monaco");
+const AMO_MAX_FILE = 5 * 1024 * 1024;
+let monacoBuild = { key: "", done: null };
+
+function buildMonaco() {
+    const setup = readFileSync(path.join(root, "src/ui/monacoSetup.ts"), "utf8");
+    const libRoots = [...(setup.match(/lib:\s*\[([^\]]*)\]/)?.[1] ?? "").matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+    if (!libRoots.length) throw new Error("buildMonaco: no lib list in monacoSetup.ts");
+    const key = JSON.stringify([libRoots, readFileSync(path.join(root, "src/ui/monacoBundle.ts"), "utf8"), readFileSync(new URL(import.meta.url), "utf8")]);
+    if (monacoBuild.key !== key) monacoBuild = { key, done: buildMonacoTo(MONACO_CACHE, libRoots) };
+    return monacoBuild.done;
+}
+
+async function buildMonacoTo(out, libRoots) {
+    await rm(out, { recursive: true, force: true });
+    // TS's compiler uses eval; Monaco's `new URL("…worker.js", import.meta.url)` fallbacks never run (getWorkerUrl wins)
+    const quiet = { logLevel: "warn", onLog: (level, log, handler) => log.code !== "EVAL" && log.code !== "EMPTY_IMPORT_META" && handler(level, log) };
+
+    const fonts = new Set();
+    const css = new Map();
+    const main = await rolldown({
+        input: path.join(root, "src/ui/monacoBundle.ts"),
+        ...quiet,
+        plugins: [
+            {
+                // CSS imports → one editor.main.css, in import order; url()s → files beside it
+                name: "monaco-css",
+                load(id) {
+                    if (!id.endsWith(".css")) return null;
+                    css.set(id, readFileSync(id, "utf8").replace(/url\((['"]?)(\.[^'")]+)\1\)/g, (_, _q, rel) => {
+                        const file = path.resolve(path.dirname(id), rel);
+                        fonts.add(file);
+                        return `url(${path.basename(file)})`;
+                    }));
+                    return { code: "", moduleType: "js", moduleSideEffects: true };
+                },
+                generateBundle() {
+                    // ES module evaluation order: imports (then dynamic imports) before the importer
+                    const order = [];
+                    const seen = new Set();
+                    const visit = (id) => {
+                        if (seen.has(id)) return;
+                        seen.add(id);
+                        const info = this.getModuleInfo(id);
+                        for (const d of [...(info?.importedIds ?? []), ...(info?.dynamicallyImportedIds ?? [])]) visit(d);
+                        if (css.has(id)) order.push(css.get(id));
+                    };
+                    visit([...this.getModuleIds()].find((id) => this.getModuleInfo(id)?.isEntry));
+                    if (order.length !== css.size) throw new Error(`buildMonaco: ordered ${order.length} of ${css.size} CSS files`);
+                    this.emitFile({ type: "asset", fileName: "editor.main.css", source: order.join("\n") });
+                },
+            },
+        ],
+    });
+    await main.write({ dir: out, entryFileNames: "editor.main.js", format: "iife", codeSplitting: false, minify: true });
+    await main.close();
+    for (const f of fonts) await copyFile(f, path.join(out, path.basename(f)));
+
+    const tsLib = path.join(MONACO_ESM, "languages/features/typescript/lib");
+    const workers = await rolldown({
+        input: {
+            "editor.worker": path.join(MONACO_ESM, "editor/editor.worker.js"),
+            "json.worker": path.join(MONACO_ESM, "language/json/json.worker.js"),
+            "ts.worker": path.join(MONACO_ESM, "language/typescript/ts.worker.js"),
+        },
+        ...quiet,
+        plugins: [
+            {
+                name: "our-typescript",
+                resolveId(source, importer) {
+                    if (!importer) return null;
+                    const file = source.startsWith(".") ? path.resolve(path.dirname(importer), source) : null;
+                    if (file === path.join(tsLib, "typescriptServices.js")) return "\0ts-services";
+                    if (file === path.join(tsLib, "lib.js")) return { id: "./ts.libs.js", external: true };
+                    // TS reaches for Node modules only when it runs in Node
+                    if (importer.startsWith(path.join(root, "node_modules/typescript/lib")) && !source.startsWith(".")) return "\0empty";
+                    return null;
+                },
+                load(id) {
+                    if (id === "\0empty") return "export default {};";
+                    if (id === "\0ts-services") {
+                        return `import ts from "typescript";
+export const { EndOfLineState, IndentStyle, ScriptKind, ScriptTarget, TokenClass, createClassifier, createLanguageService, displayPartsToString, flattenDiagnosticMessageText } = ts;
+export { ts as typescript };`;
+                    }
+                    return null;
+                },
+            },
+        ],
+    });
+    await workers.write({ dir: out, entryFileNames: "[name].js", chunkFileNames: "[name]-[hash].js", format: "esm", minify: true });
+    await workers.close();
+    await writeFile(path.join(out, "ts.libs.js"), await tsLibsModule(libRoots));
+
+    for (const f of await readdir(out)) {
+        const bytes = (await readFile(path.join(out, f))).length;
+        if (bytes > AMO_MAX_FILE) throw new Error(`buildMonaco: lib/monaco/${f} is ${bytes} bytes, over AMO's ${AMO_MAX_FILE}-byte per-file limit`);
+    }
+    console.log(`lib/monaco built (TypeScript ${JSON.parse(readFileSync(path.join(root, "node_modules/typescript/package.json"), "utf8")).version})`);
+}
+
+/** `export const libFileMap` of our typescript's lib files the roots need, line indentation stripped (irrelevant to the checker and hovers) */
+async function tsLibsModule(roots) {
+    const dir = path.join(root, "node_modules/typescript/lib");
+    const keep = {};
+    const queue = [...roots];
+    while (queue.length) {
+        const n = queue.pop();
+        if (n in keep) continue;
+        if (!existsSync(path.join(dir, n))) throw new Error(`buildMonaco: no ${n} in typescript`);
+        keep[n] = (await readFile(path.join(dir, n), "utf8")).replace(/\n[ \t]+/g, "\n");
+        for (const r of keep[n].matchAll(/<reference lib="([\w.]+)"/g)) queue.push(`lib.${r[1].toLowerCase()}.d.ts`);
+    }
+    return `export const libFileMap = ${JSON.stringify(keep)};\n`;
 }
 
 /** node_modules-relative path → text of every .d.ts the built-in valtio and React need */
@@ -234,14 +349,8 @@ async function copyStatic(dist, mv3) {
     await copyFile(path.join(root, "src/ui/theme.css"), path.join(dist, "theme.css"));
     await copyFile(path.join(root, "src/ui/theme-boot.js"), path.join(dist, "theme-boot.js"));
 
-    // Monaco classic AMD build
-    const monacoSrc = path.join(root, "node_modules/monaco-editor/min/vs");
-    const monacoDst = path.join(dist, "lib/monaco/vs");
-    if (existsSync(monacoSrc)) {
-        await rm(monacoDst, { recursive: true, force: true });
-        await cp(monacoSrc, monacoDst, { recursive: true, filter: (src) => keepMonacoFile(path.relative(monacoSrc, src)) });
-        await pruneTsWorkerLibs(path.join(monacoDst, "language/typescript/tsWorker.js"));
-    }
+    await buildMonaco();
+    await cp(MONACO_CACHE, path.join(dist, "lib/monaco"), { recursive: true });
 
     // tt-api typings for the editor + VS Code export
     await copyFile(
@@ -301,41 +410,6 @@ async function generatedFilesModule() {
     return import(`data:text/javascript;base64,${Buffer.from(output[0].code).toString("base64")}`);
 }
 
-/** test.d.ts's declarations (path under src/ → text), with `.js` on relative imports so any moduleResolution finds them */
-async function sdkDeclarations() {
-    const ts = (await import("typescript")).default;
-    const cfg = ts.getParsedCommandLineOfConfigFile(path.join(root, "tsconfig.json"), {}, { ...ts.sys, onUnRecoverableConfigFileDiagnostic: () => {} });
-    const src = path.join(root, "src");
-    const program = ts.createProgram([path.join(src, "testing/test.ts"), path.join(src, "types/globals.d.ts"), path.join(src, "types/tt-api.d.ts")], {
-        ...cfg.options,
-        noEmit: false,
-        declaration: true,
-        emitDeclarationOnly: true,
-        rootDir: src,
-        outDir: src,
-    });
-    const emitted = new Map();
-    const res = program.emit(undefined, (file, text) => emitted.set(path.relative(src, file).split(path.sep).join("/"), text));
-    if (res.emitSkipped || res.diagnostics.length) {
-        throw new Error(`SDK typings: ${ts.formatDiagnostics(res.diagnostics, { getCanonicalFileName: (f) => f, getCurrentDirectory: () => root, getNewLine: () => "\n" })}`);
-    }
-    const out = new Map();
-    const queue = ["testing/test.d.ts"];
-    while (queue.length) {
-        const file = queue.pop();
-        if (out.has(file)) continue;
-        const text = emitted.get(file).replace(/((?:from|import)\s*\(?\s*")(\.\.?\/[^"]*)(")/g, (all, pre, spec, post) => {
-            const base = path.posix.join(path.posix.dirname(file), spec);
-            const hit = [".d.ts", "/index.d.ts"].map((ext) => base + ext).find((f) => emitted.has(f));
-            if (!hit) throw new Error(`SDK typings: ${file} imports ${spec}, which has no declarations`);
-            queue.push(hit);
-            return pre + spec + (hit.endsWith("/index.d.ts") ? "/index.js" : ".js") + post;
-        });
-        out.set(file, text);
-    }
-    return out;
-}
-
 /** every file under `dir` (relative path, "/"-separated) → text */
 async function readTree(dir) {
     const out = {};
@@ -386,7 +460,15 @@ async function buildSdk() {
     });
     await bundle.close();
 
-    for (const [file, text] of await sdkDeclarations()) {
+    const declarations = await sdkDeclarations();
+    const missing = undocumented({
+        "index.d.ts": await readFile(path.join(root, "src/types/tt-api.d.ts"), "utf8"),
+        ...Object.fromEntries([...declarations].map(([file, text]) => [`types/${file}`, text])),
+    });
+    if (missing.length) {
+        throw new Error(`SDK typings: ${missing.length} undocumented (docs/development.md#documenting-the-sdk):\n  ${missing.join("\n  ")}`);
+    }
+    for (const [file, text] of declarations) {
         await mkdir(path.dirname(path.join(SDK_DIR, "types", file)), { recursive: true });
         await writeFile(path.join(SDK_DIR, "types", file), text);
     }
@@ -505,46 +587,3 @@ if (WATCH) {
     console.log("watching for changes…");
 }
 
-/**
- * Drop the TS lib .d.ts files the editor never loads from Monaco's
- * tsWorker.js (webworker, esnext, …). Keeps it under AMO's 5 MB
- * per-file limit so the Firefox build can be signed. The kept set is the
- * `lib:` list in monacoSetup.ts plus everything it `/// <reference lib>`s.
- */
-async function pruneTsWorkerLibs(file) {
-    const AMO_MAX_FILE = 5 * 1024 * 1024;
-    if (!existsSync(file)) return;
-    const setup = await readFile(path.join(root, "src/ui/monacoSetup.ts"), "utf8");
-    const roots = [...(setup.match(/lib:\s*\[([^\]]*)\]/)?.[1] ?? "").matchAll(/"([^"]+)"/g)].map((m) => m[1]);
-    if (!roots.length) throw new Error("pruneTsWorkerLibs: no lib list in monacoSetup.ts");
-    const src = await readFile(file, "utf8");
-    const libs = new Map(); // name → [start, end) of `X["name"]=`…`;`
-    for (const m of src.matchAll(/\w+\["(lib\.[\w.]+\.d\.ts)"\]=`/g)) {
-        let i = m.index + m[0].length;
-        while (src[i] !== "`") i += src[i] === "\\" ? 2 : 1;
-        libs.set(m[1], [m.index, src[i + 1] === ";" ? i + 2 : i + 1, src.slice(m.index + m[0].length, i)]);
-    }
-    const keep = new Set();
-    const queue = [...roots];
-    while (queue.length) {
-        const n = queue.pop();
-        if (keep.has(n) || !libs.has(n)) continue;
-        keep.add(n);
-        for (const r of libs.get(n)[2].matchAll(/<reference lib=\\?"([\w.]+)\\?"/g)) queue.push(`lib.${r[1].toLowerCase()}.d.ts`);
-    }
-    if (roots.some((r) => !keep.has(r))) throw new Error(`pruneTsWorkerLibs: missing ${roots.filter((r) => !keep.has(r))}`);
-    // back to front so earlier offsets stay valid: drop unused libs, and
-    // strip line indentation from kept ones (irrelevant to the type checker
-    // and to JSDoc hovers, and ~5% of the file)
-    let out = src;
-    let dropped = 0;
-    for (const [n, [start, end]] of [...libs].sort((a, b) => b[1][0] - a[1][0])) {
-        const repl = keep.has(n) ? src.slice(start, end).replace(/\n[ \t]+/g, "\n") : "";
-        if (!keep.has(n)) dropped++;
-        out = out.slice(0, start) + repl + out.slice(end);
-    }
-    const bytes = Buffer.byteLength(out);
-    if (bytes > AMO_MAX_FILE) throw new Error(`pruneTsWorkerLibs: tsWorker.js is ${bytes} bytes, over AMO's ${AMO_MAX_FILE}-byte per-file limit — narrow the lib list in monacoSetup.ts`);
-    await writeFile(file, out);
-    console.log(`tsWorker.js: kept ${keep.size} TS libs, dropped ${dropped} (${(src.length / 1e6).toFixed(2)} → ${(out.length / 1e6).toFixed(2)} MB)`);
-}

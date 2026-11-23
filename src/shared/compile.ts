@@ -1,9 +1,29 @@
 /**
- * Compiles a TangiTweak source into { meta, handlers }.
- * Runs identically in the background (MV3: the sandbox page) and the page
- * hook — each provides its own `tweak` (shim, tweakApi.ts) and re-evaluates
- * handler sources with `new Function`.
+ * Compiles a script's source into a {@link CompiledScript}: its metadata, the
+ * handlers its top level registered and its exports.
+ *
+ * {@link compileScript} runs the code (transpiled by {@link toRunnableJs})
+ * with `new Function` and a `tweak` built here (on `tweakApi.ts`'s host),
+ * collecting what its top level registers. It runs wherever code can be
+ * evaluated from the extension's side: the background (MV2: the background
+ * page; MV3: the sandbox page, the only context allowed to eval), the
+ * overlay frame (`overlayRuntime.ts`) and the `tangitweak/test` harness.
+ * Each passes {@link ResApiOverrides} to wire `tweak`'s storage, stores,
+ * fetch and logs to its own context. The page hook and the bridge don't use
+ * this module: their `tweak` is `pageShim.ts`.
+ *
+ * Also here:
+ *
+ * - Imports between scripts and data files ({@link makeModuleResolver}).
+ * - Save-time, meta-only compiles that stub what can't be resolved
+ *   ({@link compileWithLibs}, {@link compileManyWithLibs},
+ *   {@link makeStubModule}).
+ * - Static checks for the Problems view ({@link siteProblems},
+ *   {@link rulesProblems}, {@link onSiteUses}).
+ *
+ * @module
  */
+
 import { defaultMeta, finishMeta, type ResMeta } from "./metaParser";
 import { PARAM_TYPES, resolveParamValues, serializableParamTree, type ParamDef, type ParamTree } from "./scriptDef";
 import { paramsProxy, PARAM_AT_TOP, PARAM_NOT_HERE } from "./paramsProxy";
@@ -29,83 +49,170 @@ import { fromWireResponse, splitFetchInit, toWireRequest, type WtFetchInit } fro
 
 export type { DocumentWhen } from "./route";
 
+/**
+ * A registered handler function: called with the handler's context (and,
+ * for `onResponseBody`, the body).
+ */
 export type HandlerFn = (...args: any[]) => any;
 
-/** a registered handler and the route it was registered with */
+/** A registered handler and the route it was registered with. */
 export interface Routed {
+    /** The handler function, as passed to `tweak.<api>(route, fn)`. */
     fn: HandlerFn;
+    /** The normalized route, with its registration index, source line and (for page and overlay handlers) its key. */
     route: RouteMeta;
 }
 
 /**
- * Registrations STACK within a script: multiple tweak.onRequest(...) calls
- * all run, in registration order (same semantics as across scripts).
+ * The handlers a script registered, by kind, in registration order.
+ *
+ * Registrations stack within a script: several `tweak.onRequest(…)` calls
+ * all run, in registration order (the same semantics as across scripts, see
+ * `bodyOps.ts`).
  */
 export interface ScriptHandlers {
+    /** `tweak.onRequest` handlers. */
     onRequest: Routed[];
+    /** `tweak.onResponseHeaders` handlers. */
     onResponseHeaders: Routed[];
+    /** `tweak.replaceResponse` handlers. */
     replaceResponse: Routed[];
+    /** `tweak.onResponseBody` handlers. */
     onResponseBody: Routed[];
-    /** tweak.onSite / tweak.onPage: run in the page — the site's JS world or the isolated one (route.when = timing, route.world) */
+    /**
+     * `tweak.onSite` and `tweak.onPage` handlers, which run in the page: in
+     * the site's JavaScript world or the isolated one (`route.world`), at
+     * `route.when`.
+     */
     onDocument: Routed[];
-    /** tweak.onOverlay: run in the script's overlay frame above the page */
+    /** `tweak.onOverlay` handlers, which run in the script's overlay frame above the page. */
     onOverlay: Routed[];
 }
 
+/** What {@link compileScript} returns for one script. */
 export interface CompiledScript {
+    /**
+     * The script's routes, whether it is active (registered at least one
+     * handler) and the URLs it matches. Its `name` is the default one: the
+     * callers use the stored name.
+     */
     meta: ResMeta;
+    /** The handlers its top level registered; all empty when the compile failed. */
     handlers: ScriptHandlers;
+    /**
+     * Null when the top level ran. Otherwise the error: `"SyntaxError: <message>
+     * (line N)"` when the code didn't transpile, else the thrown error's stack
+     * (or the thrown value as a string). The script is then inactive, with no
+     * routes, handlers or exports.
+     */
     error: string | null;
-    /** original full source */
+    /** The original source, as given. */
     code: string;
-    /** parameter definitions collected from tweak.params (if any) */
+    /**
+     * The parameter definitions its `tweak.params` calls declared (parsers
+     * stripped, so it can be stored and messaged), if any. Kept when the
+     * compile failed after declaring them.
+     */
     paramDefs?: ParamTree;
-    /** the module's exports (importable by other scripts) */
+    /** The module's exports, importable by other scripts; absent when the compile failed. */
     exports?: any;
 }
 
-/** true if the value looks like a Promise (thenable). */
+/** Whether the value looks like a Promise: it has a `then` method. */
 export function isThenable(v: any): v is Promise<any> {
     return !!v && typeof v.then === "function";
 }
 
-/** true if the function was declared `async` (returns a Promise by construction). */
+/** Whether the value is a function declared `async` (so it always returns a Promise). */
 export function isAsyncFn(fn: any): boolean {
     return typeof fn === "function" && fn.constructor?.name === "AsyncFunction";
 }
 
+/**
+ * How the context running {@link compileScript} wires the script's `tweak`
+ * (and its `console` and `import`s). Every field is optional; the defaults
+ * keep everything local to this one compiled instance.
+ */
 export interface ResApiOverrides {
-    /** the script's name: labels its stack frames */
+    /** The script's name: labels its stack frames. Default: `""`. */
     name?: string;
-    storage?: { get(key: string): Promise<any>; set(key: string, value: any): Promise<void> };
-    /** receives the script's tweak.log and console.* output (source: "tweak.log", "console.warn", …) */
+    /**
+     * `tweak.storage`, the script's key/value storage. Default: none (`get`
+     * gives undefined, `set` stores nothing). Either way, a `set` of a
+     * `$store:` key (a `tweak.globalStore`'s persisted copy) logs a warning.
+     */
+    storage?: {
+        /** Reads the value stored under `key`. */
+        get(key: string): Promise<any>;
+        /** Stores `value` under `key`. */
+        set(key: string, value: any): Promise<void>;
+    };
+    /**
+     * Receives the script's `tweak.log` and `console.*` output (`source`:
+     * `"tweak.log"`, `"console.warn"`, …) and its late-registration errors.
+     * Default: the context's own `console`.
+     */
     logSink?: (level: ScriptLogLevel, source: string, text: string) => void;
-    /** stored parameter values, merged over tweak.params defaults */
+    /** The stored parameter values, applied over the `tweak.params` defaults. */
     paramValues?: Record<string, any>;
-    /** resolves ES import specifiers ("./utils", "utils") to module exports */
+    /**
+     * Resolves the script's import specifiers (`"./utils"`, `"utils"`) to the
+     * modules' exports: its `require`. Default: every import throws.
+     */
     importModule?: (spec: string) => any;
-    /** `tweak.globalStore`: the script's replicated store (default: a plain local valtio proxy) */
+    /** `tweak.globalStore`: the script's replicated store. Default: a plain valtio proxy local to this instance. */
     store?: (name: string, initial: object, persist: StorePersist) => object;
-    /** `tweak.tabStore`: the script's per-tab store (default: per-tab copies local to this instance) */
+    /** `tweak.tabStore`: the script's per-tab store. Default: per-tab copies local to this instance. */
     tabStore?: (name: string, initial: object) => object;
-    /** `tweak.pageStore`: the script's per-page store (default: per-page copies local to this instance) */
+    /** `tweak.pageStore`: the script's per-page store. Default: per-page copies local to this instance. */
     pageStore?: (name: string, initial: object) => object;
-    /** `tweak.siteStore`: a mirror of the site's world's store (default — no page here: a store that throws when used) */
+    /** `tweak.siteStore`: a mirror of the site world's store. Default (no page here): a store that throws when used. */
     siteStore?: (name: string, initial: object) => object;
-    /** `tweak.fetch(…, { from: "background" })` (default: this context's own fetch, no bypass) */
+    /**
+     * Runs `tweak.fetch(…, { from: "background" })`. Default: this context's
+     * own `fetch` with `credentials: "include"` and no bypass.
+     */
     fetch?: (request: WireRequest, bypass: boolean) => Promise<WireResponse>;
-    /** `tweak.fetch(…, { from: "page" })`, then the default `from` (the overlay); `url` resolves relative URLs */
-    pageFetch?: { url: string; fetch: (request: WireRequest, bypass: boolean) => Promise<WireResponse> };
-    /** what a `tweak.onSite` / `tweak.onPage` / `tweak.onOverlay` registration returns (default: an inert handle) */
+    /**
+     * Runs `tweak.fetch` as the page, the overlay's default: set, every
+     * `from` but `"background"` goes here. Unset, `from: "page"` throws.
+     */
+    pageFetch?: {
+        /** The page's URL, which relative request URLs resolve against. */
+        url: string;
+        /** Sends the request as the page; `bypass` keeps every script's handlers off it. */
+        fetch: (request: WireRequest, bypass: boolean) => Promise<WireResponse>;
+    };
+    /**
+     * Makes what a `tweak.onSite`, `tweak.onPage` or `tweak.onOverlay`
+     * registration returns (its handle). Default: an inert handle whose
+     * calls reject.
+     */
     remote?: (route: RouteMeta) => any;
-    /** a param assigned by the code (`cfg.on = false`): save it like the ⚙ panel (absent: params can't change) */
+    /**
+     * Saves a parameter the code assigned (`cfg.on = false`), as the ⚙ panel
+     * would; its rejection is ignored. Unset: assigning a parameter throws.
+     * Assigning one during the top level always throws.
+     */
     setParam?: (key: string, value: any) => Promise<void>;
 }
 
-/** Standard overrides for a stored script: storage wired by id, log → sink. */
+/**
+ * The standard {@link ResApiOverrides} for a stored script: `tweak.storage`
+ * and the log sink bound to `scriptId`, plus its parameter values, its
+ * import resolver and the `extra` fields as given.
+ *
+ * @param storage Storage for every script, keyed by script id.
+ * @param logSink Log for every script, told which one.
+ */
 export function makeScriptOverrides(
     scriptId: string,
-    storage: { get(scriptId: string, key: string): Promise<any>; set(scriptId: string, key: string, v: any): Promise<void> },
+    storage: {
+        /** Reads the value script `scriptId` stored under `key`. */
+        get(scriptId: string, key: string): Promise<any>;
+        /** Stores `v` under `key` for script `scriptId`. */
+        set(scriptId: string, key: string, v: any): Promise<void>;
+    },
     logSink: (scriptId: string, level: ScriptLogLevel, source: string, text: string) => void,
     paramValues?: Record<string, any>,
     importModule?: (spec: string) => any,
@@ -123,23 +230,31 @@ export function makeScriptOverrides(
     };
 }
 
+/** Turns a script's TypeScript (and JSX) source into JavaScript; throws on a syntax error. */
 type Transpiler = (code: string) => string;
 let transpiler: Transpiler | null = null;
 
-/** Register the TS stripper (done by the background via shared/transpile). */
+/**
+ * Registers the transpiler that {@link toRunnableJs} and the compilers use
+ * and empties the transpile cache. `transpile.ts` calls it when imported
+ * (the background, the MV3 sandbox page, the test harness); contexts that
+ * don't import it run code as given.
+ */
 export function setTranspiler(fn: Transpiler): void {
     transpiler = fn;
     runnable.clear();
     runnableChars = 0;
 }
 
-// the same source is transpiled again and again (each dependant's compile,
-// each strategy, each frame's bundle): keep the results, most recent last
+// The same source is transpiled again and again (each dependant's compile,
+// each strategy, each frame's bundle): keep the results, most recently used
+// last, dropping the least recently used past RUNNABLE_MAX_CHARS.
 const runnable = new Map<string, { js: string; syntax: unknown }>();
 let runnableChars = 0;
+/** The transpile cache's budget: the total length of the sources and their outputs it keeps, in UTF-16 code units. The latest entry is always kept. */
 const RUNNABLE_MAX_CHARS = 8_000_000;
 
-/** transpiled code, and the transpiler's error (the code then runs as written) */
+/** The transpiled code and the transpiler's error, if any (the code then runs as written), from the cache when possible. */
 function runnableOf(code: string): { js: string; syntax: unknown } {
     const hit = runnable.get(code);
     if (hit) {
@@ -167,19 +282,27 @@ function runnableOf(code: string): { js: string; syntax: unknown } {
 }
 
 /**
- * Scripts may be written in TypeScript. Where a transpiler was registered
- * (background), types are stripped with formatting preserved; contexts
- * without one (the page hook) receive already-transpiled code.
+ * Returns a script's source as JavaScript: transpiled where a transpiler is
+ * registered ({@link setTranspiler}), with the formatting preserved;
+ * unchanged where none is (those contexts receive transpiled code) or when
+ * it fails to transpile. Results are cached by source.
  */
 export function toRunnableJs(code: string): string {
     return runnableOf(code).js;
 }
 
 /**
- * Compile from full source. A script is ACTIVE when its top level
- * registers at least one handler; one that registers nothing (a module,
- * or an entry whose handlers are off for its current params) compiles
- * inactive (exports importable, params allowed).
+ * Compiles a script from its full source: runs its top level synchronously
+ * with a `tweak` wired by `overrides` and collects what it registers.
+ *
+ * A script is active when its top level registers at least one handler. One
+ * that registers nothing (a module or an entry whose handlers are off for
+ * its current params) compiles inactive: its exports are importable and its
+ * params allowed. Registrations after the top level has finished (after an
+ * `await`, in a callback) are ignored and logged as errors.
+ *
+ * Never throws: a syntax error or an error thrown by the top level becomes
+ * {@link CompiledScript.error}.
  */
 export function compileScript(code: string, overrides?: ResApiOverrides): CompiledScript {
     const meta = defaultMeta();
@@ -206,8 +329,8 @@ export function compileScript(code: string, overrides?: ResApiOverrides): Compil
     } catch (e: any) {
         meta.routes = [];
         finishMeta(meta);
-        // the raw TS that the failed transpile left is rejected wherever its
-        // first type is, without a position: the transpiler's error has the real one
+        // The raw TS that the failed transpile left is rejected wherever its
+        // first type is, without a position: the transpiler's error has the real one.
         const at = e?.name === "SyntaxError" && syntax?.loc?.line;
         const error = at ? `SyntaxError: ${String(syntax.message).replace(/\s*\(\d+:\d+\)$/, "")} (line ${at})` : e && e.stack ? e.stack : String(e);
         return { meta, handlers: emptyHandlers(), error, code, paramDefs: owner.defs };
@@ -215,11 +338,26 @@ export function compileScript(code: string, overrides?: ResApiOverrides): Compil
 }
 
 /**
- * Run a tweak's module (a file its entry imports) with the `tweak` of the
- * tweak whose top level is running, so what it registers, its params and
- * its stores are that tweak's; false when no top level is running.
+ * Runs a tweak's module (a file its entry imports) with the `tweak` of the
+ * tweak whose top level is running, so what it registers, its params and its
+ * stores are that tweak's. The overlay uses it for the libraries its entry
+ * imports.
+ *
+ * @param require The module's own `require`.
+ * @param moduleObj The module's `module`; its code fills `exports`.
+ * @param logSink Receives the module's `console` output. Default: the context's `console`.
+ * @returns False, without running anything, when no top level is running.
  */
-export function runInTweak(code: string, name: string, require: (spec: string) => any, moduleObj: { exports: any }, logSink?: ResApiOverrides["logSink"]): boolean {
+export function runInTweak(
+    code: string,
+    name: string,
+    require: (spec: string) => any,
+    moduleObj: {
+        /** The module's exports, set or filled by its code. */
+        exports: any;
+    },
+    logSink?: ResApiOverrides["logSink"]
+): boolean {
     const top = collectors[collectors.length - 1];
     const host = top && collectorOf.get(top)?.host;
     if (!host) return false;
@@ -229,12 +367,12 @@ export function runInTweak(code: string, name: string, require: (spec: string) =
 
 const stubs = new WeakSet<object>();
 
-/** a value that came from a stubbed import (meta-only compiles) */
+/** Whether the value came from a stubbed import (meta-only compiles). */
 function isStub(x: unknown): boolean {
     return typeof x === "function" && stubs.has(x as object);
 }
 
-/** a route that mentions a stubbed import — its real value is only known once imports resolve */
+/** Whether a route mentions a stubbed import: its real value is only known once imports resolve. */
 function mentionsStub(route: unknown): boolean {
     if (isStub(route)) return true;
     const parts: unknown[] = Array.isArray(route) ? route : route && typeof route === "object" ? [(route as any).url, (route as any).exclude] : [];
@@ -242,9 +380,13 @@ function mentionsStub(route: unknown): boolean {
 }
 
 /**
- * Module stub for meta-only compiles (scriptStore.saveScript): imports
- * resolve to a callable/gettable proxy so top-level code that references
- * library exports doesn't throw before its handlers register.
+ * Makes a module stub for meta-only compiles (save time): an import that
+ * can't be resolved gives this, so top-level code that uses its exports
+ * doesn't throw before its handlers register.
+ *
+ * Every property of the stub is the stub, calling it returns the stub and it
+ * converts to `""`. The compiler recognizes it: params, stores and routes
+ * built from it are left unknown instead of failing.
  */
 export function makeStubModule(): any {
     const stub: any = new Proxy(function () {}, {
@@ -255,13 +397,19 @@ export function makeStubModule(): any {
     return stub;
 }
 
-/** a data file as the compilers see it: its path (with `.json`/`.svg`) and text */
+/** A data file as the compilers see it. */
 export interface DataFileSource {
+    /** Its path, with its extension (`.json`, `.svg`, …). */
     path: string;
+    /** Its stored text (a raster image's `data:` URL). */
     text: string;
 }
 
-/** `extra` over `stored`, by path */
+/**
+ * The data files `extra` over `stored`: an `extra` file replaces the stored
+ * one with the same path (compared case-insensitively). The `extra` files
+ * come first.
+ */
 export function withData(stored: DataFileSource[], extra: DataFileSource[] | undefined): DataFileSource[] {
     if (!extra?.length) return stored;
     const paths = new Set(extra.map((d) => d.path.toLowerCase()));
@@ -277,23 +425,28 @@ class DataFileImportError extends Error {
     fatalImport = true;
 }
 
-/** an import that leaves the importer's bundle: never stubbed */
+/** Importing a file outside the importer's bundle (its tweak's folder). Never stubbed. */
 class BundleImportError extends Error {
     fatalImport = true;
 }
 
-/** a data file or package import error: never stubbed (see PackageImportError) */
+/**
+ * Whether an import error must fail the importer's compile, even where
+ * unresolved imports are stubbed: a data file, package or bundle import
+ * error (see `PackageImportError`).
+ */
 export function isFatalImportError(e: unknown): boolean {
     return !!(e && (e as any).fatalImport === true);
 }
 
+/** Sets `e`'s stack to its message plus the line where `code` imports `spec` (`(line N)`), when found. */
 function at(e: any, code: string | undefined, spec: string): any {
     const line = code === undefined ? undefined : importLine(code, spec);
     e.stack = line ? `Error: ${e.message} (line ${line})` : `Error: ${e.message}`;
     return e;
 }
 
-/** offset of the first character `JSON.parse` rejects (V8's "Unexpected token" message has no position) */
+/** The offset of the first character `JSON.parse` rejects in `text` (V8's "Unexpected token" message has no position). */
 function jsonErrorOffset(text: string): number {
     let i = 0;
     const fail = (): never => {
@@ -348,7 +501,11 @@ function jsonErrorOffset(text: string): number {
     }
 }
 
-/** `JSON.parse` error → "path:line:col message" (positions from V8's "at position N", Firefox's "line L column C", or located) */
+/**
+ * Formats a `JSON.parse` error as `"<path>:<line>:<col> is not valid JSON"`
+ * plus the reason. The position comes from V8's "at position N", Firefox's
+ * "line L column C" or, failing both, {@link jsonErrorOffset}.
+ */
 function jsonError(path: string, text: string, e: any): string {
     const msg = String(e?.message ?? e);
     let line: number;
@@ -369,7 +526,12 @@ function jsonError(path: string, text: string, e: any): string {
     return `${path}:${line}:${col} is not valid JSON — ${clean}`;
 }
 
-/** parse a data file's text (fresh each import: handlers mutating it don't leak across scripts) */
+/**
+ * Parses a data file's text, afresh for each import so that handlers
+ * mutating the value don't leak into other scripts.
+ *
+ * @throws DataFileImportError when it isn't valid JSON.
+ */
 function parseDataFile(spec: string, d: DataFileSource): any {
     try {
         return dataFileValue(d.path, d.text);
@@ -379,25 +541,69 @@ function parseDataFile(spec: string, d: DataFileSource): any {
 }
 
 /**
- * Module registry over the stored scripts and data files: an ES `import`
- * resolves like TypeScript (shared/scriptImports: relative to the
- * importer's folder, bare from the root, case-insensitive, "./x", "x.ts"
- * match the script named "x", "./a.json" the data file). Libs compile
- * lazily and memoize; circular imports get the partially-initialized
- * exports. `resolveFrom(name)` is the `require` of the script named
- * `name`; `resolve` resolves from the root. A bundle's bare import loads its
- * dependency's downloaded package (shared/packageImports); a URL import
- * fails. `deps` collects the imported script names, data file paths and
- * package URLs.
+ * Makes a module registry over the stored scripts and data files, which
+ * gives each script its `require`.
+ *
+ * - An import resolves like TypeScript (`scriptImports.ts`): relative to the
+ *   importer's folder, bare from the root, case-insensitively; `"./x"` and
+ *   `"x.ts"` match the script named "x", `"./a.json"` the data file.
+ * - Built-ins (`react`, `valtio`, …) resolve to the extension's own copies,
+ *   unless a script or data file has that path.
+ * - A bundle's bare import loads its `package.json` dependency's downloaded
+ *   package (`packageImports.ts`); a URL import fails.
+ * - Libraries run lazily and once, then are cached; during a script's top level
+ *   they run with that script's `tweak` and are cached for that run only,
+ *   so what they register, their params and their stores are its. A
+ *   circular import gets the partially initialized exports.
+ *
+ * Errors thrown by an import (unknown script, missing data file or bad JSON,
+ * a package not downloaded yet, a file outside the tweak's folder) get the
+ * importer's `(line N)` when they must fail it ({@link isFatalImportError}).
+ *
+ * @param scripts The stored scripts; the first one with a given name wins.
+ * @param overridesFor The {@link ResApiOverrides} a library runs with outside a top level.
+ * @returns `resolveFrom(name)`, the `require` of the script named `name`;
+ *   `resolve`, which resolves from the root; and `deps`, which collects the
+ *   imported script names, data file paths, `package.json` paths and package
+ *   URLs (with a cached library's own deps added for each importer; callers
+ *   clear it between scripts).
  */
 export function makeModuleResolver(
-    scripts: { id: string; name: string; code: string }[],
-    overridesFor: (s: { id: string; name: string; code: string }) => ResApiOverrides,
-    opts?: { stubUnresolved?: boolean; dataFiles?: DataFileSource[]; packages?: PackageModules }
-): { resolve: (spec: string) => any; resolveFrom: (importer: string) => (spec: string) => any; deps: Set<string> } {
-    // a bundle's modules run once per entry run, with the entry's `tweak`: their
+    scripts: {
+        /** The script's id. */
+        id: string;
+        /** The script's name (its path). */
+        name: string;
+        /** The script's source. */
+        code: string;
+    }[],
+    overridesFor: (s: {
+        /** The library's id. */
+        id: string;
+        /** The library's name. */
+        name: string;
+        /** The library's source. */
+        code: string;
+    }) => ResApiOverrides,
+    opts?: {
+        /** Meta-only compiles: an unknown script import, a built-in that can't load and a library that throws give a stub ({@link makeStubModule}) instead of an error. */
+        stubUnresolved?: boolean;
+        /** The data files scripts can import. */
+        dataFiles?: DataFileSource[];
+        /** The downloaded packages bare imports load. */
+        packages?: PackageModules;
+    }
+): {
+    /** The `require` of a script at the root. */
+    resolve: (spec: string) => any;
+    /** The `require` of the script named `importer` (one per name). */
+    resolveFrom: (importer: string) => (spec: string) => any;
+    /** What the imports resolved so far used. */
+    deps: Set<string>;
+} {
+    // A bundle's modules run once per entry run, with the entry's `tweak`: their
     // registrations, params and stores are the entry's (so a module cached
-    // for another run would miss them); outside a run (a late import), once
+    // for another run would miss them). Outside a run (a late import), once.
     const shared = { cache: new Map<string, any>(), compiling: new Set<string>() };
     const perRun = new WeakMap<ScriptHandlers, typeof shared>();
     const runOf = (): { modules: typeof shared; host?: TweakHost } => {
@@ -409,8 +615,8 @@ export function makeModuleResolver(
         return { modules: m, host };
     };
     const deps = new Set<string>();
-    // what each library imports, transitively: a second importer of a cached
-    // library gets its deps too (callers clear `deps` between scripts)
+    // What each library imports, transitively: a second importer of a cached
+    // library gets its deps too (callers clear `deps` between scripts).
     const libDeps = new Map<string, Set<string>>();
     const loading: Set<string>[] = [];
     const addDep = (d: string) => {
@@ -430,7 +636,7 @@ export function makeModuleResolver(
     );
     const byName = new Map<string, { id: string; name: string; code: string }>();
     for (const s of scripts) if (!byName.has(s.name)) byName.set(s.name, s);
-    // a downloaded package's own `require("react")` gets the built-in too (one React copy), unless it's React itself
+    // A downloaded package's own `require("react")` gets the built-in too (one React copy), unless it's React itself.
     const loadPackage = makePackageLoader(opts?.packages, (spec, from) => {
         if (!builtinSpec(spec) || /^https:\/\/unpkg\.com\/(react|react-dom|scheduler|valtio)@/.test(from)) return undefined;
         return { module: builtinModule(spec) };
@@ -453,7 +659,7 @@ export function makeModuleResolver(
                 return builtinModule(spec, byName.get(importer)?.code);
             } catch (e: any) {
                 if (isFatalImportError(e)) throw e;
-                if (opts?.stubUnresolved) return makeStubModule(); // meta-only, React not loaded
+                if (opts?.stubUnresolved) return makeStubModule(); // Meta-only, React not loaded.
                 throw new PackageImportError(e?.message ?? String(e));
             }
         }
@@ -496,18 +702,18 @@ export function makeModuleResolver(
         }
         const lib = byName.get(key)!;
         addDep(lib.name);
-        if (compiling.has(key)) return cache.get(key); // cycle: partial exports
+        if (compiling.has(key)) return cache.get(key); // A cycle: partial exports.
         compiling.add(key);
         const own = new Set<string>();
         libDeps.set(key, own);
         const moduleObj = { exports: {} as any };
-        cache.set(key, moduleObj.exports); // early, for cycles
+        cache.set(key, moduleObj.exports); // Early, for cycles.
         const js = toRunnableJs(lib.code);
         // eslint-disable-next-line no-new-func
         const libOverrides = overridesFor(lib);
-        // the lib's own top-level registrations make IT active (it's compiled
+        // The lib's own top-level registrations make IT active (it's compiled
         // on its own as a script too); recipes it exports and the importer
-        // calls register into the importer's collector
+        // calls register into the importer's collector.
         loading.push(own);
         try {
             if (host) scriptFunction(js, lib.name)(host, makeForwardingConsole(libOverrides.logSink), resolveFrom(lib.name), moduleObj, moduleObj.exports);
@@ -531,7 +737,7 @@ export function makeModuleResolver(
                 throw e;
             }
             if (!opts?.stubUnresolved) throw e;
-            // meta-only: a broken library is inert, not the importer's compile error
+            // Meta-only: a broken library is inert, not the importer's compile error.
             const stub = makeStubModule();
             cache.set(key, stub);
             return stub;
@@ -545,19 +751,42 @@ export function makeModuleResolver(
 }
 
 /**
- * Meta-only compile of one script against the stored scripts (save time):
- * imports resolve to the REAL libraries where a script by that name exists
- * — params/routes built from imported values (e.g. a param definition
- * exported by a module) are captured — and to silent stubs otherwise.
- * `target` replaces any stored script with the same id.
+ * Compiles one script against the stored scripts for its metadata (save
+ * time). Its imports resolve to the real libraries where they exist, so
+ * params and routes built from imported values (a param definition exported
+ * by a module) are captured. They resolve to silent stubs otherwise
+ * ({@link makeStubModule}); data file, package and bundle import errors
+ * still fail it.
+ *
+ * @param target The script to compile; it replaces any stored script with the same id.
+ * @param scripts The stored scripts.
+ * @param paramValues The stored parameter values, by script id.
+ * @returns The compile, plus `deps`: what it imports (see {@link makeModuleResolver}).
  */
 export function compileWithLibs(
-    target: { id: string; name: string; code: string },
-    scripts: { id: string; name: string; code: string }[],
+    target: {
+        /** The script's id. */
+        id: string;
+        /** The script's name (its path). */
+        name: string;
+        /** The script's source. */
+        code: string;
+    },
+    scripts: {
+        /** The script's id. */
+        id: string;
+        /** The script's name (its path). */
+        name: string;
+        /** The script's source. */
+        code: string;
+    }[],
     paramValues?: { [scriptId: string]: Record<string, any> | undefined },
     dataFiles?: DataFileSource[],
     packages?: PackageModules
-): CompiledScript & { deps: string[] } {
+): CompiledScript & {
+    /** What the script imports: script names, data file paths, `package.json` paths and package URLs. */
+    deps: string[];
+} {
     const resolver = makeModuleResolver(
         [target, ...scripts.filter((s) => s.id !== target.id)],
         (lib) => ({ paramValues: paramValues?.[lib.id] }),
@@ -568,17 +797,33 @@ export function compileWithLibs(
 }
 
 /**
- * `compileWithLibs` for several of the stored scripts at once (a library
- * changed: every script importing it): one resolver, so each library is
- * transpiled and run once for all of them.
+ * {@link compileWithLibs} for several of the stored scripts at once (when a
+ * library changed: every script importing it), with one resolver, so each
+ * library is transpiled and run once for all of them.
+ *
+ * @param ids The scripts to compile; ids not in `scripts` are skipped.
+ * @returns Each compile, by script id.
  */
 export function compileManyWithLibs(
     ids: string[],
-    scripts: { id: string; name: string; code: string }[],
+    scripts: {
+        /** The script's id. */
+        id: string;
+        /** The script's name (its path). */
+        name: string;
+        /** The script's source. */
+        code: string;
+    }[],
     paramValues?: { [scriptId: string]: Record<string, any> | undefined },
     dataFiles?: DataFileSource[],
     packages?: PackageModules
-): Map<string, CompiledScript & { deps: string[] }> {
+): Map<
+    string,
+    CompiledScript & {
+        /** What the script imports: script names, data file paths, `package.json` paths and package URLs. */
+        deps: string[];
+    }
+> {
     const resolver = makeModuleResolver(scripts, (lib) => ({ paramValues: paramValues?.[lib.id] }), { stubUnresolved: true, dataFiles, packages });
     const out = new Map<string, CompiledScript & { deps: string[] }>();
     for (const id of ids) {
@@ -592,12 +837,12 @@ export function compileManyWithLibs(
 }
 
 /**
- * Wrap a module resolver so unknown/missing imports resolve to a silent
- * stub instead of throwing. Used by the MV3 sandbox analyze path (and
- * anywhere meta capture must not depend on the import graph): a script
- * whose `import` fails must still run its body so its registrations
- * and params are captured — otherwise it silently stores with no handlers.
- * A data file or package that fails to import is still the importer's error.
+ * Wraps a module resolver so an import that fails resolves to a silent stub
+ * ({@link makeStubModule}) instead of throwing, for meta capture that must
+ * not depend on the import graph: a script whose `import` fails must still
+ * run its body so its registrations and params are captured (otherwise it
+ * stores with no handlers). A {@link isFatalImportError | fatal} import
+ * error (data file, package, bundle) is still thrown.
  */
 export function resolveWithStubFallback(resolve: (spec: string) => any): (spec: string) => any {
     return (spec) => {
@@ -625,7 +870,7 @@ function createCollector(): ScriptHandlers {
     };
 }
 
-/** Console shadow for compiled scripts: routed into the script's log sink. */
+/** The `console` a compiled script gets: one writing to `sink` (the context's own when there is none). */
 function makeForwardingConsole(sink?: ResApiOverrides["logSink"]): Console {
     return sink ? makeScriptConsole(sink) : console;
 }
@@ -633,13 +878,15 @@ function makeForwardingConsole(sink?: ResApiOverrides["logSink"]): Console {
 /**
  * The collector stack: registrations go to the script whose top level is
  * running right now (recipes exported by a module and called from an
- * importer's top level belong to the importer). Empty = too late.
+ * importer's top level belong to the importer). Empty: too late, nothing
+ * registers.
  */
 const collectors: ScriptHandlers[] = [];
-/** a collector's script: its name, its handles (`remote`), its stores, and its handler and store names (one numbering per script run) */
+/** A collector's script: its name, its handles (`remote`), its stores and its handler and store names (one numbering per script run). */
 type CollectorOwner = { name: string; remote?: ResApiOverrides["remote"]; run: StoreRun; host?: TweakHost };
 const collectorOf = new WeakMap<ScriptHandlers, CollectorOwner & { keyOf: ReturnType<typeof placeKeyer> }>();
 
+/** Runs `run` with `c` as the current collector, owned by `owner`. */
 function withCollector<T>(c: ScriptHandlers, owner: CollectorOwner, run: () => T): T {
     if (!collectorOf.has(c)) collectorOf.set(c, { ...owner, keyOf: placeKeyer() });
     collectors.push(c);
@@ -650,11 +897,12 @@ function withCollector<T>(c: ScriptHandlers, owner: CollectorOwner, run: () => T
     }
 }
 
+/** Every handler's route, by kind. */
 function routesOf(h: ScriptHandlers): RouteMeta[] {
     return [...h.onRequest, ...h.onResponseHeaders, ...h.replaceResponse, ...h.onResponseBody, ...h.onDocument, ...h.onOverlay].map((x) => x.route);
 }
 
-/** per-script state behind tweak.params */
+/** The per-script state behind `tweak.params`: the definitions declared so far, checked as they come. */
 function createOwner(storedValues?: Record<string, any>) {
     let defs: ParamTree | undefined;
     const isChildObject = (v: unknown): boolean => !!v && typeof v === "object" && !Array.isArray(v) && !isStub(v);
@@ -703,15 +951,15 @@ function createOwner(storedValues?: Record<string, any>) {
         return { known, unknown };
     };
     return {
-        /** `next` declared: its defs (with their parsers), raw values, and the stubbed ones' values */
+        /** Declares `next`: returns its defs (with their parsers), their raw values and the stubbed ones' values. Throws on an invalid or repeated definition. */
         declare(next: ParamTree, where: string): { known: ParamTree; raw: Record<string, any>; unknown: Record<string, any> } {
-            // defs that come from a stubbed import (meta-only compiles) are
-            // unknown here, not invalid: skip them — their values read as
-            // stubs — instead of failing the whole script
+            // Defs that come from a stubbed import (meta-only compiles) are
+            // unknown here, not invalid: skip them (their values read as
+            // stubs) instead of failing the whole script.
             if (isStub(next)) return next as any;
             if (!next || typeof next !== "object" || Array.isArray(next)) throw new Error(`${where}: expected an object of parameter definitions`);
-            // `known` keeps the parsers (to resolve values); `defs` — stored,
-            // messaged, diffed — holds them stripped
+            // `known` keeps the parsers (to resolve values); `defs` (stored,
+            // messaged, diffed) holds them stripped.
             const { known, unknown } = readGroup(next, where, "");
             if (Object.keys(known).length) defs = { ...(defs || {}), ...serializableParamTree(known) };
             return { known, raw: resolveParamValues(known, storedValues), unknown };
@@ -723,9 +971,9 @@ function createOwner(storedValues?: Record<string, any>) {
 }
 
 /**
- * `tweak.globalStore`, `tweak.tabStore`, `tweak.pageStore` (each name once,
- * across all three) and `tweak.siteStore` (its own names) for one compiled
- * instance, by name (tweakStores names the unnamed ones)
+ * Makes `tweak.globalStore`, `tweak.tabStore`, `tweak.pageStore` (each name
+ * once, across all three) and `tweak.siteStore` (its own names) for one
+ * compiled instance, by name (`tweakStores` names the unnamed ones).
  */
 function makeStores(overrides?: ResApiOverrides): NamedStores {
     const names = new Map<string, string>();
@@ -733,7 +981,7 @@ function makeStores(overrides?: ResApiOverrides): NamedStores {
     let local: ReplicaHub | null = null;
     return {
         globalStore: (name, initial, opts) => {
-            // save-time compile: arguments built from a stubbed import aren't known yet
+            // Save-time compile: arguments built from a stubbed import aren't known yet.
             if (isStub(name) || isStub(initial) || isStub(opts)) return makeStubModule();
             claimStoreName(names, "tweak.globalStore", name, initial);
             const persist = storePersist(name, opts, "tweak.globalStore");
@@ -767,7 +1015,7 @@ function makeStores(overrides?: ResApiOverrides): NamedStores {
     };
 }
 
-/** `tweak.fetch`: background code, or the overlay (with `pageFetch`) */
+/** Makes `tweak.fetch` for background code or for the overlay (with `pageFetch`). */
 function makeFetch(overrides?: ResApiOverrides): (input: RequestInfo | URL, init?: WtFetchInit) => Promise<Response> {
     return async (input, init) => {
         const { init: rest, from, bypass } = splitFetchInit(init);
@@ -779,7 +1027,7 @@ function makeFetch(overrides?: ResApiOverrides): (input: RequestInfo | URL, init
     };
 }
 
-/** `tweak.storage.set("$store:…")` writes behind a store's back: warn (the store owns the key) */
+/** Wraps `tweak.storage` to warn on `set("$store:…")`, which writes behind a store's back (the store owns the key). */
 function guardStoreKeys(storage: { get(key: string): any; set(key: string, value: any): any }, overrides?: ResApiOverrides) {
     return {
         get: (key: string) => storage.get(key),
@@ -795,10 +1043,12 @@ function guardStoreKeys(storage: { get(key: string): any; set(key: string, value
 }
 
 /**
- * `module`: the script or library whose code this shim is given to. Makes
- * the host its code runs with (each file's `tweak`: the same internals —
- * stores, params, handler collection) and its run (its stores, and how many
- * unnamed ones each file made: its top level's, and late calls').
+ * Makes the host a script's code runs with (each file's `tweak`, all with
+ * the same internals: stores, params, handler collection) and its run (its
+ * stores and how many unnamed ones each file made, at its top level and in
+ * late calls).
+ *
+ * @param module The script or library whose code this shim is given to.
  */
 function makeShim(owner: ReturnType<typeof createOwner>, overrides: ResApiOverrides | undefined, module: string): { host: TweakHost; run: StoreRun } {
     const running = () => {
@@ -809,10 +1059,10 @@ function makeShim(owner: ReturnType<typeof createOwner>, overrides: ResApiOverri
         const name = api || kind;
         const top = collectors[collectors.length - 1];
         const c = top && collectorOf.get(top);
-        // a library's exported function, called from the script's top level: numbered in the library, the script's handle
+        // A library's exported function, called from the script's top level: numbered in the library, the script's handle.
         const lib = c && c.name !== module ? module : undefined;
         const toRemote = lib !== undefined ? c!.remote : overrides?.remote;
-        // page/overlay registrations hand back an RPC handle; in the background it's inert
+        // Page and overlay registrations hand back an RPC handle; in the background it's inert.
         const remote = (r?: RouteMeta) => (!api ? undefined : r && toRemote ? toRemote(r) : inertRemote(REMOTE_FROM_BACKGROUND));
         if (!top) {
             const msg = `tweak.${name} called after the script's top level finished — handlers must be registered synchronously at top level (not after await / in callbacks); ignored`;
@@ -820,10 +1070,10 @@ function makeShim(owner: ReturnType<typeof createOwner>, overrides: ResApiOverri
             else console.error("[TangiTweak]", msg);
             return remote();
         }
-        if (typeof route === "function" && fn === undefined && !mentionsStub(route)) normalizeRoute(kind, route, 0, api); // throws the "first argument" error
+        if (typeof route === "function" && fn === undefined && !mentionsStub(route)) normalizeRoute(kind, route, 0, api); // Throws the "first argument" error.
         if (typeof fn !== "function") throw new Error(`tweak.${name}: second argument must be the handler function`);
         const list = top[kind];
-        // save-time compile with stubbed imports: route unknown until analyzed
+        // Save-time compile with stubbed imports: the route is unknown until analyzed.
         const r: RouteMeta = mentionsStub(route)
             ? { kind, index: list.length, url: [], exclude: [], ...(api === "onSite" || api === "onPage" ? { api, world: api === "onSite" ? "page" : "isolated" } : {}) }
             : normalizeRoute(kind, route, list.length, api);
@@ -871,24 +1121,32 @@ function makeShim(owner: ReturnType<typeof createOwner>, overrides: ResApiOverri
     return { host, run };
 }
 
-/** what an onSite handler uses that only trusted code may */
+/**
+ * What an onSite handler uses that only trusted code may: stores and
+ * handles. Each is named by the variable it is bound to or by the call
+ * itself (`tweak.pageStore`, …) when used directly.
+ */
 export interface SiteUse {
-    /** 0-based: which `tweak.onSite(` (or `tweak.onSite(`) call of the source it is */
+    /** Which `tweak.onSite(` call of the source it is, 0-based. */
     nth: number;
-    /** the stores it uses: the variable names (or `tweak.pageStore` / `tweak.tabStore` / …), by kind */
+    /** The `tweak.pageStore`s it uses. */
     pageStore: string[];
+    /** The `tweak.tabStore`s it uses; absent when none. */
     tabStore?: string[];
+    /** The `tweak.globalStore`s it uses. */
     globalStore: string[];
-    /** the handles (variables bound to `tweak.onSite` / `tweak.onPage` / `tweak.onOverlay`) it uses */
+    /** The handles (variables bound to `tweak.onSite`, `tweak.onPage` or `tweak.onOverlay`) it uses. */
     handles: string[];
 }
 
 /**
- * Per `tweak.onSite(` call, the stores (`tweak.pageStore` / `tweak.tabStore` / `tweak.globalStore`)
- * and handles its handler uses — by the variables they're bound to, or the
- * calls themselves — including in the outside functions it calls or
- * passes (scriptLint: scopes resolved, so a local of the same name doesn't
- * count). Only calls that use any.
+ * For each `tweak.onSite(` call whose handler uses stores (`tweak.pageStore`,
+ * `tweak.tabStore`, `tweak.globalStore`) or handles, what it uses: by the
+ * variables they're bound to or the calls themselves. Uses in the outside
+ * functions it calls or passes count too (`scriptLint.ts`, with scopes
+ * resolved, so a local of the same name doesn't).
+ *
+ * @returns The calls that use any, in source order; none when the code doesn't parse.
  */
 export function onSiteUses(code: string): SiteUse[] {
     const a = analyzeScript(code);
@@ -903,7 +1161,12 @@ export function onSiteUses(code: string): SiteUse[] {
     return out;
 }
 
-/** each net route's registration call in the analysis: the first `tweak.<api>(` on its line (the entry's own code: a module's routes aren't in it), once per call (a loop registering several routes from one call: warn once) */
+/**
+ * Each kept network route's registration call in the analysis: the first
+ * `tweak.<api>(` on its line, in the entry's own code (a module's routes
+ * aren't in it). Once per call, so a loop registering several routes from
+ * one call warns once.
+ */
 function netCalls(a: LintAnalysis, routes: RouteMeta[], keep: (r: RouteMeta) => boolean): { r: RouteMeta; call: NetAnalysis }[] {
     const out: { r: RouteMeta; call: NetAnalysis }[] = [];
     const seen = new Set<NetAnalysis>();
@@ -918,12 +1181,17 @@ function netCalls(a: LintAnalysis, routes: RouteMeta[], keep: (r: RouteMeta) => 
 }
 
 /**
- * Warnings ("onRequest #N: …", Problems view) for code in `rules` handlers
- * that looks meant to run per request — logging, fetching, timers, store
- * writes (scriptLint's no-rules-side-effects, the outside functions a
- * handler calls included). A rules handler runs once, when scripts load,
- * to compute a fixed browser rule; the browser applies the rule itself, so
- * that code never runs for a request.
+ * Warnings for the Problems view (`"onRequest #N: …"`) about code in `rules`
+ * handlers that looks meant to run per request: logging, fetching, timers,
+ * store writes (`scriptLint.ts`'s no-rules-side-effects, the outside
+ * functions a handler calls included).
+ *
+ * A rules handler runs once, when scripts load, to compute a fixed browser
+ * rule; the browser applies the rule itself, so that code never runs for a
+ * request.
+ *
+ * @param routes The script's compiled routes (`meta.routes`), which give each handler's strategy and line.
+ * @returns The warnings; none when no route uses `rules` or the code doesn't parse.
  */
 export function rulesProblems(code: string, routes: RouteMeta[]): string[] {
     if (!routes.some((r) => r.strategy === "rules" && r.line)) return [];
@@ -935,10 +1203,10 @@ export function rulesProblems(code: string, routes: RouteMeta[]): string[] {
 }
 
 /**
- * Network handlers (by their registration line, as rulesProblems) that use
- * `tweak.siteStore` — directly or through a variable bound to it:
- * "onRequest #N: uses `x` — …" (an error in the Problems view). They have
- * no page, so it throws there.
+ * Errors for the Problems view (`"onRequest #N: uses \`x\` …"`) about network
+ * handlers (found by their registration line, as in {@link rulesProblems})
+ * that use `tweak.siteStore`, directly or through a variable bound to it.
+ * They have no page, so it throws there.
  */
 function netSiteStoreProblems(a: LintAnalysis, routes: RouteMeta[]): string[] {
     const out: string[] = [];
@@ -948,11 +1216,18 @@ function netSiteStoreProblems(a: LintAnalysis, routes: RouteMeta[]): string[] {
 }
 
 /**
- * Warnings ("onSite #N: …", Problems view) for onSite handlers that use a
- * store or a handle: in the site's world stores throw and handle calls
- * throw (SiteCannotCallError). Errors for network handlers that use
- * `tweak.siteStore` (which needs a page). And scriptLint's static selector and
- * shortcut checks, as "line N (error|warning): …".
+ * Problems view lines for a script's page-related mistakes:
+ *
+ * - Warnings (`"onSite #N: …"`) for onSite handlers that use a store or a
+ *   handle: in the site's world stores throw and handle calls throw
+ *   (`SiteCannotCallError`).
+ * - Errors for network handlers that use `tweak.siteStore` (which needs a
+ *   page).
+ * - `scriptLint.ts`'s static selector and shortcut checks, as
+ *   `"line N (error|warning): …"`.
+ *
+ * @param routes The script's compiled routes (`meta.routes`).
+ * @returns The lines; none when the code mentions none of these APIs or doesn't parse.
  */
 export function siteProblems(code: string, routes: RouteMeta[]): string[] {
     const site = /\bonSite\b/.test(code);
@@ -964,7 +1239,7 @@ export function siteProblems(code: string, routes: RouteMeta[]): string[] {
     const out: string[] = net ? netSiteStoreProblems(a, routes) : [];
     const uses = site ? onSiteUses(code) : [];
     const names = (n: string[]) => n.map((x) => `\`${x}\``).join(", ");
-    // the code's own calls, in order (a module's, run with its tweak, are numbered with them)
+    // The code's own calls, in order (a module's, run with its tweak, are numbered with them).
     let nth = 0;
     for (const r of uses.length ? routes : []) {
         if (r.kind !== "onDocument" || placeOf(r) !== "onSite" || r.lib !== undefined || r.file !== undefined) continue;

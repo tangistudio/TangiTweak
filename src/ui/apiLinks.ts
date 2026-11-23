@@ -76,7 +76,10 @@ export function typeRefs(parts: SymbolPart[] | undefined, index: Map<string, Spa
     (parts ?? []).forEach((p, i) => {
         const start = offset;
         offset += p.text.length;
-        if (!TYPE_PART_KINDS.has(p.kind)) return;
+        // TypeScript 6 marks a qualified type reference's last part
+        // (`TangiTweak.RouteOptions`) as plain text
+        const qualified = p.kind === "text" && parts![i - 1]?.text === "." && parts![i - 2]?.kind === "moduleName";
+        if (!TYPE_PART_KINDS.has(p.kind) && !qualified) return;
         let name = p.text;
         for (let j = i - 1; j >= 1 && parts![j].text === "." && parts![j - 1].kind === "moduleName"; j -= 2) name = parts![j - 1].text + "." + name;
         const span = resolveTypeName(index, name, inTypings);

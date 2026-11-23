@@ -52,6 +52,8 @@ describe("api type links", () => {
         expect(typeRefs([t("x: "), t("Route", "aliasName")], index, true)).toEqual([{ start: 3, end: 8, name: "Route", span: sp(100, 5) }]);
         expect(typeRefs([t("x: "), t("Route", "aliasName")], index, false)).toEqual([]);
         expect(typeRefs(undefined, index, false)).toEqual([]);
+        // TypeScript 6 gives a qualified reference's name the "text" kind
+        expect(typeRefs([t("x: "), t("TangiTweak", "moduleName"), t("."), t("Route")], index, false).map((r) => r.name)).toEqual(["TangiTweak.Route"]);
     });
 
     it("maps a {@link} target (a whole declaration) to the declaration's name", () => {

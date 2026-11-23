@@ -1,10 +1,32 @@
 /**
- * `tangitweak/test`: local & CI test harness for TangiTweak scripts and bundles.
+ * The loader behind `"tangitweak/test"`: {@link loadTweak} loads a tweak in
+ * Node and runs it the way the extension does, for local and CI tests.
  *
- * Runs TangiTweak's real compiler, module/data resolver, DNR rules probe,
- * `bodyOps` network pipeline, `StoreOwner` + `SiteStoreHost` Valtio replicas,
- * and `onSite` / `onPage` / `onOverlay` DOM + React 19 Shadow DOM lifecycles.
+ * It runs TangiTweak's real compiler and module/data resolver, the DNR rules
+ * probe (with Chrome's rule checks), the `bodyOps` network pipeline walked
+ * through each browser's layers, `StoreOwner` + `SiteStoreHost` Valtio
+ * replicas and the `onSite` / `onPage` / `onOverlay` DOM and React 19 Shadow
+ * DOM lifecycles. Nothing reaches a browser, the helper or the network:
+ * npm packages come from the `node_modules` folders above the tweaks loaded
+ * so far. A request's response comes from the test (its `upstream`, else
+ * {@link LoadTweakOptions.fetch}, else an empty `200`).
+ *
+ * - {@link loadTweak} returns a {@link LoadedTweak}: the background side
+ *   (network handlers, stores, storage, params) plus {@link LoadedTweak.simulate}
+ *   for requests and {@link LoadedTweak.openPage} for tabs.
+ * - Each {@link TestPage} is a tab with its own happy-dom document. Its MAIN
+ *   world (`onSite`, the website's own globals) and isolated world (`onPage`)
+ *   share the DOM but not JavaScript globals; each overlay frame has a window
+ *   of its own.
+ *
+ * The fixtures exported by `"tangitweak/test"` (`test`, `createTweakTest`,
+ * `mount`) load one copy per test through {@link loadTweak}. Call it
+ * directly for a tweak written inside the test.
+ *
+ * @see docs/testing.md
+ * @module
  */
+
 import "./dom";
 import "../shared/transpile";
 import * as fsSync from "node:fs";
@@ -86,131 +108,392 @@ const packageRoots = new Set<string>();
 setPackageFetch(localUnpkg(() => [...packageRoots]));
 
 
+/**
+ * A tweak written inside the test, for {@link loadTweak}.
+ *
+ * Without `files["package.json"]` (or with it and `code`), `code` is the
+ * entry script and every other file in `files` is a companion script or data
+ * file it can import. With a `package.json` and no `code`, the package's
+ * entry runs and its imports are crawled from `files`: one that isn't there
+ * (and isn't in {@link LoadTweakOptions.mocks}) fails the load.
+ *
+ * @example
+ * await using t = await loadTweak({
+ *     code: `import { tweak } from "tangitweak";
+ * import { HOST } from "./config";
+ * tweak.onRequest({ url: HOST + "/ads/*", strategy: "rules" }, () => ({ block: true }));`,
+ *     files: { "config.ts": `export const HOST = "*://example.com";` },
+ * });
+ */
 export interface InlineTweakSource {
-    /** Entry script TypeScript / TSX source code (optional when `files["package.json"]` is provided: its entry runs). */
+    /** The entry script's TypeScript / TSX source. Optional when `files["package.json"]` is given: its entry runs instead. */
     code?: string;
-    /** Entry script name/path (defaults to `"script"`). */
+    /**
+     * The entry script's path in the tweak, with or without extension. It's
+     * saved as `<name>.tsx`, so `name: "lib/main"` imports siblings as
+     * `./other` from `lib/`.
+     *
+     * @defaultValue `"script"`
+     */
     name?: string;
-    /** Companion scripts, a `package.json`, or data files (`path -> content`). */
+    /** Companion scripts, a `package.json` or data files, by path in the tweak (`path -> content`). */
     files?: Record<string, string>;
 }
 
+/**
+ * What {@link loadTweak} loads: a path or `file:` URL to a tweak's folder, its
+ * `package.json` or a file in it; or an {@link InlineTweakSource}.
+ *
+ * A folder must hold a `package.json`. A relative string path resolves
+ * against {@link LoadTweakOptions.cwd} when set; otherwise a path starting
+ * with `.` resolves against the calling test file's folder when it exists
+ * there. Anything else resolves against `process.cwd()`.
+ */
 export type TweakSource = string | URL | InlineTweakSource;
 
+/**
+ * Options for {@link loadTweak}. The fixtures' `createTweakTest` passes its
+ * `params`, `entry`, `browser`, `realLimits`, `mocks` and `storage` through
+ * to the same options.
+ *
+ * @example
+ * await using t = await loadTweak("../", {
+ *     params: { env: "prod" },
+ *     storage: { seen: 3 },
+ *     mocks: { dayjs: () => ({ format: () => "2026-01-01" }) },
+ *     browser: "firefox",
+ * });
+ */
 export interface LoadTweakOptions {
-    /** Base directory for resolving relative string paths (defaults to caller file directory or `process.cwd()`). */
+    /** Base directory for a relative string {@link TweakSource}. Without it, the calling test file's folder (for `./` paths that exist there) or `process.cwd()`. */
     cwd?: string;
-    /** Override `tweak.params` defaults (`{ key: val }` or `{ [scriptName]: { key: val } }`). */
+    /**
+     * Param values to use instead of the defaults: `{ key: val }` for every
+     * script or `{ [scriptName]: { key: val } }` per script. It's read per
+     * script only when every key names a script and holds an object.
+     */
     params?: Record<string, any>;
-    /** Seed `tweak.storage` values (`{ key: val }` or `{ [scriptName]: { key: val } }`). */
+    /**
+     * Starting `tweak.storage` values (structured clones): `{ key: val }` for
+     * every script or `{ [scriptName]: { key: val } }` per script. It's read
+     * per script only when every key is a script's exact name and holds an
+     * object.
+     */
     storage?: Record<string, any>;
-    /** Seed `tweak.globalStore` values by store name (`{ storeName: { ... } }`). */
+    /** Starting `tweak.globalStore` values by store id (`{ id: { … } }`), seeded into each entry script's storage as the store's persisted state. */
     stores?: Record<string, Record<string, any>>;
-    /** Mock imported modules by specifier (`{ "dayjs": mockExports, "./lib": mockExports }`). */
+    /**
+     * Modules to replace, by import specifier (`{ dayjs: exports, "./lib": exports }`).
+     *
+     * The value is what the import gets: an object's keys become named
+     * exports and the object itself the `default` (unless it has a `default`
+     * key); anything else becomes the default export. A mocked package isn't
+     * loaded from `node_modules`. `vi.mock` doesn't reach the tweak's code,
+     * which this loader compiles.
+     */
     mocks?: Record<string, any>;
-    /** Custom upstream `fetch` used by `tweak.fetch` and as fallback upstream in `simulate()`. */
+    /**
+     * The server behind the handlers: what `tweak.fetch` reaches (directly
+     * with `bypass`) and what {@link LoadedTweak.simulate} calls without an
+     * {@link SimulateRequestInit.upstream} get.
+     *
+     * @defaultValue An empty `200` response.
+     */
     fetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
-    /** Keep going instead of throwing when a script has compile, DNR rule, or `onSite` errors (inspect `t.errors`). */
+    /**
+     * Keep going instead of throwing when a script has compile, DNR rule or
+     * `onSite` errors: they're listed in {@link LoadedTweak.errors}. Also
+     * stops {@link LoadedTweak.simulate} from throwing when the rules it
+     * re-checks have errors.
+     *
+     * @defaultValue `false`
+     */
     allowCompileErrors?: boolean;
-    /** The browser whose limits requests follow: `"chrome"` (MV3, default), `"chromium-mv2"` or `"firefox"`. */
+    /**
+     * The browser whose limits requests and pages follow: `"chrome"` (MV3),
+     * `"chromium-mv2"` or `"firefox"`. It decides which handlers are turned
+     * off, what each strategy sees and whether a page's CSP moves `onSite`
+     * to the isolated world.
+     *
+     * @defaultValue `"chrome"`
+     */
     browser?: BrowserName;
     /**
-     * Requests walk the strategies as the browser's layers, each with its real
-     * limits (default `true`). `false`: every matching handler runs in one
-     * chain, whatever its strategy.
+     * Whether requests walk the strategies as the browser's layers
+     * (`page → rules → extension → debugger → helper`), each with its real
+     * limits. `false`: every matching handler runs in one chain, whatever its
+     * strategy. No handler is turned off for the browser.
+     *
+     * @defaultValue `true`
      */
     realLimits?: boolean;
-    /** The entry file to run instead of the package.json's (`"./only-misc.ts"`). */
+    /** The entry file to run instead of the `package.json`'s `main` (`"./only-misc.ts"`). Needs a tweak on disk with a `package.json`. */
     entry?: string;
-    /** Files added to (or replacing) the tweak folder's (`path -> content`). */
+    /** Files added to (or replacing) the tweak folder's on disk, by path in the tweak (`path -> content`). */
     files?: Record<string, string>;
 }
 
+/**
+ * One line the tweak logged: a `console` call, an uncaught handler error, or
+ * a notice from the stores or the network pipeline.
+ *
+ * @example
+ * expect(t.logs).toContainEqual(expect.objectContaining({ level: "error", message: expect.stringContaining("[onSite]") }));
+ */
 export interface TweakLogEntry {
+    /** Name of the script that logged it: its path in the tweak, without extension. */
     script: string;
+    /** Severity. Uncaught handler and teardown errors are `"error"`. */
     level: "debug" | "info" | "warn" | "error";
+    /** The text, after a `[source]` tag when the line has a source (`[console.log]`, `[onSite]`, `[store]`, `[overlay]`…). */
     message: string;
+    /** On network pipeline lines: whether a handler only observed the request (`"observed"`) or changed it (`"modified"`). */
     kind?: string;
 }
 
+/** One entry script of a loaded tweak, as {@link LoadedTweak.scripts} lists it. */
 export interface LoadedScriptInfo {
+    /** The loader's id for the script (`"s1"`, `"s2"`…, in load order), the key its storage and stores live under. */
     id: string;
+    /** The script's path in the tweak, without extension (`"index"`, `"features/palette/index"`). */
     name: string;
+    /** The `tweak.params(...)` definitions it declared, if any. */
     paramDefs?: ParamTree;
+    /** Its module exports, from the latest compile. */
     exports: any;
+    /** The declarativeNetRequest rules its `strategy: "rules"` handlers generate, after Chrome's checks. */
     rules: RuleSpec[];
 }
 
+/**
+ * The request a {@link SimulateRequestInit.upstream} function answers: what
+ * reached the server after the handlers changed it.
+ */
 export interface UpstreamRequest {
+    /** The request URL. */
     url: string;
+    /** The method, upper-case (`"GET"`). */
     method: string;
+    /** The request headers as the handlers left them, lower-case names. */
     headers: Record<string, string>;
+    /** The request body; `undefined` when it has none. */
     body?: {
+        /** The body's bytes (UTF-8 for a string body). */
         readonly raw: Uint8Array;
+        /** The body decoded as UTF-8. */
         readonly text: string;
+        /** The request's `content-type` header, if any. */
         readonly contentType?: string;
+        /**
+         * Parses {@link UpstreamRequest.body.text} as JSON.
+         *
+         * @throws SyntaxError when it isn't JSON.
+         */
         json<T = any>(): T;
+        /** Parses {@link UpstreamRequest.body.text} as `application/x-www-form-urlencoded`. */
         formData(): URLSearchParams;
     };
+    /** The webRequest resource type (`"xmlhttprequest"`, `"main_frame"`, `"sub_frame"`, `"script"`…). */
     resourceType: string;
+    /** The tab the request came from. */
     tabId: number;
+    /** The URL of the tab's page. */
     tabUrl: string;
 }
 
+/**
+ * A fake server response for {@link SimulateRequestInit.upstream}.
+ *
+ * @example
+ * await t.simulate("https://api.example.com/flags", {
+ *     upstream: { status: 200, body: { newNav: false } },
+ * });
+ */
 export interface UpstreamResponseInit {
+    /**
+     * The status code.
+     *
+     * @defaultValue `200`
+     */
     status?: number;
+    /** The response headers. */
     headers?: Record<string, string> | Headers;
+    /**
+     * The body. An object or array is sent as JSON (with `content-type:
+     * application/json` unless set).
+     *
+     * @defaultValue `""`
+     */
     body?: string | Uint8Array | Record<string, any> | any[];
+    /** The `content-type`, when `headers` doesn't set one. */
     contentType?: string;
 }
 
+/**
+ * The request {@link LoadedTweak.simulate} sends through the handlers, and
+ * the fake server that answers it.
+ *
+ * @example
+ * const res = await t.simulate("https://api.example.com/save", {
+ *     method: "POST",
+ *     body: { id: 1 },
+ *     upstream: (req) => ({ body: { echoed: req.body?.json() } }),
+ * });
+ */
 export interface SimulateRequestInit {
+    /**
+     * The method.
+     *
+     * @defaultValue `"GET"`
+     */
     method?: string;
+    /** The request headers. */
     headers?: Record<string, string> | Headers;
+    /** The request body. An object or array is sent as JSON (with `content-type: application/json` unless set). */
     body?: string | Uint8Array | Record<string, any> | any[];
+    /**
+     * What kind of request it is: `"fetch"` / `"xhr"` (fetch/XHR),
+     * `"document"` (a top-level page load), `"iframe"` or a webRequest type
+     * such as `"script"` or `"image"`. Each strategy sees only some kinds
+     * (`page` only the page's own fetch/XHR).
+     *
+     * @defaultValue A fetch/XHR (`"xmlhttprequest"`).
+     */
     resourceType?: string;
+    /**
+     * The tab it comes from: the handlers' `tabStore`s are this tab's. A
+     * tab's first `"document"` request is one the `debugger` strategy may
+     * miss.
+     *
+     * @defaultValue `1`
+     */
     tabId?: number;
+    /**
+     * The URL of the tab's page.
+     *
+     * @defaultValue The request URL.
+     */
     tabUrl?: string;
+    /**
+     * The page it comes from: the handlers' `pageStore`s are this page's.
+     *
+     * @defaultValue `"tab:<tabId>"`
+     */
     pageId?: string;
+    /**
+     * Run only the handlers of this strategy, in one chain, without the
+     * browser's layers ({@link SimulatedResponse.skipped} and
+     * {@link SimulatedResponse.decidedBy} stay empty).
+     */
     strategy?: Strategy;
+    /**
+     * The fake server: a response or a function from the
+     * {@link UpstreamRequest} that reached it to one. It answers only when no
+     * handler blocked, redirected or replaced the request.
+     *
+     * @defaultValue {@link LoadTweakOptions.fetch}, else an empty `200`.
+     */
     upstream?: UpstreamResponseInit | Response | ((req: UpstreamRequest) => UpstreamResponseInit | Response | Promise<UpstreamResponseInit | Response>);
 }
 
+/**
+ * What {@link LoadedTweak.simulate} returns: the response the page would get
+ * and what the handlers did to the request.
+ *
+ * @example
+ * const res = await t.simulate("https://api.example.com/flags");
+ * expect(res.json()).toEqual({ newNav: true });
+ * expect(res.decidedBy).toMatchObject({ strategy: "helper", outcome: "replace" });
+ */
 export interface SimulatedResponse {
+    /**
+     * What happened: `"blocked"`, `"redirected"` or `"replaced"` by a
+     * handler, `"modified"` (request headers, response headers or body
+     * changed) or `"passthrough"` (untouched).
+     */
     action: "passthrough" | "modified" | "replaced" | "redirected" | "blocked";
-    /** Handlers that matched but didn't run, and why (the extension's words). */
+    /** Handlers that matched but didn't run, each with the extension's reason. */
     skipped: SkippedHandler[];
     /** The handler whose block, redirect or replacement produced the result (`null`: none). */
     decidedBy: DecidedBy | null;
+    /** Whether a handler blocked it (`action === "blocked"`); {@link SimulatedResponse.status} is then `0`. */
     blocked: boolean;
+    /** Where a handler redirected it (status `307`); `null` if none did. */
     redirectedTo: string | null;
+    /** Whether a handler replaced the response (`action === "replaced"`). */
     replaced: boolean;
+    /** Whether anything changed, replacements included (`"modified"` or `"replaced"`). */
     modified: boolean;
+    /** The requested URL (see {@link SimulatedResponse.redirectedTo} for a redirect's target). */
     url: string;
+    /** The status code: `0` when blocked, `307` when redirected. */
     status: number;
+    /** The request headers as they left the handlers, lower-case names. */
     requestHeaders: Record<string, string>;
+    /** The response headers as the handlers left them, lower-case names. */
     headers: Record<string, string>;
+    /** The response body, as text or bytes depending on how it was produced: read it with `text()`, `json()` or `bytes()`. */
     body: string | Uint8Array;
+    /** The body as text (UTF-8 decoded when binary). */
     text(): string;
+    /**
+     * The body parsed as JSON.
+     *
+     * @throws SyntaxError when it isn't JSON.
+     */
     json<T = any>(): T;
+    /** The body's bytes (UTF-8 encoded when text). */
     bytes(): Uint8Array;
 }
 
+/**
+ * Options for {@link LoadedTweak.openPage}.
+ *
+ * @example
+ * const page = await t.openPage("https://app.example.com/", {
+ *     html: `<main id="app"></main>`,
+ *     phase: "document_start",
+ *     setup: (win) => Object.assign(win, { APP_CONFIG: { beta: true } }),
+ * });
+ */
 export interface OpenPageOptions {
-    /** Initial `document.body.innerHTML`. */
+    /** The page's starting `document.body.innerHTML`. */
     html?: string;
-    /** Initial document phase (`"document_start"`, `"document_end"` [default], or `"document_idle"`). */
+    /**
+     * The document phase the page opens in: `"document_start"`,
+     * `"document_end"` or `"document_idle"`. Handlers for later phases wait
+     * for {@link TestPage.advanceTo}.
+     *
+     * @defaultValue `"document_end"`
+     */
     phase?: DocumentWhen;
-    /** Tab ID used for `tweak.tabStore` and network simulation (default `1`). */
+    /**
+     * The tab ID: pages with the same one share `tweak.tabStore`s; each page
+     * gets its own `pageStore`s. Also used for the page's requests.
+     *
+     * @defaultValue `1`
+     */
     tabId?: number;
-    /** Wrap `ctx.mount(...)` in closed shadow roots just like TangiTweak in production (default `true`). */
+    /**
+     * Wrap each `ctx.mount(...)` in a closed shadow root, as TangiTweak does
+     * in the browser. `false`: a plain `<div>` in the page.
+     *
+     * @defaultValue `true`
+     */
     shadow?: boolean;
-    /** Route `window.fetch` through `t.simulate(...)` while the page is open (default `true`). */
+    /**
+     * Route the page `window.fetch` through {@link LoadedTweak.simulate} (with
+     * this page's tab and page IDs) while the page is open. A blocked request
+     * rejects with a `TypeError`, as in the browser.
+     *
+     * @defaultValue `true`
+     */
     interceptFetch?: boolean;
     /**
-     * The page's Content-Security-Policy. Without `'unsafe-eval'` in
-     * `script-src` (or `default-src`), `onSite` handlers run in the isolated
-     * world instead, as in the extension, and a problem says so.
+     * The page's Content-Security-Policy. On `"chromium-mv2"` and
+     * `"firefox"`, without `'unsafe-eval'` in `script-src` (or `default-src`),
+     * `onSite` handlers run in the isolated world instead (as in the
+     * extension) and a warning says so ({@link LoadedTweak.warnings}).
      */
     csp?: string;
     /**
@@ -221,79 +504,357 @@ export interface OpenPageOptions {
     setup?: (window: Window & typeof globalThis) => void;
 }
 
+/** One live `ctx.mount(...)` root on a {@link TestPage}. */
 export interface PageMountSlot {
+    /** Name of the script that mounted it. */
     script: string;
+    /** The world whose handler mounted it: `"page"` (`onSite`) or `"isolated"` (`onPage`). */
     world: "page" | "isolated";
+    /** The page element it's mounted at; `null` for a floating mount without a target. */
     anchor: Element | null;
+    /** The element in the page holding it: a `<tangitweak-mount>` with a closed shadow root (with {@link OpenPageOptions.shadow} `false`: the container itself). */
     host: Element;
+    /** The element React renders into, inside the closed shadow root. */
     container: HTMLElement;
 }
 
+/**
+ * A tab with the tweak running in it, from {@link LoadedTweak.openPage}.
+ *
+ * It has its own happy-dom document. `onSite` handlers run in its MAIN
+ * world (the website's `window`), `onPage` handlers in an isolated world with
+ * separate globals over the same DOM. Each overlay runs in a frame of its own.
+ * Methods that act on the page settle the resulting work (as
+ * {@link TestPage.flush}) before they resolve.
+ *
+ * @example
+ * await using page = await t.openPage("https://app.example.com/", { html: `<nav></nav>` });
+ * await page.pressKey("Alt+Shift+P");
+ * expect(page.mountFor("nav")?.textContent).toContain("Palette");
+ */
 export interface TestPage {
+    /** The page's current URL, absolute ({@link TestPage.navigate} changes it). */
     readonly url: string;
+    /** The website's own `window`: the MAIN world, where `onSite` handlers run. */
     readonly window: Window & typeof globalThis;
+    /** The page's document, shared by both worlds. The tweak's mounts are in closed shadow roots: use {@link TestPage.mounts} to reach them. */
     readonly document: Document;
-    /** Active `ctx.mount(...)` slots (including containers inside closed shadow roots). */
+    /** The live `ctx.mount(...)` roots of every script in both worlds, including those inside closed shadow roots. */
     readonly mounts: PageMountSlot[];
-    /** Returns the mount container whose anchor matches `selector` (or the first mount when omitted). */
+    /**
+     * The container of the first mount whose anchor matches `selector` (of
+     * the first mount when it's omitted); `null` when none.
+     *
+     * @example
+     * const badge = page.mountFor("#cart");
+     * expect(badge?.textContent).toBe("3");
+     */
     mountFor(selector?: string): HTMLElement | null;
-    /** Primary overlay frame `<body>`, or `null` when no script ran `tweak.onOverlay` on this page. */
+    /** The `<body>` of the first script's overlay frame; `null` when no script ran `tweak.onOverlay` on this page. */
     readonly overlay: HTMLElement | null;
-    /** Overlay frame `<body>` for a specific script name, or `null`. */
+    /**
+     * The `<body>` of one script's overlay frame; `null` when it has none.
+     * Without `scriptName`, the same as {@link TestPage.overlay}.
+     *
+     * @throws Error for an unknown script name.
+     * @example
+     * expect(page.overlayFor("features/hud/index")?.textContent).toContain("HUD");
+     */
     overlayFor(scriptName?: string): HTMLElement | null;
-    /** Live Valtio proxy for `tweak.siteStore(name)` in the page world. */
+    /**
+     * This page's live Valtio proxy for a `tweak.siteStore`, the copy in the
+     * MAIN world. Changes reach `onPage` and the overlay after a message hop:
+     * await {@link TestPage.flush}.
+     *
+     * Prefer the `tweak` fixture's `store(store, page)`, which takes the
+     * imported store.
+     *
+     * @param name The store's internal name: `"<file>#<n>"`, its file's path
+     *   without extension and its position among that file's unnamed stores.
+     * @param initial Its value if it doesn't exist yet (default `{}`).
+     * @param scriptName The script that owns it (default: the entry script).
+     * @throws Error for an unknown script name.
+     * @example
+     * page.siteStore("features/auth/state#0").loggedIn = true;
+     * await page.flush();
+     */
     siteStore<T extends Record<string, any> = Record<string, any>>(name: string, initial?: T, scriptName?: string): T;
-    /** Advance document lifecycle to `"document_end"` or `"document_idle"`. */
+    /**
+     * Moves the document to a later phase (`"document_end"` or
+     * `"document_idle"`) and runs the handlers waiting for it. An earlier
+     * phase than the current one changes nothing.
+     *
+     * @example
+     * const page = await t.openPage(url, { phase: "document_start" });
+     * await page.advanceTo("document_idle");
+     */
     advanceTo(phase: DocumentWhen): Promise<void>;
-    /** Simulate an in-place SPA navigation: updates `location.href`, starts and stops handlers whose route sets `navigation`, and calls `ctx.onNavigate` callbacks. */
+    /**
+     * Simulates an in-place SPA navigation: it updates `location.href`,
+     * starts and stops the handlers whose route sets `navigation` and then
+     * calls `ctx.onNavigate` callbacks. A relative URL resolves against the
+     * current one.
+     *
+     * @example
+     * await page.navigate("/settings");
+     */
     navigate(nextUrl: string | URL): Promise<void>;
-    /** Simulate saving / hot-reloading scripts on the live page (`autoRestore`, `ctx.patch`, Fast Refresh). */
+    /**
+     * Simulates saving the tweak while the page is open: the scripts re-run
+     * as a hot reload (`autoRestore`, `ctx.patch`, Fast Refresh), not a page
+     * reload.
+     *
+     * @example
+     * await page.reload();
+     */
     reload(): Promise<void>;
-    /** Dispatch a keyboard shortcut combo (e.g. `"Mod+Shift+K"` or `"Alt+P"`) to test `ctx.shortcut(...)`. */
+    /**
+     * Dispatches a `keydown` for a shortcut combo (e.g. `"Mod+Shift+K"` or
+     * `"Alt+P"`) to test `ctx.shortcut(...)`.
+     *
+     * @param target Where to dispatch it (default: the focused element, else `<body>`).
+     * @returns Whether something handled it (the event was cancelled).
+     * @example
+     * expect(await page.pressKey("Alt+Shift+P")).toBe(true);
+     */
     pressKey(combo: string, target?: EventTarget): Promise<boolean>;
-    /** Settle microtasks, store sync hops, RPC calls, and React renders. */
+    /**
+     * Lets microtasks, timers, store sync hops, RPC calls and React renders
+     * settle, by yielding to the event loop a fixed number of times.
+     *
+     * @example
+     * button.click();
+     * await page.flush();
+     */
     flush(): Promise<void>;
-    /** Tear down all handlers, unmount React roots, and restore `ctx.patch` & `window.fetch`. */
+    /**
+     * Closes the tab. It stops all handlers (undoing their `ctx.patch`es),
+     * unmounts React roots and closes the overlays and the window. Then it
+     * drops the page's `pageStore`s. Calling it again does nothing.
+     *
+     * @example
+     * await page.close();
+     */
     close(): Promise<void>;
+    /** Closes the page ({@link TestPage.close}) at the end of an `await using` block. */
     [Symbol.asyncDispose](): Promise<void>;
 }
 
 /**
  * Which store a `tweak.globalStore` / `tabStore` / `pageStore` /
- * `siteStore` call made: a global store's id, or its file (the bundle path
+ * `siteStore` call made: a global store's id; otherwise its file (the bundle path
  * without extension) and its position among that file's unnamed stores.
+ *
+ * Plain Vitest imports of the tweak record it on each store they make, so
+ * fixture tests can find their own copy of an imported store: the loader
+ * names an unnamed store `"<file>#<n>"`.
  */
-export type StoreIdentity = { kind: "globalStore"; id: string } | { kind: "tabStore" | "pageStore" | "siteStore"; file: string; n: number };
+export type StoreIdentity =
+    | {
+          /** A `tweak.globalStore`. */
+          kind: "globalStore";
+          /** The id it was declared with. */
+          id: string;
+      }
+    | {
+          /** Which unnamed kind of store it is. */
+          kind: "tabStore" | "pageStore" | "siteStore";
+          /** The declaring file's path in the tweak, without extension (`"features/palette/state"`). */
+          file: string;
+          /** Its 0-based position among that file's `tabStore` / `pageStore` / `siteStore` calls, counted together. */
+          n: number;
+      };
 
-/** what `tangitweak/test` reads off a loaded tweak and its pages (not public API) */
+/**
+ * The key under which a {@link LoadedTweak} carries its {@link LoaderAccess}
+ * (a non-enumerable property). Internal to `"tangitweak/test"`: the fixtures
+ * use it to find a test's copy of an imported store.
+ */
 export const LOADER = Symbol.for("tangitweak.loader");
+/** What the fixtures read off a {@link LoadedTweak} through {@link LOADER}. Not public API. */
 export interface LoaderAccess {
-    /** this copy's store for `id` (on `page`: that tab's copy; else the background's) */
+    /**
+     * This copy's store for `id`: on `page`, that tab's copy (the isolated
+     * world's; the MAIN world's for a `siteStore`); otherwise the background's (tab
+     * `1`, page `"tab:1"`).
+     *
+     * @throws Error when `page` is closed or for a `siteStore` without a page.
+     */
     store(id: StoreIdentity, initial: object, page?: TestPage): object;
 }
 
+/**
+ * A tweak loaded by {@link loadTweak}: its compiled scripts and background
+ * side (network handlers, stores, storage, params), with
+ * {@link LoadedTweak.simulate} for requests and {@link LoadedTweak.openPage}
+ * for tabs. Dispose it when the test ends (`await using`, or
+ * {@link LoadedTweak.dispose}).
+ *
+ * @example
+ * await using t = await loadTweak("../");
+ * expect(t.errors).toEqual([]);
+ * const page = await t.openPage("https://app.example.com/");
+ * expect((await t.simulate("https://ads.example.com/x")).blocked).toBe(true);
+ */
 export interface LoadedTweak {
+    /** The tweak's parsed `package.json`; `undefined` for an inline tweak without one. */
     readonly manifest?: Manifest;
+    /** The same object as {@link LoadedTweak.manifest}, typed as its package metadata. */
     readonly metadata?: PackageMetadata;
+    /** What the entry scripts use (URL patterns, strategies, `onSite` code, overlays) and the `package.json`'s `connect` hosts and npm dependencies. */
     readonly capabilities: Capabilities;
+    /** The entry scripts, from the latest compile. */
     readonly scripts: LoadedScriptInfo[];
+    /** The module exports of the first entry script. */
     readonly exports: any;
+    /**
+     * The declarativeNetRequest rules the `strategy: "rules"` handlers
+     * generate, after Chrome's checks (RE2, size, counts). They're
+     * re-generated on each {@link LoadedTweak.simulate}, against the current
+     * stores and params.
+     */
     readonly rules: RuleSpec[];
+    /**
+     * The problems that break the tweak, most prefixed with the script name:
+     * compile errors, `onSite` problems and rejected rules. Only non-empty
+     * with {@link LoadTweakOptions.allowCompileErrors}: otherwise
+     * {@link loadTweak} throws.
+     */
     readonly errors: string[];
+    /**
+     * The problems shown as warnings: `rules` handler warnings, rules near
+     * Chrome's limits, handlers the browser turns off (with
+     * {@link LoadTweakOptions.realLimits}) and page notices, such as a CSP
+     * that moved `onSite` to the isolated world.
+     */
     readonly warnings: string[];
+    /** Everything the tweak logged so far, in order. The array is live: it grows as the tweak logs. */
     readonly logs: TweakLogEntry[];
+    /**
+     * Each script's `tweak.storage`, read and written directly. Values are
+     * copied with `structuredClone` both ways.
+     *
+     * @example
+     * t.storage.set("seen", 3);
+     * await t.openPage(url);
+     * expect(t.storage.snapshot()).toEqual({ seen: 4 });
+     */
     readonly storage: {
+        /**
+         * A copy of the value at `key` (`undefined` when unset).
+         *
+         * @param scriptName The script whose storage to read (default: the entry script).
+         * @throws Error for an unknown script name.
+         */
         get(key: string, scriptName?: string): any;
+        /**
+         * Stores a copy of `value` at `key`. Scripts read it on their next
+         * `tweak.storage.get`.
+         *
+         * @param scriptName The script whose storage to write (default: the entry script).
+         * @throws Error for an unknown script name.
+         */
         set(key: string, value: any, scriptName?: string): void;
+        /**
+         * A copy of all of a script's storage, without the `$store:` keys
+         * that hold persisted stores.
+         *
+         * @param scriptName The script whose storage to read (default: the entry script).
+         * @throws Error for an unknown script name.
+         */
         snapshot(scriptName?: string): Record<string, any>;
     };
+    /**
+     * The background's live copy of a `tweak.globalStore`, the one network
+     * handlers see. Pages hold their own copies, synced asynchronously.
+     *
+     * @param name The store's id.
+     * @param initial Its value if it doesn't exist yet (default `{}`).
+     * @param scriptName The script that owns it (default: the entry script).
+     * @throws Error for an unknown script name.
+     * @example
+     * t.store("state").mocking = false;
+     * expect((await t.simulate(API)).replaced).toBe(false);
+     */
     store<T extends Record<string, any> = Record<string, any>>(name: string, initial?: T, scriptName?: string): T;
+    /**
+     * The background's live copy of a tab's `tweak.tabStore`.
+     *
+     * @param name The store's internal name, `"<file>#<n>"` (see {@link StoreIdentity}).
+     * @param tabId The tab (default `1`).
+     * @param initial Its value if it doesn't exist yet (default `{}`).
+     * @param scriptName The script that owns it (default: the entry script).
+     * @throws Error for an unknown script name.
+     * @example
+     * t.tabStore("features/net/state#0", 2).staging = true;
+     */
     tabStore<T extends Record<string, any> = Record<string, any>>(name: string, tabId?: number, initial?: T, scriptName?: string): T;
+    /**
+     * The background's live copy of a page's `tweak.pageStore`.
+     *
+     * @param name The store's internal name, `"<file>#<n>"` (see {@link StoreIdentity}).
+     * @param pageId The page (default `"tab:1"`, what {@link LoadedTweak.simulate} uses for tab `1`).
+     * @param initial Its value if it doesn't exist yet (default `{}`).
+     * @param scriptName The script that owns it (default: the entry script).
+     * @throws Error for an unknown script name.
+     * @example
+     * t.pageStore("features/net/state#1").hits = 0;
+     */
     pageStore<T extends Record<string, any> = Record<string, any>>(name: string, pageId?: string, initial?: T, scriptName?: string): T;
+    /**
+     * Changes param values, as the user would in the popup: they're merged
+     * into the current ones, every script recompiles and each open page
+     * hot-reloads.
+     *
+     * @param values `{ key: val }` or `{ [scriptName]: { key: val } }` (as {@link LoadTweakOptions.params}).
+     * @param scriptName Apply `values` to this script only.
+     * @throws Error for an unknown script name or when the recompile has
+     *   errors (unless {@link LoadTweakOptions.allowCompileErrors}).
+     * @example
+     * await t.setParams({ env: "staging" });
+     */
     setParams(values: Record<string, any>, scriptName?: string): Promise<void>;
+    /**
+     * Sends a request through the tweak's network handlers (in the
+     * background world) and returns the response the page would get.
+     *
+     * With {@link LoadTweakOptions.realLimits} (the default) and no
+     * {@link SimulateRequestInit.strategy}, it walks the strategies in the
+     * extension's order (`page → rules → extension → debugger → helper`), each
+     * with the chosen browser's limits. The first block, redirect or
+     * replacement stops it; the layers in front of it then run their response
+     * handlers. Otherwise every matching handler runs in one chain.
+     *
+     * @throws Error when the `rules` handlers, re-checked against the current
+     *   stores and params, produce rule errors (unless
+     *   {@link LoadTweakOptions.allowCompileErrors}).
+     * @example
+     * const res = await t.simulate("https://api.example.com/flags", {
+     *     upstream: { body: { newNav: false } },
+     * });
+     * expect(res.json()).toEqual({ newNav: true });
+     */
     simulate(url: string | URL, init?: SimulateRequestInit): Promise<SimulatedResponse>;
+    /**
+     * Opens a tab at `url` and runs the tweak's `onSite`, `onPage` and
+     * `onOverlay` handlers due in its starting phase, then settles (as
+     * {@link TestPage.flush}). Each call opens a new document; see
+     * {@link OpenPageOptions.tabId} for which stores pages share.
+     *
+     * @example
+     * await using page = await t.openPage("https://app.example.com/home", { html: `<main></main>` });
+     * expect(page.mounts).toHaveLength(1);
+     */
     openPage(url: string | URL, options?: OpenPageOptions): Promise<TestPage>;
+    /**
+     * Closes every open page and the background's store link. Call it when
+     * the test ends (or use `await using`).
+     *
+     * @example
+     * afterEach(() => t.dispose());
+     */
     dispose(): Promise<void>;
+    /** Disposes the tweak ({@link LoadedTweak.dispose}) at the end of an `await using` block. */
     [Symbol.asyncDispose](): Promise<void>;
 }
 
@@ -338,6 +899,15 @@ function resolveTargetPath(target: string | URL, cwd?: string): string {
     return nodePath.resolve(process.cwd(), target);
 }
 
+/**
+ * Every package file in a folder and its subfolders, as `/`-separated paths
+ * relative to it (each after `prefix`). Skips names starting with `.`,
+ * `node_modules` and `__tests__`.
+ *
+ * Internal to `"tangitweak/test"`: `mount` uses it to find a component's file.
+ *
+ * @param prefix Prepended to each path (used while recursing).
+ */
 export async function listDirFiles(dir: string, prefix = ""): Promise<string[]> {
     const entries = await fs.readdir(dir, { withFileTypes: true });
     const out: string[] = [];
@@ -465,7 +1035,13 @@ function serializeBody(body: SimulateRequestInit["body"], defaultMime?: string):
     return { raw: JSON.stringify(body), contentType: defaultMime || "application/json" };
 }
 
-/** whether a Content-Security-Policy lets the page `eval` (its `script-src`, else `default-src`) */
+/**
+ * Whether a Content-Security-Policy lets the page `eval`: its `script-src`
+ * directive (else `default-src`) allows `'unsafe-eval'`; also when neither is set.
+ * Directive names are case-insensitive and the first of a name counts.
+ *
+ * {@link LoadedTweak.openPage} uses it for {@link OpenPageOptions.csp}.
+ */
 export function cspAllowsEval(csp: string): boolean {
     const directives = new Map<string, string[]>();
     for (const part of csp.split(";")) {
@@ -519,7 +1095,7 @@ function setWindowUrl(win: Window & typeof globalThis, nextUrl: string): void {
 
 /**
  * Let microtasks, timers, store hops and React renders settle. No `act()`:
- * React's act queue is global, and concurrent tests (each with its own
+ * React's act queue is global; concurrent tests (each with its own
  * copy of the tweak) would overlap in it.
  */
 async function flushAsync(turns = 12, _withAct = false): Promise<void> {
@@ -544,8 +1120,35 @@ function buildKeyboardEventInit(combo: string): KeyboardEventInit {
 }
 
 /**
- * Load a tweak (its folder or package.json, or a file in it), or an inline
- * `{ code, files }` definition for unit and integration testing.
+ * Loads a tweak (its folder, its `package.json`, a file in it or an inline
+ * `{ code, files }` tweak) and runs it as the extension would, for unit and
+ * integration tests. The fixtures of `"tangitweak/test"` are built on it.
+ *
+ * It compiles every script with TangiTweak's compiler, resolves imports
+ * (npm packages from the `node_modules` folders above the tweak, never the
+ * network; {@link LoadTweakOptions.mocks} first), generates and checks the
+ * `rules` handlers' browser rules and starts the background store owner.
+ * Pages open with {@link LoadedTweak.openPage}; requests go through the
+ * network handlers with {@link LoadedTweak.simulate}. Each call returns an
+ * independent copy with its own stores and storage, so tests using separate
+ * copies can run concurrently.
+ *
+ * @param source What to load (see {@link TweakSource}).
+ * @throws Error when Node lacks a global `URLPattern` (Node.js 23.8 or later
+ *   needed), the source has no script, an import isn't found (and isn't
+ *   mocked) or a script has compile, rule or `onSite` errors (unless
+ *   {@link LoadTweakOptions.allowCompileErrors}).
+ * @example
+ * import { expect, it } from "vitest";
+ * import { loadTweak } from "tangitweak/test";
+ *
+ * it("blocks ads", async () => {
+ *     await using t = await loadTweak({
+ *         code: `import { tweak } from "tangitweak";
+ * tweak.onRequest({ url: "*://ads.example.com/*", strategy: "rules" }, () => ({ block: true }));`,
+ *     });
+ *     expect((await t.simulate("https://ads.example.com/x")).blocked).toBe(true);
+ * });
  */
 export async function loadTweak(source: TweakSource, options: LoadTweakOptions = {}): Promise<LoadedTweak> {
     if (typeof (globalThis as any).URLPattern === "undefined") {

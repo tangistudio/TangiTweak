@@ -107,6 +107,12 @@ const tree = (d: Dir = root, prefix = ""): string[] => [
     ...[...d.dirs].flatMap(([n, sub]) => [prefix + n + "/", ...tree(sub, prefix + n + "/")]),
 ];
 
+/** what the background sent the Editor */
+const sent: any[] = [];
+vi.mock("../src/background/engine/logs", async (orig) => ({ ...(await orig<any>()), broadcastToUi: (m: any) => sent.push(m) }));
+/** the phases of the progress steps sent, in order, repeats collapsed */
+const phases = () => sent.filter((m) => m.type === "progress").map((m) => m.phase).filter((p, i, a) => p !== a[i - 1]);
+
 vi.mock("../src/shared/folderSync", async (orig) => ({ ...(await orig<any>()), loadSavedHandle: async () => fakeDir(root, "d"), saveHandle: async () => {}, clearSavedHandle: async () => {} }));
 
 const ss = () => import("../src/background/engine/scriptStore");
@@ -145,6 +151,7 @@ beforeEach(async () => {
     vi.resetModules();
     root = newDir();
     ops.length = 0;
+    sent.length = 0;
     storageListeners.length = 0;
     for (const k of Object.keys(store)) delete store[k];
 });
@@ -299,5 +306,67 @@ describe("folder sync: folders and data files", () => {
         expect(read("mock/rate-limits.json")).toBe(kept);
         expect(dirAt(".tangitweak-backup/mock")!.files.get(backups[0])!.text).toBe(kept === '{ "max": 1 }' ? '{ "max": 2 }' : '{ "max": 1 }');
         await sync.stop();
+    });
+
+    it("a sync pass lists and reads every file first, then compiles the scripts together and announces the change once", async () => {
+        // a tweak whose entry is listed before the data file and library it imports
+        put("app/package.json", bundlePkg("app"));
+        put("app/index.ts", `${IMPORTER.replace("./mock/", "./")}\nimport { c } from "./c";\nconsole.log(c);`);
+        put("app/c.ts", `import { b } from "./b";\nexport const c = b;`);
+        put("app/b.ts", "export const b = 1;");
+        put("app/rate-limits.json", '{ "max": 5 }');
+        await import("../src/shared/transpile");
+        const s = await ss();
+        let changes = 0;
+        s.onScriptsChanged(() => changes++);
+        const sync = await import("../src/background/folderSync");
+        await sync.startFromStoredHandle({ fresh: true });
+        expect(changes).toBe(1);
+        expect(phases()).toEqual(["listing", "reading", "compiling", null]);
+        const app = async () => (await s.listScripts()).find((x) => x.meta.name === "app/index")!;
+        expect((await app()).error).toBeNull();
+        expect((await app()).paramDefs?.max.default).toBe(5);
+
+        // a poll bringing several files (a branch switch) is one change too
+        await settled(sync);
+        sent.length = 0;
+        changes = 0;
+        put("app/d.ts", "export const d = 2;");
+        put("app/b.ts", `import { d } from "./d";\nexport const b = d;`);
+        put("app/rate-limits.json", '{ "max": 9 }');
+        await settled(sync);
+        expect(changes).toBe(1);
+        expect(phases()).toEqual(["reading", "compiling", null]);
+        expect((await app()).error).toBeNull();
+        expect((await app()).paramDefs?.max.default).toBe(9);
+        await sync.stop();
+    });
+
+    it("Import saves folders, data files and scripts as one change, the scripts compiled together", async () => {
+        await import("../src/shared/transpile");
+        const s = await ss();
+        let changes = 0;
+        s.onScriptsChanged(() => changes++);
+        const { importFiles } = await import("../src/background/engine/importFiles");
+        const r = await importFiles({
+            folders: ["app", "empty"],
+            dataFiles: [
+                { path: "app/package.json", text: bundlePkg("app") },
+                { path: "app/rate-limits.json", text: '{ "max": 7 }' },
+            ],
+            scripts: [
+                { id: "a", name: "app/index", code: `${IMPORTER.replace("./mock/", "./")}\nimport { b } from "./b";\nconsole.log(b);` },
+                { id: "b", name: "app/b", code: `import { c } from "./c";\nexport const b = c;` },
+                { id: "c", name: "app/c", code: "export const c = 1;" },
+            ],
+            deletes: [],
+        });
+        expect(r).toEqual({ failed: [] });
+        expect(changes).toBe(1);
+        expect(phases()).toEqual(["saving", "compiling", null]);
+        expect(await folders()).toEqual(["app", "empty"]);
+        const a = (await s.listScripts()).find((x) => x.id === "a")!;
+        expect(a.error).toBeNull();
+        expect(a.paramDefs?.max.default).toBe(7);
     });
 });

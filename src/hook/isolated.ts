@@ -80,7 +80,7 @@ import { FrameKeyOffers } from "../shared/frameKeys";
     let siteV = "";
     let siteHere = new Set<string>();
     const pageClient = new RpcClient((call) =>
-        window.postMessage({ source: "res-override-bridge", kind: "rpc.call", s, call, v: siteHere.has(call.h) ? siteV : undefined }, location.origin)
+        window.postMessage({ source: "res-override-bridge", kind: "rpc.call", s, call, v: siteHere.has(call.h) ? siteV : undefined }, "/")
     );
     // calls into its own onPage handlers: answered here (JSON copies, like any handle's)
     const local: RpcClient = new RpcClient((call) => exposer.answer(call, (r) => local.receive(r)));
@@ -192,7 +192,7 @@ import { FrameKeyOffers } from "../shared/frameKeys";
     const siteStores = () =>
         (site ??= new SiteMirrors({
             ctx: "isolated",
-            post: (m) => window.postMessage({ source: "res-override-bridge", ...m }, location.origin),
+            post: (m) => window.postMessage({ source: "res-override-bridge", ...m }, "/"),
             log: (_s, msg, level) => log(level, msg),
         }));
 

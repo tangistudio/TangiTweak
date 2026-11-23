@@ -9,6 +9,7 @@ import { Switch } from "../components/Switch";
 import { ParamTreeFields } from "../components/ParamField";
 import { IconPen } from "../components/icons";
 import type { PopupApi, ScriptInfo, ScriptParams } from "./api";
+import { TAB_NOTICE, type TabStatus } from "../../shared/tabStatus";
 
 type Load = { state: "loading" } | { state: "ready"; scripts: ScriptInfo[] } | { state: "error" };
 
@@ -32,8 +33,10 @@ export function Popup({ api }: { api: PopupApi }) {
     };
     // bumped on outside changes so open param folds re-fetch too
     const [version, setVersion] = useState(0);
+    const [tab, setTab] = useState<TabStatus>("ok");
     useEffect(() => {
         void refresh();
+        api.tabStatus().then(setTab, () => {});
         let t: ReturnType<typeof setTimeout> | undefined;
         const off = api.onChange?.(() => {
             clearTimeout(t);
@@ -69,6 +72,16 @@ export function Popup({ api }: { api: PopupApi }) {
                     Open Editor
                 </button>
             </div>
+            {tab !== "ok" && (
+                <div id="tab-notice" role="alert">
+                    {TAB_NOTICE[tab].lines.map((l, i) => (
+                        <div key={i} className={i ? undefined : "tab-notice-head"}>
+                            {l}
+                        </div>
+                    ))}
+                    <button onClick={() => void api.fixTab(tab)}>{TAB_NOTICE[tab].action}</button>
+                </div>
+            )}
             <ul id="script-list">
                 {visible.map((s) => (
                     <ScriptRow key={s.id} script={s} api={api} onChanged={refresh} version={version} activeHere={active.has(s.id)} />

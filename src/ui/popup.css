@@ -141,6 +141,24 @@ body.resizing * { pointer-events: none; }
     padding: 14px 12px;
     color: var(--fg-dim);
 }
+#tab-notice {
+    flex: none;
+    padding: 10px 12px;
+    background: var(--warn-tint);
+    border-bottom: 1px solid var(--border);
+    color: var(--fg-dim);
+}
+#tab-notice .tab-notice-head { color: var(--warn); font-weight: 600; }
+#tab-notice button {
+    margin-top: 8px;
+    background: var(--warn);
+    border: none;
+    color: #fff;
+    border-radius: 3px;
+    padding: 3px 10px;
+    font-size: 11px;
+    cursor: pointer;
+}
 .hidden { display: none; }
 
 .btn-icon {

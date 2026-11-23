@@ -4,7 +4,7 @@ Status: research only, no code changed. Written 2026-11. Line numbers refer to t
 
 ## TL;DR
 
-**Are we using web workers now?** Only for the Editor's type checking. Monaco's TypeScript language service runs in its own worker (`lib/monaco/vs/language/typescript/tsWorker.js`, loaded through `MonacoEnvironment.getWorkerUrl` in `src/ui/monacoSetup.ts:100-103`). Everything on the save path runs on main threads:
+**Are we using web workers now?** Only for the Editor's type checking. Monaco's TypeScript language service runs in its own worker (`lib/monaco/ts.worker.js`, loaded through `MonacoEnvironment.getWorkerUrl` in `src/ui/monacoSetup.ts`). Everything on the save path runs on main threads:
 - MV3: the TS to JS transpile and the top-level runs happen in the sandbox iframe (`src/background/sandbox.ts`) inside the offscreen document. The service worker only orchestrates.
 - MV2 and Firefox: they run in the background page.
 - Pages: the hook, bridge, isolated world and overlay run already-transpiled code with `new Function`.
@@ -211,7 +211,7 @@ Native (non-WASM) builds cannot run in a browser. They are listed only to show t
 | @swc/wasm-typescript | 4.05 MB, as one **JS** file with inlined wasm, so it counts toward AMO's 5 MB text-file limit |
 | TypeScript 7.1 dev `tsc.wasm` | 52.8 MB |
 | our current `dist-mv3/sandbox.js` (includes Sucrase) | 636 KB |
-| our `dist-mv3/lib/monaco/vs/language/typescript/tsWorker.js` | 5,131,404 bytes, already within about 110 KB of the 5 MiB cap that `scripts/build.mjs:299-338` (`pruneTsWorkerLibs`) enforces |
+| our `dist-mv3/lib/monaco/ts.worker.js` | 3,486,733 bytes (its lib `.d.ts` files are in `ts.libs.js`, 2,833,543 bytes), under the 5 MiB per-file cap that `buildMonaco` in `scripts/build.mjs` enforces |
 
 ### What the numbers say
 

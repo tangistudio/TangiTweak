@@ -56,6 +56,18 @@ window.addEventListener("keydown", (e) => { if (e.altKey && e.code === "KeyP") e
         );
         return true;
     }
+    if (url.pathname === "/ov-keys-xo") {
+        // a cross-origin iframe (localhost ≠ 127.0.0.1)
+        const child = `http://${url.host.replace("127.0.0.1", "localhost")}/ov-keys-child`;
+        res.writeHead(200, { "content-type": "text/html" });
+        res.end(PAGE(`<iframe id="xo" src="${child}" style="position:absolute;left:20px;top:160px;width:300px;height:120px"></iframe>`));
+        return true;
+    }
+    if (url.pathname === "/ov-keys-child") {
+        res.writeHead(200, { "content-type": "text/html" });
+        res.end(PAGE(`<input id="field">`));
+        return true;
+    }
     if (url.pathname === "/ov-layer") {
         res.writeHead(200, { "content-type": "text/html" });
         res.end(PAGE(`<script>window.__site = "SITE-7";</script>`));
@@ -91,6 +103,16 @@ x.onload = () => (window.__early.xhr = x.responseText);
 x.onerror = () => (window.__early.xhr = "error");
 x.send();
 </script></head><body>early</body></html>`);
+        return true;
+    }
+    if (url.pathname === "/early-frames") {
+        // a srcdoc and an about:blank iframe's first fetch (their location.origin is "null")
+        const early = (via: string) => `const t = performance.now(); fetch("${url.origin}/early-data?via=${via}").then((r) => r.text()).then((v) => (parent.__early.${via} = { v, ms: Math.round(performance.now() - t) }), (e) => (parent.__early.${via} = { v: "error: " + e }));`;
+        res.writeHead(200, { "content-type": "text/html" });
+        res.end(`<!doctype html><html><body><script>window.__early = {};</script>
+<iframe srcdoc="<script>${early("srcdoc").replace(/"/g, "&quot;")}</script>"></iframe>
+<script>const f = document.createElement("iframe"); document.body.append(f); f.contentWindow.eval(${JSON.stringify(early("blank"))});</script>
+</body></html>`);
         return true;
     }
     if (url.pathname === "/early-data") {
@@ -616,6 +638,44 @@ export async function checkPageShortcuts(ctx: any, mgr: any, origin: string, che
 
     await page.close();
     if (!opts.separateWorlds) await deleteTweak(send, "page keys second");
+}
+
+/**
+ * `ctx.shortcut(keys, fn, { iframes: { crossOrigin: true } })`: a shortcut
+ * registered only in the top page hears keys pressed in a cross-origin
+ * iframe the page adds later (where the script runs but returns early).
+ */
+export async function checkCrossOriginShortcuts(ctx: any, mgr: any, origin: string, check: Check, opts: { label?: string } = {}): Promise<void> {
+    const t = (s: string) => `cross-origin iframe shortcuts${opts.label ?? ""}: ${s}`;
+    const send = (msg: any): Promise<any> => mgr.evaluate((m: any) => new Promise((r) => chrome.runtime.sendMessage(m, (x: any) => r(x ?? null))), msg);
+    const code = `import { tweak } from "tangitweak"; tweak.onPage(["${origin}/ov-keys-xo", "${origin.replace("127.0.0.1", "localhost")}/ov-keys-child"], (ctx) => {
+    if (window !== window.top) return;
+    const out = document.body.appendChild(Object.assign(document.createElement("output"), { id: "xk" }));
+    ctx.shortcut("Mod+'", () => (out.dataset.n = String(Number(out.dataset.n || 0) + 1)), { iframes: { crossOrigin: true, shadow: true } });
+});
+`;
+    const saved = await saveTweak(send, "s_xok", "xo keys", code);
+    check(t("the script saves"), !saved?.error, saved?.error);
+    await mgr.waitForTimeout(800);
+    const page = await ctx.newPage();
+    await page.goto(`${origin}/ov-keys-xo`, { waitUntil: "load", timeout: 15000 });
+    const n = () => page.evaluate(() => document.getElementById("xk")?.dataset.n ?? (document.getElementById("xk") ? "0" : null));
+    await waitFor(n, (v) => v !== null, 8000);
+    await page.bringToFront();
+    await page.keyboard.press("ControlOrMeta+Quote");
+    const top = await waitFor(n, (v) => v === "1", 3000);
+    check(t("a press in the top page runs it"), top === "1", String(top));
+    // an iframe the page adds later
+    await page.evaluate((src: string) => { const f = document.createElement("iframe"); f.id = "late"; f.src = src; document.body.append(f); }, origin.replace("127.0.0.1", "localhost") + "/ov-keys-child?late");
+    await page.waitForTimeout(1500);
+    const child = page.frames().find((f: any) => f.url().includes("/ov-keys-child?late"));
+    await child?.focus("#field");
+    await page.waitForTimeout(1000);
+    await page.keyboard.press("ControlOrMeta+Quote");
+    const inner = await waitFor(n, (v) => v === "2", 3000);
+    check(t("a press in the cross-origin iframe runs it once"), !!child && inner === "2", JSON.stringify({ child: !!child, inner }));
+    await page.close();
+    await deleteTweak(send, "xo keys");
 }
 
 /**
@@ -1323,6 +1383,11 @@ export async function checkEarlyRequests(ctx: any, mgr: any, origin: string, che
     const strict = await seen();
     await p.waitForTimeout(500);
     check(t("on a page whose CSP forbids inline scripts — without a CSP violation report"), want(strict) && cspReports === 0, JSON.stringify({ ...strict, cspReports }));
+    await p.goto(`${origin}/early-frames`, { waitUntil: "load", timeout: 15000 });
+    const frames = await waitFor<any>(() => p.evaluate(() => (window as any).__early), (v) => v?.srcdoc && v?.blank, 8000);
+    // a hook that never hears its status there holds requests for STATUS_WAIT_MS (3 s), then lets them go unmodified
+    const quick = (x: any, via: string) => x?.v === "MOD:" + via && x.ms < 1500;
+    check(t("in srcdoc and about:blank iframes, handled without waiting"), quick(frames?.srcdoc, "srcdoc") && quick(frames?.blank, "blank"), JSON.stringify(frames));
     await p.close();
     await deleteTweak(send, "early");
 }

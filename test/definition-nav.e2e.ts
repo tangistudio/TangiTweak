@@ -265,9 +265,9 @@ check("dependant: importer flagged when the library breaks it", (await usesLibMa
 await setLib("export const answer = 42;\n");
 check("dependant: importer cleared when the library is fixed", (await usesLibMarkers()) === 0);
 
-// scripts run in current browsers: newer JS/web APIs type-check (URLPattern
-// is declared by tt-api.d.ts; esnext lib for the rest). The deliberate type
-// error proves diagnostics are live.
+// scripts run in current browsers: newer JS/web APIs type-check (the TS 6
+// compiler's dom and esnext libs). The deliberate type error proves
+// diagnostics are live.
 await clickScript("main script");
 await mgr.evaluate((c: string) => (window as any).monaco.editor.getEditors()[0].setValue(c), [
     'import { tweak } from "tangitweak"; tweak.onRequest({ url: "*://example.invalid/*", strategy: "helper" }, () => {});',
@@ -277,6 +277,9 @@ await mgr.evaluate((c: string) => (window as any).monaco.editor.getEditors()[0].
     "const sorted = [3, 1].toSorted();",
     "const deep = structuredClone({ id, last, sorted });",
     'const wrong: number = "not a number";',
+    "navigation.addEventListener(\"navigate\", (e) => console.log(e.destination.url));",
+    "scheduler.postTask(() => {}, { priority: \"background\" });",
+    "console.log(new Uint8Array([1]).toBase64(), deep);",
     "",
 ].join("\n"));
 await mgr.waitForTimeout(3000);
@@ -285,7 +288,7 @@ const modern = await mgr.evaluate(() => {
     return m.editor.getModelMarkers({ resource: m.editor.getEditors()[0].getModel().uri })
         .filter((x: any) => x.severity === m.MarkerSeverity.Error).map((x: any) => `${x.startLineNumber}: ${x.message}`);
 });
-check("newer browser APIs (URLPattern, findLast, toSorted) type-check", modern.length === 1 && modern[0].startsWith("7:"), JSON.stringify(modern));
+check("newer browser APIs (URLPattern, navigation, scheduler, toBase64, findLast, toSorted) type-check", modern.length === 1 && modern[0].startsWith("7:"), JSON.stringify(modern));
 
 } catch (e) {
     failed++;

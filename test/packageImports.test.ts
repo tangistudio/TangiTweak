@@ -21,6 +21,7 @@ import {
     typesPackageName,
     PACKAGE_MODULES_KEY,
     PACKAGE_TYPINGS_KEY,
+    TYPINGS_FORMAT,
 } from "../src/shared/packageImports";
 import { fakeUnpkg, REGISTRY } from "./fakeUnpkg";
 
@@ -130,6 +131,9 @@ describe("package URLs", () => {
         expect(typesCandidates({ exports: { "./a": { require: { types: "./a.d.cts" }, import: { types: "./a.d.ts" } } } }, "a.js")[0]).toBe("a.d.ts");
         expect(typesCandidates({ exports: { "./a": { require: { types: "./a.d.cts" } } } }, "a")[0]).toBe("a.d.cts");
         expect(typesCandidates({ main: "dist/a.js" }, "")).toEqual(["dist/a.d.ts", "index.d.ts"]);
+        // no types condition: the declaration beside the exported file (@redux-devtools/instrument)
+        expect(typesCandidates({ exports: "./lib/instrument.js" }, "")).toEqual(["lib/instrument.d.ts", "index.d.ts"]);
+        expect(typesCandidates({ exports: { "./b": { import: "./dist/b.mjs" } } }, "b")[0]).toBe("dist/b.d.mts");
         expect(typesCandidates({ exports: { "./*": { types: "./t/*.d.ts" } } }, "x.js")).toEqual(["t/x.js.d.ts", "t/x.d.ts", "x.d.ts", "x.js.d.ts", "x.js/index.d.ts", "x.d.mts", "x.d.cts"]);
     });
 });
@@ -467,7 +471,7 @@ describe("package typings", () => {
         expect(Object.keys(t.files).sort()).toEqual(["unpkg.com/esm-lib@1.0.0/index.d.ts", "unpkg.com/esm-lib@1.0.0/math.d.ts", "unpkg.com/esm-lib@1.0.0/package.json"]);
         expect(JSON.parse(t.files["unpkg.com/esm-lib@1.0.0/package.json"])).toEqual({ name: "esm-lib", version: "1.0.0", types: "./index.d.ts" });
         expect(t.tops["https://unpkg.com/esm-lib@1.0.0/math.js"]).toEqual(["unpkg.com/esm-lib@1.0.0/math.d.ts"]);
-        expect(store[PACKAGE_TYPINGS_KEY]).toEqual(t);
+        expect(store[PACKAGE_TYPINGS_KEY]).toEqual({ ...t, v: TYPINGS_FORMAT });
     });
 
     it("`exports` types, a subpath, `/// <reference path>` and a bare type dependency under node_modules", async () => {
@@ -486,6 +490,16 @@ describe("package typings", () => {
         expect(JSON.parse(t.files["unpkg.com/cjs-lib@2.0.0/package.json"]).types).toBe("../@types/cjs-lib@2.0.1/index.d.ts");
         expect(t.files["unpkg.com/umd-lib@1.0.0/index.d.ts"]).toMatch(/no TypeScript declarations[\s\S]*export = mod/);
         expect(JSON.parse(t.files["unpkg.com/umd-lib@1.0.0/package.json"]).types).toBe("./index.d.ts");
+    });
+
+    it("typings stored as stubs by an older resolution get another try; real ones are kept", async () => {
+        const t = await typingsOf("esm-lib@1.0.0", "umd-lib@1.0.0");
+        store[PACKAGE_TYPINGS_KEY] = { files: t.files, tops: t.tops }; // no format: older resolution
+        const p = await bg();
+        await p.loadPackages();
+        expect(Object.keys(p.packageTypings().tops)).toEqual(["https://unpkg.com/esm-lib@1.0.0"]);
+        expect(Object.keys(p.packageTypings().files).some((f) => f.startsWith("unpkg.com/umd-lib"))).toBe(false);
+        expect(p.packageStatus("https://unpkg.com/umd-lib@1.0.0").state).toBe("typing");
     });
 
     it("typing failures don't fail the download", async () => {
