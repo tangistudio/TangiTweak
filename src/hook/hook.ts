@@ -11,7 +11,7 @@
 import { formatScriptError } from "../shared/scriptError";
 import { makeScriptConsole, formatLogArgs, scriptLogLine, type ScriptLogLevel } from "../shared/scriptLog";
 import { scriptFunction, withTweak, type RawScriptFn, type ScriptFn } from "../shared/scriptFn";
-import { siteUnits, type PackageFn } from "../shared/siteCode";
+import { siteUnits, unitsGate, type PackageFn } from "../shared/siteCode";
 import { makeLibRequire, type ShippedLib } from "../shared/scriptImports";
 import { followsNav, indexRoutes, takesBinary, type DocumentWhen, type RouteMeta } from "../shared/route";
 import { checkUrl, NavRoutes, watchUrl } from "../shared/navRoutes";
@@ -96,20 +96,32 @@ import { watchCall, type CallWatch } from "../shared/callWatch";
     let siteOff: string | null = null;
     /**
      * MV3: the onSite code that arrived as user scripts (shared/siteCode.ts).
-     * A status naming units that aren't here yet (a hot update: the save
-     * `execute`s them into open tabs, Chrome 135+) compiles once they are,
-     * or after UNITS_WAIT_MS with what is.
+     * A status naming units that aren't here (a hot update, a page back from
+     * the back/forward cache) asks the extension for them and compiles once
+     * they are, or after UNITS_WAIT_MS with what is.
      */
     const UNITS_WAIT_MS = 5000;
-    let unitsWait: { hot: boolean; timer: ReturnType<typeof setTimeout> } | null = null;
-    const units = __NO_EVAL__ ? siteUnits(() => unitsWait && !missingUnits().length && compileWhenReady(false)) : null;
-    function missingUnits(): string[] {
-        if (!units) return [];
+    const units = __NO_EVAL__ ? siteUnits(() => gate.unit()) : null;
+    /** the bundle's units that aren't here: their keys, or the names of what they hold */
+    function missingUnits(names = false): string[] {
+        if (!units || siteOff !== null) return [];
         const out: string[] = [];
-        for (const d of domHandlers) if (d.fk && !units.get(d.fk)) out.push(d.name);
-        for (const l of libSources) if (l.fk && !units.get(l.fk)) out.push(l.name);
+        for (const d of domHandlers) if (d.fk && !units.get(d.fk)) out.push(names ? d.name : d.fk);
+        for (const l of libSources) if (l.fk && !units.get(l.fk)) out.push(names ? l.name : l.fk);
         return out;
     }
+    /** compiles the onSite code once its units are here (MV3; MV2: at once) */
+    const gate = unitsGate({
+        missing: () => missingUnits(),
+        ask: (keys) => {
+            try {
+                window.postMessage({ source: HOOK_SOURCE, kind: "units?", keys }, "/");
+            } catch {}
+        },
+        compile: compileNow,
+        timedOut: () => logUp(`onSite code not on this page after ${UNITS_WAIT_MS} ms: ${missingUnits(true).join(", ")}`, "warn"),
+        waitMs: UNITS_WAIT_MS,
+    });
     /** a script's or imported module's function (`fk`: its unit, MV3) */
     function scriptFn(name: string, src: string, fk?: string): ScriptFn {
         if (!__NO_EVAL__) return scriptFunction(src, name);
@@ -296,31 +308,10 @@ import { watchCall, type CallWatch } from "../shared/callWatch";
             else if (wasActive) goDormant();
             // nothing here for the hook: the page keeps its own fetch/XHR
             else if (first) unpatch();
-            compileWhenReady(!!data.hot);
+            gate.status(!!data.hot);
         }
     });
 
-    /** compile the onSite code once its units are here (MV3; MV2: now) */
-    function compileWhenReady(hot: boolean): void {
-        if (unitsWait) {
-            hot ||= unitsWait.hot;
-            clearTimeout(unitsWait.timer);
-            unitsWait = null;
-        }
-        if (siteOff === null && missingUnits().length) {
-            const wait = (unitsWait = {
-                hot,
-                timer: setTimeout(() => {
-                    if (unitsWait !== wait) return;
-                    unitsWait = null;
-                    logUp(`onSite code not on this page after ${UNITS_WAIT_MS} ms: ${missingUnits().join(", ")}`, "warn");
-                    compileNow(hot);
-                }, UNITS_WAIT_MS),
-            });
-            return;
-        }
-        compileNow(hot);
-    }
     function compileNow(hot: boolean): void {
         for (const d of domHandlers) if (d.v) versions.add(d.scriptId + "\0" + d.v);
         compileAndScheduleDocument(hot);
@@ -420,7 +411,8 @@ import { watchCall, type CallWatch } from "../shared/callWatch";
                     life.discard(gen);
                     gens.pop();
                 }
-                if (/Evaluating a string as JavaScript|unsafe-eval/i.test(e.message || "")) {
+                // Chrome names 'unsafe-eval'; Firefox throws "call to Function() blocked by CSP"
+                if (!__NO_EVAL__ && (e?.name === "EvalError" || /Evaluating a string as JavaScript|unsafe-eval|blocked by CSP/i.test(e?.message || ""))) {
                     cspBlocked = true;
                 } else {
                     scriptLogUp(d.scriptId, "error", formatScriptError(d.name, e, "onSite compile"));
@@ -431,7 +423,7 @@ import { watchCall, type CallWatch } from "../shared/callWatch";
         if (cspBlocked) {
             logUp("page CSP blocks eval in the page world — running onSite handlers in the isolated world instead", "info");
             try {
-                window.postMessage({ source: HOOK_SOURCE, kind: "cspBlocked" }, "/");
+                window.postMessage({ source: HOOK_SOURCE, kind: "cspBlocked", hot }, "/");
             } catch {}
         }
         if (compiledDocument.length === 0 && !navSets.some((n) => n.dom.some((h) => followsNav(h.route)))) {

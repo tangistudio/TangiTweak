@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { syncUserScripts, userScriptsStatus, onUserScriptsStatus, resetUserScripts, ISO_WORLD_CSP } from "../src/background/userScripts";
+import { syncUserScripts, runSiteUnits, userScriptsStatus, onUserScriptsStatus, resetUserScripts, ISO_WORLD_CSP } from "../src/background/userScripts";
 import { userScriptsProblem, USER_SCRIPTS_PROBLEM } from "../src/shared/userScriptsStatus";
 import type { RouteMeta } from "../src/shared/route";
 
@@ -142,43 +142,39 @@ describe("chrome.userScripts (MV3 isolated onPage)", () => {
         expect([...m.registered.keys()]).toEqual(["tt-iso-s1"]);
     });
 
-    it("onSite: one MAIN-world registration per script; only syncs after the first run the new units into open tabs", async () => {
+    it("onSite: one MAIN-world registration per script; a save updates it and runs nothing in open tabs", async () => {
         const m = mockChrome();
         m.us.execute = vi.fn(async () => []);
-        m.chrome.tabs = { query: vi.fn(async () => [{ id: 1 }, { id: 2, discarded: true }, { id: 3 }]) };
         await syncUserScripts([], [{ id: "s1", units: ["u1", "lib"] }]);
         const reg = m.registered.get("tt-main-s1");
         expect(reg).toMatchObject({ matches: ["*://*/*"], allFrames: true, runAt: "document_start", world: "MAIN", js: [{ code: "u1" }, { code: "lib" }] });
-        expect(m.us.execute).not.toHaveBeenCalled();
-        // a save: changed units update the registration and run in tabs that aren't discarded
         await syncUserScripts([], [{ id: "s1", units: ["u2", "lib"] }, { id: "s2", units: ["v1"] }]);
         expect(m.calls).toEqual(["register tt-main-s1", "update tt-main-s1", "register tt-main-s2"]);
-        expect(m.us.execute.mock.calls.map(([a]: any) => [a.target.tabId, a.world, a.js.map((j: any) => j.code)])).toEqual([
-            [1, "MAIN", ["u2", "v1"]],
-            [3, "MAIN", ["u2", "v1"]],
-        ]);
-        // unchanged: nothing re-registered or run; undefined keeps the onSite list
-        m.us.execute.mockClear();
+        // unchanged: nothing re-registered; undefined keeps the onSite list
         await syncUserScripts([{ id: "s1", routes: [route("https://a.example/*")] }]);
         expect(m.registered.has("tt-main-s1") && m.registered.has("tt-main-s2")).toBe(true);
-        expect(m.us.execute).not.toHaveBeenCalled();
         await syncUserScripts([], [{ id: "s2", units: ["v1"] }]);
         expect(m.registered.has("tt-main-s1")).toBe(false);
+        // open pages ask for what they lack (runSiteUnits): a tab that can't run code now holds up no sync
         expect(m.us.execute).not.toHaveBeenCalled();
     });
 
-    it("onSite: a restarted service worker still runs a save's new units in open tabs (only an extension reload or update skips them)", async () => {
+    it("onSite: the units a page's hook asked for run in that document only", async () => {
         const m = mockChrome();
-        const session: Record<string, any> = {};
-        m.chrome.storage = { session: { get: vi.fn(async (k: string) => ({ [k]: session[k] })), set: vi.fn(async (o: object) => void Object.assign(session, o)) } };
         m.us.execute = vi.fn(async () => []);
-        m.chrome.tabs = { query: vi.fn(async () => [{ id: 1 }]) };
-        await syncUserScripts([], [{ id: "s1", units: ["u1"] }]);
-        expect(m.us.execute).not.toHaveBeenCalled();
-        // the worker stops; a folder sync wakes it with changed code
-        resetUserScripts();
-        await syncUserScripts([], [{ id: "s1", units: ["u2"] }]);
-        expect(m.us.execute.mock.calls.map(([a]: any) => [a.target.tabId, a.js.map((j: any) => j.code)])).toEqual([[1, ["u2"]]]);
+        await runSiteUnits({ tabId: 7, frameId: 3, documentId: "DOC" }, ["u1", "lib"]);
+        await runSiteUnits({ tabId: 7, frameId: 3 }, ["u1"]);
+        await runSiteUnits({ tabId: 7, frameId: 3, documentId: "DOC" }, []);
+        expect(m.us.execute.mock.calls.map(([a]: any) => a)).toEqual([
+            { target: { tabId: 7, documentIds: ["DOC"] }, world: "MAIN", injectImmediately: true, js: [{ code: "u1" }, { code: "lib" }] },
+            { target: { tabId: 7, frameIds: [3] }, world: "MAIN", injectImmediately: true, js: [{ code: "u1" }] },
+        ]);
+        // a document that's gone: the caller hears of it
+        m.us.execute = vi.fn(async () => Promise.reject(new Error("No document with id DOC")));
+        await expect(runSiteUnits({ tabId: 7, frameId: 3, documentId: "DOC" }, ["u1"])).rejects.toThrow("No document");
+        // before Chrome 135 (no `execute`): nothing to run, the page needs a reload
+        delete m.us.execute;
+        await expect(runSiteUnits({ tabId: 7, frameId: 3 }, ["u1"])).resolves.toBeUndefined();
     });
 
     it("registrations under an older version's ids are removed", async () => {

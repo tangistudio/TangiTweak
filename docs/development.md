@@ -308,7 +308,9 @@ pages, and drops blocking `webRequest`):
   `chrome.userScripts` with `world: "MAIN"` (`tt-main-<id>`,
   `src/shared/siteCode.ts`): each pushes its function onto a queue on the
   page's global, keyed by name and code hash, and the hook takes them from
-  there. Saving a script also runs the new functions in open tabs
+  there. A page whose hook lacks a function its bundle names (a save
+  while it was open, a page back from the back/forward cache) asks for it
+  through its bridge, and the background runs it in that document
   (`userScripts.execute`, Chrome 135+). With user scripts off, onSite
   code doesn't run. **`document_start` timing caveat:** in MV2 the
   always-alive background answers the bundle in ~1ms, so onPage handlers

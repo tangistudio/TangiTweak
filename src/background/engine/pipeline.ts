@@ -51,7 +51,7 @@ import { pushBundleUpdate } from "./bridgePorts";
 import { importFiles } from "./importFiles";
 import { installPages, pages, pagesReady } from "./pages";
 import { pushIsoUpdate, pushPreviewUpdate, revalidateOverlayLinks, setupOverlayLinks, type IsoRun, type OverlayRun } from "./overlayLinks";
-import { onUserScriptsStatus, syncUserScripts, userScriptsStatus, type IsoScript, type SiteScript } from "../userScripts";
+import { onUserScriptsStatus, runSiteUnits, syncUserScripts, userScriptsStatus, type IsoScript, type SiteScript } from "../userScripts";
 import { USER_SCRIPTS_OFF, userScriptsProblem, type UserScriptsStatus } from "../../shared/userScriptsStatus";
 import { contentHash } from "../../shared/folderSync";
 import { reactChunkSource } from "../reactChunk";
@@ -141,6 +141,21 @@ export function siteScripts(scripts: Script[], analyzed: Map<string, Analyzed>, 
         out.push({ id: s.id, units });
     }
     return out;
+}
+
+/**
+ * MV3: the units (shared/siteCode.ts) of a page bundle's onSite code that
+ * have one of `keys`: what a hook lacking them asked for.
+ */
+export function bundleSiteUnits(bundle: { domHandlers: { name: string; src: string; fk?: string }[]; libs: ShippedLib[] }, keys: Set<string>): string[] {
+    const units: string[] = [];
+    for (const h of bundle.domHandlers) if (h.fk && keys.has(h.fk)) units.push(scriptUnit(h.name, h.src));
+    for (const l of bundle.libs) {
+        if (!l.fk || !keys.has(l.fk)) continue;
+        if (l.src !== undefined) units.push(scriptUnit(l.name, l.src));
+        else if (l.pkg) units.push(packageUnit(l.name, l.pkg.js));
+    }
+    return units;
 }
 
 export interface Pipeline {
@@ -714,8 +729,11 @@ export function createPipeline(
         const isoOff = isoRuns.size && (await userScriptsStatus()) !== "ok" ? USER_SCRIPTS_OFF : undefined;
         // MV3 without user scripts: no onSite code either (the hook answers calls into it with why)
         const siteOff = __MV3__ && domHandlers.length && (await userScriptsStatus()) !== "ok" ? USER_SCRIPTS_OFF : undefined;
+        // what a frame runs from this bundle (its overlays apart: they carry their own code hash): a page back from the back/forward cache compares it
+        const libRev = (l: ShippedLib) => [l.name, siteKey(l.name, l.src ?? l.pkg?.js ?? l.json ?? l.alias ?? ""), l.params];
+        const rev = contentHash(JSON.stringify([routes, getTextTypes(), domHandlers.map((h) => [h.scriptId, h.v]), libs.map(libRev), isoHandlers.map((h) => [h.scriptId, "v" in h ? h.v : ""]), isoLibs.map(libRev), isoOff, siteOff]));
         dlogLevel("compile", "debug", `timing: page bundle for ${url.slice(0, 80)} — ${Math.round(performance.now() - t0)} ms`);
-        return { bundle: { count: routes.length, routes, textTypes: getTextTypes(), domHandlers, isoHandlers, overlays, libs, isoLibs, ...(isoOff ? { isoOff } : {}), ...(siteOff ? { siteOff } : {}) }, overlayRuns, isoRuns, previewWhy };
+        return { bundle: { count: routes.length, routes, textTypes: getTextTypes(), domHandlers, isoHandlers, overlays, libs, isoLibs, rev, ...(isoOff ? { isoOff } : {}), ...(siteOff ? { siteOff } : {}) }, overlayRuns, isoRuns, previewWhy };
     }
     installPages();
     setupOverlayLinks({
@@ -938,6 +956,19 @@ export function createPipeline(
                 sendResponse(bundle);
             })();
             return true; // async sendResponse above
+        }
+        // MV3: a frame's hook lacks onSite code its bundle names (a save while the page was open, a page back from the
+        // back/forward cache): run those units in that document. Only code of the frame's own bundle goes, whatever keys it names
+        if (__MV3__ && msg && msg.type === "siteUnits") {
+            const tabId = sender.tab?.id;
+            if (typeof tabId === "number" && tabId >= 0 && Array.isArray(msg.keys)) {
+                const keys = new Set<string>(msg.keys.filter((k: unknown) => typeof k === "string"));
+                const top = sender.frameId === 0 || sender.frameId === undefined;
+                void hookBundle(msg.url || "", top)
+                    .then(({ bundle }) => runSiteUnits({ tabId, frameId: sender.frameId ?? 0, documentId: (sender as any).documentId }, bundleSiteUnits(bundle, keys)))
+                    .catch((e: any) => dlogLevel("userScripts", "debug", `onSite code didn't reach tab ${tabId}: ${e?.message || e}`));
+            }
+            return false;
         }
         if (msg && msg.type === "scriptStorageGet") {
             scriptStorageGet(msg.scriptId, msg.key).then((value: any) => sendResponse({ value }));

@@ -32,7 +32,7 @@ import { resolveBrowser } from "./browserSetup";
 import { checkApiTypingsNav } from "./apiTypingsNav";
 import { checkRulesStrategy, rulesServerRoute } from "./rulesE2e";
 import { checkFoldersAndDataFiles, foldersServerRoute } from "./foldersE2e";
-import { checkPlaces, checkOverlayPreview, checkOverlays, checkEarlyRequests, checkHotReload, checkOverlayShortcuts, checkPageShortcuts, checkPageStores, checkIsoStores, checkSiteHandles, checkSiteStores, overlayServerRoute } from "./overlayE2e";
+import { checkPlaces, checkOverlayPreview, checkOverlays, checkEarlyRequests, checkHotReload, checkSiteHotReload, checkOverlayShortcuts, checkPageShortcuts, checkPageStores, checkIsoStores, checkSiteHandles, checkSiteStores, overlayServerRoute } from "./overlayE2e";
 import { checkPackages, packagesServerRoute } from "./packagesE2e";
 import { deleteTweak, saveTweak } from "./e2eTweak";
 
@@ -700,6 +700,7 @@ await checkFoldersAndDataFiles(ctx, mgr, ORIGIN, check);
 // ---------- 10i. overlays (tweak.onOverlay) and calls between the overlay and the page ----------
 await checkOverlays(ctx, mgr, ORIGIN, check, { isolated: true });
 await checkHotReload(ctx, mgr, ORIGIN, check);
+await checkSiteHotReload(ctx, mgr, ORIGIN, check, { cspWorld: "isolated" });
 await checkPageStores(ctx, mgr, ORIGIN, check);
 await checkIsoStores(ctx, mgr, ORIGIN, check);
 await checkSiteHandles(ctx, mgr, ORIGIN, check);

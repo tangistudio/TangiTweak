@@ -73,6 +73,17 @@ window.addEventListener("keydown", (e) => { if (e.altKey && e.code === "KeyP") e
         res.end(PAGE(`<script>window.__site = "SITE-7";</script>`));
         return true;
     }
+    if (url.pathname === "/ov-site-mark.js") {
+        res.writeHead(200, { "content-type": "text/javascript" });
+        res.end('window.__pageMark = "page";');
+        return true;
+    }
+    if (url.pathname === "/ov-site-hot") {
+        // ?csp: a page whose CSP forbids eval (its own script still loads)
+        res.writeHead(200, { "content-type": "text/html", ...(url.searchParams.has("csp") ? { "content-security-policy": "script-src 'self'" } : {}) });
+        res.end(PAGE(`<script src="/ov-site-mark.js"></script>`));
+        return true;
+    }
     if (url.pathname === "/ov-life") {
         res.writeHead(200, { "content-type": "text/html" });
         res.end(PAGE(`<p id="lifec" class="life-color">c</p>`));
@@ -1390,4 +1401,83 @@ export async function checkEarlyRequests(ctx: any, mgr: any, origin: string, che
     check(t("in srcdoc and about:blank iframes, handled without waiting"), quick(frames?.srcdoc, "srcdoc") && quick(frames?.blank, "blank"), JSON.stringify(frames));
     await p.close();
     await deleteTweak(send, "early");
+}
+
+const siteHotCode = (origin: string, v: string) => `import { tweak } from "tangitweak";
+tweak.onSite({ url: "${origin}/ov-site-hot*", when: "document_end" }, () => {
+    const d = document.documentElement.dataset;
+    d.siteV = ${JSON.stringify(v)};
+    d.siteRuns = String(Number(d.siteRuns || 0) + 1);
+    d.siteWorld = (window as any).__pageMark === "page" ? "site" : "isolated";
+});`;
+
+/**
+ * Saved onSite code reaches open pages: one whose CSP forbids eval
+ * (`cspWorld`: where its onSite code runs: Chrome MV3 injects it into the
+ * site's world, MV2 falls back to the isolated world), the other tabs while
+ * one can't run code, and a page back from the back/forward cache.
+ */
+export async function checkSiteHotReload(ctx: any, mgr: any, origin: string, check: Check, opts: { label?: string; cspWorld: "site" | "isolated" }): Promise<void> {
+    const t = (s: string) => `onSite hot apply${opts.label ?? ""}: ${s}`;
+    const send = (msg: any): Promise<any> => mgr.evaluate((m: any) => new Promise((r) => chrome.runtime.sendMessage(m, (x: any) => r(x ?? null))), msg);
+    let n = 1;
+    const save = async () => {
+        await saveTweak(send, "s_sitehot", "sitehot", siteHotCode(origin, `v${++n}`));
+        return `v${n}`;
+    };
+    await saveTweak(send, "s_sitehot", "sitehot", siteHotCode(origin, "v1"));
+    await mgr.waitForTimeout(800);
+    const shows = (p: any, v: string, ms = 8000) =>
+        waitFor(
+            (): Promise<Record<string, string>> => p.evaluate(() => ({ ...document.documentElement.dataset }) as Record<string, string>).catch(() => ({})),
+            (d) => d.siteV === v,
+            ms
+        );
+
+    const csp = await ctx.newPage();
+    await csp.goto(`${origin}/ov-site-hot?csp`, { waitUntil: "load", timeout: 15000 });
+    const c1 = await shows(csp, "v1");
+    check(t(`a page whose CSP forbids eval runs it, in the ${opts.cspWorld === "site" ? "site's" : "isolated"} world`), c1.siteV === "v1" && c1.siteWorld === opts.cspWorld, JSON.stringify(c1));
+    let v = await save();
+    const c2 = await shows(csp, v);
+    check(t("…and a save reaches it"), c2.siteV === v && c2.siteRuns === "2", JSON.stringify(c2));
+    await csp.close();
+
+    const page = await ctx.newPage();
+    await page.goto(`${origin}/ov-site-hot`, { waitUntil: "load", timeout: 15000 });
+    await shows(page, v);
+    const stuck = await ctx.newPage();
+    await stuck.goto(`${origin}/ov-site-hot?stuck`, { waitUntil: "load", timeout: 15000 });
+    await shows(stuck, v);
+    let dialog: any;
+    stuck.on("dialog", (d: any) => (dialog = d));
+    void stuck.evaluate(() => alert("stuck")).catch(() => {});
+    await waitFor(async () => !!dialog, Boolean, 5000);
+    v = await save();
+    await shows(page, v);
+    v = await save();
+    const p2 = await shows(page, v);
+    check(t("a tab with an open dialog doesn't hold up later saves for the other tabs"), p2.siteV === v, JSON.stringify(p2));
+    await dialog?.dismiss().catch(() => {});
+    const s2 = await shows(stuck, v);
+    check(t("…and runs the newest code once it answers"), s2.siteV === v, JSON.stringify(s2));
+    await stuck.close();
+
+    await page.evaluate(() => void ((window as any).__kept = true));
+    const runs = (await shows(page, v)).siteRuns;
+    await page.goto(`${origin}/ov-app`, { waitUntil: "load", timeout: 15000 });
+    await page.goBack({ waitUntil: "commit" }).catch(() => {});
+    await page.waitForTimeout(1000);
+    const b1 = await shows(page, v);
+    const kept = () => page.evaluate(() => !!(window as any).__kept).catch(() => false);
+    const restored = await kept();
+    check(t("a page back from the back/forward cache with nothing saved meanwhile doesn't run it again"), !restored || b1.siteRuns === runs, JSON.stringify({ ...b1, restored }));
+    await page.goto(`${origin}/ov-app`, { waitUntil: "load", timeout: 15000 });
+    v = await save();
+    await mgr.waitForTimeout(500);
+    await page.goBack({ waitUntil: "commit" }).catch(() => {});
+    const b2 = await shows(page, v);
+    check(t("…and with a save meanwhile runs the new code"), b2.siteV === v, JSON.stringify({ ...b2, restored: await kept() }));
+    await page.close();
+    await deleteTweak(send, "sitehot");
 }

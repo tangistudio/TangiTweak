@@ -183,6 +183,23 @@ import type { RanApi } from "../shared/netTypes";
             safeSend({ type: "claimRequest", url: data.url });
             return;
         }
+        if (data.kind === "cspBlocked") {
+            // MV2: the page's CSP blocks eval in its world, so its onSite code runs here instead.
+            // The page can post this too: that only runs the scripts' own code here as well
+            if (!__NO_EVAL__ && !hookBroken) {
+                hookBroken = true;
+                void runDocumentHandlers(!!data.hot);
+            }
+            return;
+        }
+        if (data.kind === "units?") {
+            // MV3: the hook lacks onSite code the last status named. The page can post this too:
+            // one ask per status, and the background only runs this frame's own bundle
+            if (!__MV3__ || unitAsks < 1 || !Array.isArray(data.keys)) return;
+            unitAsks--;
+            safeSend({ type: "siteUnits", url: location.href, keys: data.keys.filter((k: unknown) => typeof k === "string" && k.length < 1000).slice(0, 2000) });
+            return;
+        }
         if (data.kind === "call" && (data.op === "storageGet" || data.op === "storageSet")) {
             // the page can forge this message: only scripts whose main-world
             // onPage code was shipped to this frame may use its storage
@@ -272,9 +289,14 @@ import type { RanApi } from "../shared/netTypes";
     /** script ids whose onSite code this frame got (storage relay allow-list) */
     let pageScriptIds = new Set<string>();
     let isoFired = false;
+    /** MV3: how many times the hook may still ask for onSite code it lacks (one per status) */
+    let unitAsks = 0;
+    /** the last bundle's code and routes (`rev`): a page back from the back/forward cache compares it */
+    let bundleRev: string | undefined;
 
     function postStatus(resp: any, hot: boolean): void {
         const active = !!(resp && (resp.count > 0 || (resp.domHandlers || []).length));
+        unitAsks = Math.min(unitAsks + 1, 3);
         // main-world handlers and libraries only: isolated code never reaches the page
         window.postMessage(
             {
@@ -295,6 +317,7 @@ import type { RanApi } from "../shared/netTypes";
     /** a fresh bundle: refresh the storage allow-list, run isolated handlers (once per load; again on a hot update) */
     function noteBundle(resp: any, hot: boolean): void {
         if (!resp) return;
+        bundleRev = resp.rev;
         if (resp.count > 0 || (resp.domHandlers || []).length || (resp.isoHandlers || []).length || (resp.overlays || []).length) openPort();
         pageScriptIds = new Set(((resp.domHandlers || []) as DocumentHandler[]).map((h) => h.scriptId));
         syncOverlays(window === top ? resp.overlays || [] : [], hot);
@@ -778,6 +801,20 @@ import type { RanApi } from "../shared/netTypes";
         });
     }
 
+    // a page in the back/forward cache gets no updates: back from it, it takes what changed meanwhile
+    // (unchanged code doesn't run again; overlays update by their own code hash)
+    window.addEventListener("pageshow", (e) => {
+        if (!e.persisted || dead) return;
+        const had = bundleRev;
+        safeSend({ type: "getHookBundle", url: location.href }, (resp: any) => {
+            if (!resp) return;
+            const changed = resp.rev !== had;
+            if (changed && hookBroken) void runDocumentHandlers(true);
+            noteBundle(resp, changed);
+            if (changed) postStatus(resp, true);
+        });
+    });
+
     // ---- the overlay host (top frame) ----
     //
     // One iframe per script (overlay.html, a web-accessible extension page)
@@ -1247,8 +1284,19 @@ import type { RanApi } from "../shared/netTypes";
 
     async function init(): Promise<void> {
         dlog("debug", "bridge ready", { href: location.href, readyState: document.readyState });
-        earlyBundle = askBundle();
+        const early = (earlyBundle = askBundle());
         injectHook();
+        // a hook that started before this world listened asked for its status into the void
+        // (Firefox, the first page after the extension starts): it gets the first one anyway
+        void early.then((resp) =>
+            guard(() => {
+                // the hook asked: answered there
+                if (earlyBundle !== early || dead) return;
+                earlyBundle = null;
+                noteBundle(resp, false);
+                postStatus(resp, false);
+            })
+        );
         // isolated handlers must not depend on the page hook asking for its status
         setTimeout(() => {
             if (!isoFired && !dead) safeSend({ type: "getHookBundle", url: location.href }, (resp: any) => noteBundle(resp, false));

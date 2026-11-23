@@ -104,4 +104,22 @@ describe("page hook: calls into a script it doesn't run yet", () => {
         await vi.advanceTimersByTimeAsync(6000);
         expect(results).toHaveLength(1);
     });
+
+    it("a page CSP that blocks eval, as Firefox words it, asks the bridge to run the onSite code in the isolated world", async () => {
+        const posted: any[] = [];
+        (window.postMessage as any).mockImplementation((data: any) => void posted.push(data));
+        await loadHook();
+        const blocked = Object.assign(new Error("call to Function() blocked by CSP"), { name: "EvalError" });
+        vi.stubGlobal("Function", function () {
+            throw blocked;
+        });
+        try {
+            post({ kind: "status", active: true, domHandlers: [{ ...script, v: "v1" }], hot: true });
+        } finally {
+            vi.unstubAllGlobals();
+        }
+        // (the hooks earlier tests loaded answer too)
+        expect(posted.filter((d) => d.kind === "cspBlocked")[0]).toEqual({ source: "res-override-hook", kind: "cspBlocked", hot: true });
+        expect(posted.filter((d) => d.kind === "scriptLog" && d.level === "error")).toEqual([]);
+    });
 });

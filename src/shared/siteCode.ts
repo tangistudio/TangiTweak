@@ -15,6 +15,11 @@
  * ({@link siteKey}), so a unit from an older save is never taken for a newer
  * one.
  *
+ * A registration only reaches documents that load after it. A page whose
+ * bundle names units it doesn't have (a save while it was open, a page back
+ * from the back/forward cache) asks for them ({@link unitsGate}) and the
+ * background runs them in that document (`userScripts.execute`, Chrome 135+).
+ *
  * @module
  */
 
@@ -123,4 +128,63 @@ export function siteUnits(
         Object.defineProperty(g, sym, { value: queue, configurable: false, writable: false, enumerable: false });
     } catch {}
     return { get: (key) => units.get(key) };
+}
+
+/**
+ * The hook's wait for the units a status names. A status whose units are all
+ * here compiles at once. Otherwise the hook asks for the missing ones and
+ * compiles when the last arrives, or after `waitMs` with what is here; units
+ * that arrive after that compile as a hot update.
+ */
+export function unitsGate(o: {
+    /** The keys of the units the last status names that aren't here. */
+    missing: () => string[];
+    /** Asks the extension to run these units in this document (once per status). */
+    ask: (keys: string[]) => void;
+    /** Compiles the last status's code. */
+    compile: (hot: boolean) => void;
+    /** The wait ran out; `compile` follows. */
+    timedOut: () => void;
+    /** How long to wait for the missing units, in milliseconds. */
+    waitMs: number;
+}): {
+    /** A status arrived. */
+    status(hot: boolean): void;
+    /** A unit arrived. */
+    unit(): void;
+} {
+    let wait: { hot: boolean; timer: ReturnType<typeof setTimeout> } | null = null;
+    /** the last compile ran without some of its units */
+    let late = false;
+    return {
+        status(hot) {
+            if (wait) {
+                hot ||= wait.hot;
+                clearTimeout(wait.timer);
+                wait = null;
+            }
+            late = false;
+            const keys = o.missing();
+            if (!keys.length) return o.compile(hot);
+            const w = (wait = {
+                hot,
+                timer: setTimeout(() => {
+                    if (wait !== w) return;
+                    wait = null;
+                    late = true;
+                    o.timedOut();
+                    o.compile(hot);
+                }, o.waitMs),
+            });
+            o.ask(keys);
+        },
+        unit() {
+            if ((!wait && !late) || o.missing().length) return;
+            const hot = wait ? wait.hot : true;
+            if (wait) clearTimeout(wait.timer);
+            wait = null;
+            late = false;
+            o.compile(hot);
+        },
+    };
 }

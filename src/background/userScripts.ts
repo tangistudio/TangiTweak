@@ -28,9 +28,11 @@
  * (`tt-main-<scriptId>`, every frame, `document_start`) as its units — the
  * script, the library scripts and package modules it imports, each a
  * function the hook picks up (shared/siteCode.ts). Here the code itself
- * is the registration (the MAIN world has no messaging to ask for it), so
- * a save updates it and, from Chrome 135, `execute`s the new units into
- * open tabs, where the hook runs them as a hot update.
+ * is the registration (the MAIN world has no messaging to ask for it). A
+ * save updates it for the documents that load next; an open page's hook
+ * asks through its bridge for the units it lacks, and they are `execute`d
+ * in that document ({@link runSiteUnits}, Chrome 135+), where the hook
+ * runs them as a hot update.
  */
 import type { RouteMeta } from "../shared/route";
 import type { UserScriptsStatus } from "../shared/userScriptsStatus";
@@ -60,23 +62,6 @@ let status: { value: UserScriptsStatus; at: number } | null = null;
 let checking: Promise<UserScriptsStatus> | null = null;
 const listeners: ((s: UserScriptsStatus) => void)[] = [];
 let wanted: { iso: IsoScript[]; site: SiteScript[] } = { iso: [], site: [] };
-/**
- * A sync went through since the extension loaded. The first one doesn't push
- * units into open tabs: an extension update leaves no hook there. Kept in
- * `chrome.storage.session` too ({@link SYNCED_KEY}), which a service-worker
- * restart keeps and an extension reload or update clears: a worker woken by a
- * save (e.g. a folder sync) must still push the new units.
- */
-let synced = false;
-const SYNCED_KEY = "userScriptsSynced";
-async function syncedBefore(): Promise<boolean> {
-    if (synced) return true;
-    try {
-        return !!(await chrome.storage.session.get(SYNCED_KEY))[SYNCED_KEY];
-    } catch {
-        return false;
-    }
-}
 let syncing: Promise<void> = Promise.resolve();
 
 const api = (): any => {
@@ -181,14 +166,11 @@ async function doSync({ iso: want, site }: typeof wanted): Promise<void> {
     if (add.length) await us.register(add);
     dlogLevel("userScripts", "debug", `user scripts: ${want.length} registered (${add.length} new, ${change.length} changed, ${have.size} removed)${perWorld ? "" : ", shared world"}`);
     await syncSite(us, site, registered.filter((r) => r.id.startsWith(SITE_PREFIX)));
-    if (!synced) chrome.storage?.session?.set({ [SYNCED_KEY]: true }).catch(() => {});
-    synced = true;
 }
 
-/** the MAIN-world registrations (onSite code); new units go into open tabs too (Chrome 135+) */
+/** the MAIN-world registrations (onSite code), for the documents that load from now on */
 async function syncSite(us: any, want: SiteScript[], registered: any[]): Promise<void> {
     const have = new Map<string, any>(registered.map((r) => [r.id, r]));
-    const old = new Set<string>(registered.flatMap((r) => (r.js || []).map((j: any) => j.code)));
     const add: any[] = [];
     const change: any[] = [];
     for (const s of want) {
@@ -201,18 +183,24 @@ async function syncSite(us: any, want: SiteScript[], registered: any[]): Promise
     if (have.size) await us.unregister({ ids: [...have.keys()] });
     if (change.length) await us.update(change);
     if (add.length) await us.register(add);
-    const fresh = [...new Set(want.flatMap((s) => s.units))].filter((u) => !old.has(u));
     dlogLevel("userScripts", "debug", `user scripts (onSite): ${want.length} registered (${add.length} new, ${change.length} changed, ${have.size} removed)`);
-    if (!fresh.length || typeof us.execute !== "function" || !(await syncedBefore())) return;
-    // open pages: the hook takes the new units and runs the hot update the bundle brings
-    const tabs = await chrome.tabs.query({ url: ["*://*/*"] }).catch(() => [] as chrome.tabs.Tab[]);
-    await Promise.all(
-        tabs.map((t) =>
-            t.id === undefined || t.discarded
-                ? undefined
-                : us.execute({ target: { tabId: t.id, allFrames: true }, world: "MAIN", injectImmediately: true, js: fresh.map((code) => ({ code })) }).catch(() => {})
-        )
-    );
+}
+
+/**
+ * Runs `units` (onSite code, shared/siteCode.ts) in one document's own world:
+ * its hook asked for code it lacks. Needs `userScripts.execute` (Chrome 135+);
+ * without it nothing runs and the page needs a reload. Rejects when the
+ * document is gone or can't be scripted.
+ *
+ * Not queued behind anything: `execute` settles only once the document ran
+ * the code, which a page with an open dialog or a paused debugger does late.
+ */
+export async function runSiteUnits(target: { tabId: number; frameId: number; documentId?: string }, units: string[]): Promise<void> {
+    if (!__MV3__ || !units.length) return;
+    const us = api();
+    if (typeof us?.execute !== "function") return;
+    const { tabId, frameId, documentId } = target;
+    await us.execute({ target: documentId ? { tabId, documentIds: [documentId] } : { tabId, frameIds: [frameId] }, world: "MAIN", injectImmediately: true, js: units.map((code) => ({ code })) });
 }
 
 /** tests: forget the cached status and registrations */
@@ -221,7 +209,6 @@ export function resetUserScripts(): void {
     checking = null;
     listeners.length = 0;
     wanted = { iso: [], site: [] };
-    synced = false;
     syncing = Promise.resolve();
     runtime = null;
 }

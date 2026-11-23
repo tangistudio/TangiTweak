@@ -30,7 +30,7 @@ import { checkRulesStrategy, rulesServerRoute } from "./rulesE2e";
 import { checkFoldersAndDataFiles, foldersServerRoute } from "./foldersE2e";
 import { deleteTweak, saveTweak } from "./e2eTweak";
 import { bundlePkg } from "./bundleHelper";
-import { checkPlaces, checkOverlayPreview, checkOverlays, checkEarlyRequests, checkHotReload, checkOverlayShortcuts, checkPageShortcuts, checkCrossOriginShortcuts, checkPageStores, checkIsoStores, checkSiteHandles, checkSiteStores, overlayServerRoute } from "./overlayE2e";
+import { checkPlaces, checkOverlayPreview, checkOverlays, checkEarlyRequests, checkHotReload, checkSiteHotReload, checkOverlayShortcuts, checkPageShortcuts, checkCrossOriginShortcuts, checkPageStores, checkIsoStores, checkSiteHandles, checkSiteStores, overlayServerRoute } from "./overlayE2e";
 import { checkPackages, packagesServerRoute } from "./packagesE2e";
 import { readExportZip } from "../src/shared/exportZip";
 
@@ -334,6 +334,7 @@ try {
             },
         });
         await checkHotReload(ctx, mgr, ORIGIN, check, { label: " (MV3)" });
+        await checkSiteHotReload(ctx, mgr, ORIGIN, check, { label: " (MV3)", cspWorld: "site" });
         await checkPageStores(ctx, mgr, ORIGIN, check, { label: " (MV3)" });
         await checkIsoStores(ctx, mgr, ORIGIN, check, { label: " (MV3)" });
         await checkSiteHandles(ctx, mgr, ORIGIN, check, { label: " (MV3)" });
