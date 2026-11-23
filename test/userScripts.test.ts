@@ -177,6 +177,27 @@ describe("chrome.userScripts (MV3 isolated onPage)", () => {
         await expect(runSiteUnits({ tabId: 7, frameId: 3 }, ["u1"])).resolves.toBeUndefined();
     });
 
+    it("onSite: the hook asking again doesn't run the same code twice in a document whose run is still under way", async () => {
+        const m = mockChrome();
+        const done: (() => void)[] = [];
+        m.us.execute = vi.fn(() => new Promise<any[]>((r) => done.push(() => r([]))));
+        const doc = { tabId: 7, frameId: 0, documentId: "DOC" };
+        const first = runSiteUnits(doc, ["u1"]);
+        await runSiteUnits(doc, ["u1"]);
+        expect(m.us.execute).toHaveBeenCalledTimes(1);
+        // other code, another document: their own runs
+        const other = [runSiteUnits(doc, ["u2"]), runSiteUnits({ ...doc, documentId: "DOC2" }, ["u1"])];
+        expect(m.us.execute).toHaveBeenCalledTimes(3);
+        done.forEach((d) => d());
+        await Promise.all([first, ...other]);
+        // a run that failed is over too: the next ask runs it again
+        m.us.execute = vi.fn(async () => Promise.reject(new Error("dropped")));
+        await expect(runSiteUnits(doc, ["u1"])).rejects.toThrow("dropped");
+        m.us.execute = vi.fn(async () => []);
+        await runSiteUnits(doc, ["u1"]);
+        expect(m.us.execute).toHaveBeenCalledTimes(1);
+    });
+
     it("registrations under an older version's ids are removed", async () => {
         const m = mockChrome();
         m.registered.set("wt-iso-s1", { id: "wt-iso-s1" });

@@ -1409,15 +1409,20 @@ tweak.onSite({ url: "${origin}/ov-site-hot*", when: "document_end" }, () => {
     d.siteV = ${JSON.stringify(v)};
     d.siteRuns = String(Number(d.siteRuns || 0) + 1);
     d.siteWorld = (window as any).__pageMark === "page" ? "site" : "isolated";
+});
+tweak.onPage({ url: "${origin}/ov-site-hot*", when: "document_end" }, () => {
+    document.documentElement.dataset.pageV = ${JSON.stringify(v)};
 });`;
 
 /**
  * Saved onSite code reaches open pages: one whose CSP forbids eval
  * (`cspWorld`: where its onSite code runs: Chrome MV3 injects it into the
  * site's world, MV2 falls back to the isolated world), the other tabs while
- * one can't run code, and a page back from the back/forward cache.
+ * one can't run code, and a page back from the back/forward cache (its
+ * onPage code too). `failNextRun` (MV3) makes the next
+ * `userScripts.execute` fail; false when it couldn't.
  */
-export async function checkSiteHotReload(ctx: any, mgr: any, origin: string, check: Check, opts: { label?: string; cspWorld: "site" | "isolated" }): Promise<void> {
+export async function checkSiteHotReload(ctx: any, mgr: any, origin: string, check: Check, opts: { label?: string; cspWorld: "site" | "isolated"; failNextRun?: () => Promise<boolean> }): Promise<void> {
     const t = (s: string) => `onSite hot apply${opts.label ?? ""}: ${s}`;
     const send = (msg: any): Promise<any> => mgr.evaluate((m: any) => new Promise((r) => chrome.runtime.sendMessage(m, (x: any) => r(x ?? null))), msg);
     let n = 1;
@@ -1427,12 +1432,14 @@ export async function checkSiteHotReload(ctx: any, mgr: any, origin: string, che
     };
     await saveTweak(send, "s_sitehot", "sitehot", siteHotCode(origin, "v1"));
     await mgr.waitForTimeout(800);
-    const shows = (p: any, v: string, ms = 8000) =>
+    const shows = (p: any, v: string, ms = 8000, page = false) =>
         waitFor(
             (): Promise<Record<string, string>> => p.evaluate(() => ({ ...document.documentElement.dataset }) as Record<string, string>).catch(() => ({})),
-            (d) => d.siteV === v,
+            (d) => d.siteV === v && (!page || d.pageV === v),
             ms
         );
+    /** `p` runs version `v` of the onSite and the onPage code */
+    const both = (d: Record<string, string>, v: string) => d.siteV === v && d.pageV === v;
 
     const csp = await ctx.newPage();
     await csp.goto(`${origin}/ov-site-hot?csp`, { waitUntil: "load", timeout: 15000 });
@@ -1463,6 +1470,14 @@ export async function checkSiteHotReload(ctx: any, mgr: any, origin: string, che
     check(t("…and runs the newest code once it answers"), s2.siteV === v, JSON.stringify(s2));
     await stuck.close();
 
+    if (opts.failNextRun) {
+        const failing = await opts.failNextRun();
+        v = await save();
+        const t0 = Date.now();
+        const f = await shows(page, v, 5000);
+        check(t("onSite code whose delivery failed is asked for again"), f.siteV === v, JSON.stringify({ ...f, failing, ms: Date.now() - t0 }));
+    }
+
     await page.evaluate(() => void ((window as any).__kept = true));
     const runs = (await shows(page, v)).siteRuns;
     await page.goto(`${origin}/ov-app`, { waitUntil: "load", timeout: 15000 });
@@ -1476,8 +1491,37 @@ export async function checkSiteHotReload(ctx: any, mgr: any, origin: string, che
     v = await save();
     await mgr.waitForTimeout(500);
     await page.goBack({ waitUntil: "commit" }).catch(() => {});
-    const b2 = await shows(page, v);
-    check(t("…and with a save meanwhile runs the new code"), b2.siteV === v, JSON.stringify({ ...b2, restored: await kept() }));
+    const b2 = await shows(page, v, 8000, true);
+    check(t("…and with a save meanwhile runs the new onSite and onPage code"), both(b2, v), JSON.stringify({ ...b2, restored: await kept() }));
+    v = await save();
+    const b3 = await shows(page, v, 8000, true);
+    check(t("…and later saves still reach it"), both(b3, v), JSON.stringify(b3));
+    await page.close();
+    await deleteTweak(send, "sitehot");
+}
+
+/**
+ * MV3: a save after the service worker restarted reaches an open page's
+ * onSite and onPage code. `stopWorker` stops it; run this where the rest of
+ * the suite doesn't need the worker's state.
+ */
+export async function checkPageCodeAfterWorkerStop(ctx: any, send: (msg: any) => Promise<any>, origin: string, check: Check, stopWorker: () => Promise<void>): Promise<void> {
+    await saveTweak(send, "s_sitehot", "sitehot", siteHotCode(origin, "w1"));
+    // the onPage registration: only pages loaded after it run the code
+    await new Promise((r) => setTimeout(r, 1500));
+    const page = await ctx.newPage();
+    await page.goto(`${origin}/ov-site-hot`, { waitUntil: "load", timeout: 15000 });
+    const shows = (v: string) =>
+        waitFor(
+            (): Promise<Record<string, string>> => page.evaluate(() => ({ ...document.documentElement.dataset }) as Record<string, string>).catch(() => ({})),
+            (d) => d.siteV === v && d.pageV === v,
+            8000
+        );
+    const first = await shows("w1");
+    await stopWorker();
+    await saveTweak(send, "s_sitehot", "sitehot", siteHotCode(origin, "w2"));
+    const d = await shows("w2");
+    check("a save after the service worker restarted reaches an open page's onSite and onPage code", d.siteV === "w2" && d.pageV === "w2", JSON.stringify({ first, now: d }));
     await page.close();
     await deleteTweak(send, "sitehot");
 }

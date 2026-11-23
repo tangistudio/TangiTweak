@@ -97,10 +97,12 @@ import { watchCall, type CallWatch } from "../shared/callWatch";
     /**
      * MV3: the onSite code that arrived as user scripts (shared/siteCode.ts).
      * A status naming units that aren't here (a hot update, a page back from
-     * the back/forward cache) asks the extension for them and compiles once
-     * they are, or after UNITS_WAIT_MS with what is.
+     * the back/forward cache) asks the extension for them, again every
+     * UNITS_RETRY_MS while they're missing, and compiles once they are here,
+     * or after UNITS_WAIT_MS with what is.
      */
     const UNITS_WAIT_MS = 5000;
+    const UNITS_RETRY_MS = 1500;
     const units = __NO_EVAL__ ? siteUnits(() => gate.unit()) : null;
     /** the bundle's units that aren't here: their keys, or the names of what they hold */
     function missingUnits(names = false): string[] {
@@ -121,6 +123,7 @@ import { watchCall, type CallWatch } from "../shared/callWatch";
         compile: compileNow,
         timedOut: () => logUp(`onSite code not on this page after ${UNITS_WAIT_MS} ms: ${missingUnits(true).join(", ")}`, "warn"),
         waitMs: UNITS_WAIT_MS,
+        retryMs: UNITS_RETRY_MS,
     });
     /** a script's or imported module's function (`fk`: its unit, MV3) */
     function scriptFn(name: string, src: string, fk?: string): ScriptFn {

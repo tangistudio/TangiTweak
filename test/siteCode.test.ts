@@ -73,6 +73,7 @@ describe("onSite units an open page lacks", () => {
             compile: (hot) => seen.push(`compile${hot ? " hot" : ""} ${[...want].filter((k) => have.has(k)).join()}`),
             timedOut: () => seen.push("timed out"),
             waitMs: 5000,
+            retryMs: 1500,
         });
         return {
             seen,
@@ -120,22 +121,39 @@ describe("onSite units an open page lacks", () => {
         expect(h.seen).toEqual(["ask a", "ask b", "compile hot b"]);
     });
 
+    it("asks again while units are missing (a delivery can fail), for what is still missing, until they arrive", () => {
+        vi.useFakeTimers();
+        const h = hook();
+        h.status(["a", "b"], true);
+        vi.advanceTimersByTime(1500);
+        expect(h.seen).toEqual(["ask a,b", "ask a,b"]);
+        h.arrive("a");
+        vi.advanceTimersByTime(1500);
+        expect(h.seen).toEqual(["ask a,b", "ask a,b", "ask b"]);
+        h.arrive("b");
+        expect(h.seen).toEqual(["ask a,b", "ask a,b", "ask b", "compile hot a,b"]);
+        vi.advanceTimersByTime(10000);
+        expect(h.seen).toHaveLength(4);
+    });
+
     it("units that never come: compiles what is here after the wait; when they come after all, they run as a hot update", () => {
         vi.useFakeTimers();
         const h = hook();
         h.arrive("a");
         h.status(["a", "b"]);
         vi.advanceTimersByTime(4999);
-        expect(h.seen).toEqual(["ask b"]);
+        expect(h.seen).toEqual(["ask b", "ask b", "ask b", "ask b"]);
         vi.advanceTimersByTime(1);
-        expect(h.seen).toEqual(["ask b", "timed out", "compile a"]);
+        expect(h.seen.slice(4)).toEqual(["timed out", "compile a"]);
+        // no more asks once the wait ran out
+        vi.advanceTimersByTime(10000);
         h.arrive("other");
-        expect(h.seen).toHaveLength(3);
+        expect(h.seen).toHaveLength(6);
         h.arrive("b");
-        expect(h.seen).toEqual(["ask b", "timed out", "compile a", "compile hot a,b"]);
+        expect(h.seen.slice(6)).toEqual(["compile hot a,b"]);
         // once only
         h.arrive("c");
-        expect(h.seen).toHaveLength(4);
+        expect(h.seen).toHaveLength(7);
     });
 
     it("the background answers with the bundle's own units that have the asked keys", () => {

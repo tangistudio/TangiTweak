@@ -132,14 +132,15 @@ export function siteUnits(
 
 /**
  * The hook's wait for the units a status names. A status whose units are all
- * here compiles at once. Otherwise the hook asks for the missing ones and
- * compiles when the last arrives, or after `waitMs` with what is here; units
- * that arrive after that compile as a hot update.
+ * here compiles at once. Otherwise the hook asks for the missing ones, again
+ * every `retryMs` while they're missing (a delivery can fail), and compiles
+ * when the last arrives, or after `waitMs` with what is here; units that
+ * arrive after that compile as a hot update.
  */
 export function unitsGate(o: {
     /** The keys of the units the last status names that aren't here. */
     missing: () => string[];
-    /** Asks the extension to run these units in this document (once per status). */
+    /** Asks the extension to run these units in this document. */
     ask: (keys: string[]) => void;
     /** Compiles the last status's code. */
     compile: (hot: boolean) => void;
@@ -147,22 +148,30 @@ export function unitsGate(o: {
     timedOut: () => void;
     /** How long to wait for the missing units, in milliseconds. */
     waitMs: number;
+    /** How long after an ask to ask again, in milliseconds. */
+    retryMs: number;
 }): {
     /** A status arrived. */
     status(hot: boolean): void;
     /** A unit arrived. */
     unit(): void;
 } {
-    let wait: { hot: boolean; timer: ReturnType<typeof setTimeout> } | null = null;
+    let wait: { hot: boolean; timer: ReturnType<typeof setTimeout>; again: ReturnType<typeof setInterval> } | null = null;
     /** the last compile ran without some of its units */
     let late = false;
+    /** ends the wait; whether it was a hot update's */
+    const end = (): boolean => {
+        const hot = !!wait?.hot;
+        if (wait) {
+            clearTimeout(wait.timer);
+            clearInterval(wait.again);
+        }
+        wait = null;
+        return hot;
+    };
     return {
         status(hot) {
-            if (wait) {
-                hot ||= wait.hot;
-                clearTimeout(wait.timer);
-                wait = null;
-            }
+            hot = end() || hot;
             late = false;
             const keys = o.missing();
             if (!keys.length) return o.compile(hot);
@@ -170,19 +179,21 @@ export function unitsGate(o: {
                 hot,
                 timer: setTimeout(() => {
                     if (wait !== w) return;
-                    wait = null;
+                    end();
                     late = true;
                     o.timedOut();
                     o.compile(hot);
                 }, o.waitMs),
+                again: setInterval(() => {
+                    const still = o.missing();
+                    if (wait === w && still.length) o.ask(still);
+                }, o.retryMs),
             });
             o.ask(keys);
         },
         unit() {
             if ((!wait && !late) || o.missing().length) return;
-            const hot = wait ? wait.hot : true;
-            if (wait) clearTimeout(wait.timer);
-            wait = null;
+            const hot = wait ? end() : true;
             late = false;
             o.compile(hot);
         },

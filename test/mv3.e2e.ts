@@ -30,7 +30,7 @@ import { checkRulesStrategy, rulesServerRoute } from "./rulesE2e";
 import { checkFoldersAndDataFiles, foldersServerRoute } from "./foldersE2e";
 import { deleteTweak, saveTweak } from "./e2eTweak";
 import { bundlePkg } from "./bundleHelper";
-import { checkPlaces, checkOverlayPreview, checkOverlays, checkEarlyRequests, checkHotReload, checkSiteHotReload, checkOverlayShortcuts, checkPageShortcuts, checkCrossOriginShortcuts, checkPageStores, checkIsoStores, checkSiteHandles, checkSiteStores, overlayServerRoute } from "./overlayE2e";
+import { checkPlaces, checkOverlayPreview, checkOverlays, checkEarlyRequests, checkHotReload, checkSiteHotReload, checkPageCodeAfterWorkerStop, checkOverlayShortcuts, checkPageShortcuts, checkCrossOriginShortcuts, checkPageStores, checkIsoStores, checkSiteHandles, checkSiteStores, overlayServerRoute } from "./overlayE2e";
 import { checkPackages, packagesServerRoute } from "./packagesE2e";
 import { readExportZip } from "../src/shared/exportZip";
 
@@ -334,7 +334,23 @@ try {
             },
         });
         await checkHotReload(ctx, mgr, ORIGIN, check, { label: " (MV3)" });
-        await checkSiteHotReload(ctx, mgr, ORIGIN, check, { label: " (MV3)", cspWorld: "site" });
+        await checkSiteHotReload(ctx, mgr, ORIGIN, check, {
+            label: " (MV3)",
+            cspWorld: "site",
+            async failNextRun() {
+                const w = ctx.serviceWorkers().find((x: any) => x.url().includes(extId));
+                if (!w) return false;
+                await w.evaluate(() => {
+                    const us: any = (chrome as any).userScripts;
+                    const run = us.execute.bind(us);
+                    us.execute = () => {
+                        us.execute = run;
+                        return Promise.reject(new Error("dropped"));
+                    };
+                });
+                return true;
+            },
+        });
         await checkPageStores(ctx, mgr, ORIGIN, check, { label: " (MV3)" });
         await checkIsoStores(ctx, mgr, ORIGIN, check, { label: " (MV3)" });
         await checkSiteHandles(ctx, mgr, ORIGIN, check, { label: " (MV3)" });
@@ -1418,6 +1434,10 @@ tweak.replaceResponse({ url: "${ORIGIN}/sf-data", strategy: "page" }, async () =
     await fPage.waitForTimeout(2500);
     const flist2 = await fPage.evaluate(() => new Promise((r) => chrome.runtime.sendMessage({ type: "listScripts" }, r)));
     check("MV3 folder sync: file copied in while the SW was stopped is imported after restart", (flist2 as any[]).some((s) => s.meta?.name === "while-asleep/index"), JSON.stringify((flist2 as any[]).map((s) => s.meta?.name)));
+    await checkPageCodeAfterWorkerStop(ctx, fSend, ORIGIN, check, async () => {
+        await swCdp.send("ServiceWorker.stopAllWorkers");
+        await fPage.waitForTimeout(500);
+    });
 
     // scripts saved outside the editor (Import…) land in the folder, and an
     // importer saved before its library re-checks once the library appears

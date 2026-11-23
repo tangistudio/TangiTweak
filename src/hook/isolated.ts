@@ -16,7 +16,10 @@
  * (`tweak.globalStore`, this page's `tweak.pageStore` copies) are replicas
  * primed by `iso.load` and synced over L6; its `tweak.siteStore`s are
  * mirrors of the hook's, over window messages. A save arrives as
- * `iso.update`: load again, re-run if the code changed.
+ * `iso.update`: load again, re-run if the code changed. Without a link (the
+ * service worker restarted, the page was in the back/forward cache) the
+ * bridge's `iso.wake` window message or the page's `pageshow` opens one,
+ * which loads again.
  */
 import { formatScriptError, reportUncaught } from "../shared/scriptError";
 import { makeScriptConsole, formatLogArgs, scriptLogLine, type ScriptLogLevel } from "../shared/scriptLog";
@@ -51,6 +54,8 @@ import { FrameKeyOffers } from "../shared/frameKeys";
 
     let current: Endpoint | null = null;
     let link: Promise<Endpoint> | null = null;
+    /** the port under the link */
+    let linkPort: chrome.runtime.Port | null = null;
     /** the owner refused this frame: nothing more to do */
     let stopped = false;
     /** keep the link up (top frame with an overlay: its calls must find us) */
@@ -115,9 +120,27 @@ import { FrameKeyOffers } from "../shared/frameKeys";
     });
     window.addEventListener("message", (e: MessageEvent) => {
         const d = e.data;
-        if (e.source !== window || !d || d.source !== "res-override-hook") return;
+        if (e.source !== window || !d) return;
+        // the bridge, after a save: it reaches this world over its link, so without one (the service worker
+        // restarted) it loads again. The page can post this too: that only loads the script's own code again
+        if (d.source === "res-override-bridge" && d.kind === "iso.wake") {
+            if (!stopped && !link) linkUp().catch(() => {});
+            return;
+        }
+        if (d.source !== "res-override-hook") return;
         if (d.kind === "rpc.result" && d.s === s) pageClient.receive(d.result);
         else if (SITE_DOWN_KINDS.has(d.kind)) site?.receive(d);
+    });
+    // back from the back/forward cache: the browser closed the link when the page went in and this world isn't told.
+    // A new one loads the code again and runs it when it changed meanwhile
+    window.addEventListener("pageshow", (e) => {
+        if (!e.persisted || stopped) return;
+        try {
+            linkPort?.disconnect();
+        } catch {}
+        current?.close("the page was in the back/forward cache");
+        link = null;
+        linkUp().catch(() => {});
     });
 
     /** the bound link (opened and loaded on demand); rejects when the owner is unreachable or refused */
@@ -126,6 +149,7 @@ import { FrameKeyOffers } from "../shared/frameKeys";
         if (link) return link;
         const p = (async () => {
             const port = chrome.runtime.connect({ name: "tt-user-script" });
+            linkPort = port;
             const ep = portEndpoint(port);
             ep.on("rpc.call", (c) => isRpcCall(c) && exposer.answer(c, (r: RpcResult) => ep.push("rpc.result", r, s)));
             ep.on("rpc.result", (r) => client.receive(r));

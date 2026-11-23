@@ -9,14 +9,15 @@ its section below.
 
 ### Changed
 
-- **Open pages ask for the `onSite` code they lack** (Chrome 135+), instead of every save sending its new code into every open tab. Only the frames a tweak runs in get its code, and a page that missed a save catches up on the next one.
+- **Open pages ask for the `onSite` code they lack** (Chrome 135+), instead of every save sending its new code into every open tab. Only the frames a tweak runs in get its code. A page asks again every 1.5 seconds while the code hasn't come, so a failed delivery recovers by itself.
 
 ### Fixed
 
 - **One stuck tab no longer stops `onSite` changes everywhere** (Chrome 135+): while a tab couldn't run code (an open `alert` or `confirm`, a page paused in DevTools, a busy page), every save after the first left all tabs with "… onSite code isn't on this page: reload the page to run it", and reloading the page didn't help. Saves now update the other tabs at once, and the stuck tab when it responds again.
 - **`onSite` code that reaches a page late still runs** (Chrome 135+): code that arrived more than 5 seconds after its save was dropped until the page reloaded.
 - **`onSite` code runs on pages whose CSP forbids `eval`** in Firefox and Chrome MV2. It didn't run there: the [fallback to the isolated world](docs/scripting.md#tweakonsite--the-sites-world) wasn't wired up, and Firefox's CSP error wasn't recognized. Saves reach those pages too.
-- **A page restored with Back or Forward runs the `onSite` code saved meanwhile**: a page kept in the browser's back/forward cache got no updates and came back with its old code. Nothing runs again when nothing changed.
+- **A page restored with Back or Forward runs the `onSite` and `onPage` code saved meanwhile, and keeps getting saves**: a page kept in the browser's back/forward cache got no updates, came back with its old code and missed every later save until it was reloaded. Nothing runs again when nothing changed.
+- **`onPage` changes reach open tabs after the service worker restarts** (Chrome MV3): a save that woke the worker left open tabs running their old `onPage` code until they were reloaded.
 - **Firefox: the first page loaded after the extension starts runs its `onSite` code**. It could miss it and hold its first fetch/XHR requests for 3 seconds, because the page hook asked for its scripts before the extension's side was listening.
 
 ## [0.40.2-alpha] - 2026-11-22

@@ -37,6 +37,7 @@
 import type { RouteMeta } from "../shared/route";
 import type { UserScriptsStatus } from "../shared/userScriptsStatus";
 import { dlogLevel } from "../shared/debugLog";
+import { contentHash } from "../shared/folderSync";
 
 export const USER_SCRIPT_PORT = "tt-user-script";
 const ID_PREFIX = "tt-iso-";
@@ -194,14 +195,25 @@ async function syncSite(us: any, want: SiteScript[], registered: any[]): Promise
  *
  * Not queued behind anything: `execute` settles only once the document ran
  * the code, which a page with an open dialog or a paused debugger does late.
+ * The hook asks again while it waits: the same code for a document whose
+ * run is still under way isn't run again.
  */
 export async function runSiteUnits(target: { tabId: number; frameId: number; documentId?: string }, units: string[]): Promise<void> {
     if (!__MV3__ || !units.length) return;
     const us = api();
     if (typeof us?.execute !== "function") return;
     const { tabId, frameId, documentId } = target;
-    await us.execute({ target: documentId ? { tabId, documentIds: [documentId] } : { tabId, frameIds: [frameId] }, world: "MAIN", injectImmediately: true, js: units.map((code) => ({ code })) });
+    const key = documentId && `${tabId} ${documentId} ${contentHash(units.join("\0"))}`;
+    if (key && running.has(key)) return;
+    if (key) running.add(key);
+    try {
+        await us.execute({ target: documentId ? { tabId, documentIds: [documentId] } : { tabId, frameIds: [frameId] }, world: "MAIN", injectImmediately: true, js: units.map((code) => ({ code })) });
+    } finally {
+        if (key) running.delete(key);
+    }
 }
+/** the runs under way: tab, document and a hash of the code */
+const running = new Set<string>();
 
 /** tests: forget the cached status and registrations */
 export function resetUserScripts(): void {
@@ -209,6 +221,7 @@ export function resetUserScripts(): void {
     checking = null;
     listeners.length = 0;
     wanted = { iso: [], site: [] };
+    running.clear();
     syncing = Promise.resolve();
     runtime = null;
 }

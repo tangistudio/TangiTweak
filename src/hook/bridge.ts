@@ -194,7 +194,7 @@ import type { RanApi } from "../shared/netTypes";
         }
         if (data.kind === "units?") {
             // MV3: the hook lacks onSite code the last status named. The page can post this too:
-            // one ask per status, and the background only runs this frame's own bundle
+            // a few asks per status, and the background only runs this frame's own bundle
             if (!__MV3__ || unitAsks < 1 || !Array.isArray(data.keys)) return;
             unitAsks--;
             safeSend({ type: "siteUnits", url: location.href, keys: data.keys.filter((k: unknown) => typeof k === "string" && k.length < 1000).slice(0, 2000) });
@@ -289,14 +289,14 @@ import type { RanApi } from "../shared/netTypes";
     /** script ids whose onSite code this frame got (storage relay allow-list) */
     let pageScriptIds = new Set<string>();
     let isoFired = false;
-    /** MV3: how many times the hook may still ask for onSite code it lacks (one per status) */
+    /** MV3: how many times the hook may still ask for onSite code it lacks (each status allows its ask and three more, as the hook asks again while it waits) */
     let unitAsks = 0;
     /** the last bundle's code and routes (`rev`): a page back from the back/forward cache compares it */
     let bundleRev: string | undefined;
 
     function postStatus(resp: any, hot: boolean): void {
         const active = !!(resp && (resp.count > 0 || (resp.domHandlers || []).length));
-        unitAsks = Math.min(unitAsks + 1, 3);
+        unitAsks = Math.min(unitAsks + 4, 8);
         // main-world handlers and libraries only: isolated code never reaches the page
         window.postMessage(
             {
@@ -692,6 +692,7 @@ import type { RanApi } from "../shared/netTypes";
     // bundle reopens it. Holders (the overlay, Phase 2) get a backoff
     // reconnect, 50 ms doubling to 2 s.
     let l2: Endpoint | null = null;
+    let l2Port: chrome.runtime.Port | null = null;
     let l2Holders = 0;
     let l2Backoff = 50;
     let l2Timer: ReturnType<typeof setTimeout> | null = null;
@@ -708,6 +709,7 @@ import type { RanApi } from "../shared/netTypes";
         }
         const ep = portEndpoint(port, { debug: (m) => dlog("debug", "tt-bridge:", m) });
         l2 = ep;
+        l2Port = port;
         ep.on("bundle.update", () => guard(() => onBundleUpdate()));
         // an overlay's store updates (the background only sends those of scripts with an overlay here)
         // (and isolated onPage code's, tagged ISO_STORE_TAG + s)
@@ -792,12 +794,21 @@ import type { RanApi } from "../shared/netTypes";
         return (await l2up(op)).call(op, a, s);
     }
 
+    /** MV3: onPage code whose link to the extension closed (the service worker restarted) loads again: a save reaches it only over that link */
+    function wakeIso(): void {
+        if (!__MV3__) return;
+        try {
+            window.postMessage({ source: MAIN_SOURCE, kind: "iso.wake" }, "/");
+        } catch {}
+    }
+
     /** scripts changed: refresh hook status; onPage refires in the MAIN world (hook) when healthy, else here (isolated) */
     function onBundleUpdate(): void {
         if (hookBroken) void runDocumentHandlers(true);
         safeSend({ type: "getHookBundle", url: location.href }, (resp: any) => {
             noteBundle(resp, true);
             postStatus(resp, true);
+            wakeIso();
         });
     }
 
@@ -805,6 +816,11 @@ import type { RanApi } from "../shared/netTypes";
     // (unchanged code doesn't run again; overlays update by their own code hash)
     window.addEventListener("pageshow", (e) => {
         if (!e.persisted || dead) return;
+        // the browser closed this frame's port when the page went into the cache, and the page isn't told: later updates need a new one
+        try {
+            l2Port?.disconnect();
+        } catch {}
+        l2?.close("the page was in the back/forward cache");
         const had = bundleRev;
         safeSend({ type: "getHookBundle", url: location.href }, (resp: any) => {
             if (!resp) return;
