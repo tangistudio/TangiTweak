@@ -17,7 +17,11 @@ export function runtimeSendMessage<T = any>(msg: any): Promise<T> {
 /** A debugger target: a tab (by id) or a worker/service-worker (by targetId). */
 export type Debuggee = { tabId: number } | { targetId: string };
 
+/** Firefox has no chrome.debugger: its build leaves these calls out */
+const NO_DEBUGGER = () => Promise.reject(new Error("chrome.debugger is unavailable"));
+
 export function debuggerSend(debuggee: Debuggee, command: string, params?: any): Promise<any> {
+    if (__FIREFOX__) return NO_DEBUGGER();
     return new Promise((resolve, reject) => {
         chrome.debugger.sendCommand(debuggee as any, command as any, params as any, (resp: any) => {
             const err = (chrome.runtime as any).lastError;
@@ -28,6 +32,7 @@ export function debuggerSend(debuggee: Debuggee, command: string, params?: any):
 }
 
 export function debuggerAttach(debuggee: Debuggee): Promise<void> {
+    if (__FIREFOX__) return NO_DEBUGGER();
     return new Promise((resolve, reject) => {
         chrome.debugger.attach(debuggee as any, "1.3" as any, () => {
             const err = (chrome.runtime as any).lastError;
@@ -38,6 +43,7 @@ export function debuggerAttach(debuggee: Debuggee): Promise<void> {
 }
 
 export function debuggerDetach(debuggee: Debuggee): Promise<void> {
+    if (__FIREFOX__) return Promise.resolve();
     return new Promise((resolve) => {
         chrome.debugger.detach(debuggee as any, () => { void (chrome.runtime as any).lastError; resolve(); });
     });
@@ -45,6 +51,7 @@ export function debuggerDetach(debuggee: Debuggee): Promise<void> {
 
 /** All worker/service-worker debuggee targets. */
 export function debuggerGetTargets(): Promise<{ targetId: string; type: string; url: string }[]> {
+    if (__FIREFOX__) return Promise.resolve([]);
     return new Promise((resolve) => {
         chrome.debugger.getTargets((targets: any[]) => {
             resolve(

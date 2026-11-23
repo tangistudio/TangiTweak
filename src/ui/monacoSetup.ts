@@ -95,8 +95,12 @@ export async function loadMonaco(): Promise<any> {
 
     // one module worker per language service (bundled by scripts/build.mjs)
     const workers: Record<string, string> = { typescript: "ts", javascript: "ts", json: "json" };
+    // the Worker itself, not just its URL: with a URL Monaco starts its editor worker
+    // (diffs, word completions, links) from a blob: that imports the URL, and a blob:
+    // worker can't fetch chrome-extension:// modules ("Failed to fetch dynamically imported module")
     (window as any).MonacoEnvironment = {
-        getWorkerUrl: (_: string, label: string) => chrome.runtime.getURL(`lib/monaco/${workers[label] ?? "editor"}.worker.js`),
+        getWorker: (_: string, label: string) =>
+            new Worker(chrome.runtime.getURL(`lib/monaco/${workers[label] ?? "editor"}.worker.js`), { type: "module", name: label }),
     };
 
     const load = (el: HTMLScriptElement | HTMLLinkElement) =>

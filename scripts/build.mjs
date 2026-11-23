@@ -8,7 +8,8 @@
  *                          hook tier carries interception — webRequest/
  *                          cdp tiers disabled at runtime)
  *
- *   dist-firefox/        — the MV2 build for Firefox (the .xpi)
+ *   dist-firefox/        — the MV2 build for Firefox (the .xpi), built with
+ *                          __FIREFOX__ so Chromium-only APIs are left out
  *
  * The MV3 and Firefox manifests are derived from manifest.json at build time.
  */
@@ -33,8 +34,12 @@ function gitCommit() {
 }
 const WATCH = process.argv.includes("--watch");
 
-/** @type {import('rolldown').InputOptions[]} */
-function entriesFor(dist, mv3) {
+/**
+ * `firefox`: the MV2 build for Firefox, where `__FIREFOX__` drops what Firefox
+ * lacks (chrome.debugger, webRequest.onActionIgnored) so AMO's linter doesn't flag it
+ * @type {import('rolldown').InputOptions[]}
+ */
+function entriesFor(dist, mv3, firefox = false) {
     const list = [
         {
             input: path.join(root, "src/background/background.ts"),
@@ -74,7 +79,8 @@ function entriesFor(dist, mv3) {
         },
     ];
     if (!mv3) {
-        list.push(
+        // Chromium only: Firefox replaces page bodies in place (extensionStrategy.ts)
+        if (!firefox) list.push(
             {
                 input: path.join(root, "src/ui/serve.ts"),
                 output: { file: path.join(dist, "serve.js"), format: "iife" },
@@ -103,7 +109,7 @@ function entriesFor(dist, mv3) {
     const noEval = (e) => mv3 && /[/\\](hook|bridge)\.js$/.test(e.output.file);
     for (const e of list) {
         e.transform = {
-            define: { __MV3__: mv3 ? "true" : "false", __NO_EVAL__: noEval(e) ? "true" : "false", __COMMIT__: JSON.stringify(gitCommit()), __BUILD_TIME__: JSON.stringify(new Date().toISOString()), "process.env.NODE_ENV": JSON.stringify("production") },
+            define: { __MV3__: mv3 ? "true" : "false", __FIREFOX__: firefox ? "true" : "false", __NO_EVAL__: noEval(e) ? "true" : "false", __COMMIT__: JSON.stringify(gitCommit()), __BUILD_TIME__: JSON.stringify(new Date().toISOString()), "process.env.NODE_ENV": JSON.stringify("production") },
             jsx: { runtime: "automatic", importSource: "react" },
         };
     }
@@ -124,7 +130,9 @@ function firefoxManifest(mv2) {
     // Firefox has no manifest sandbox: overlay.html is a normal extension page there (overlayRuntime.ts checks its nonce with the background)
     // and no version_name (the xpi is named after the release tag instead)
     const { sandbox: _sandbox, version_name: _versionName, ...rest } = mv2;
-    return { ...rest, content_scripts: [HOOK_MAIN, ...mv2.content_scripts] };
+    // nor chrome.debugger (the debugger strategy is Chromium only)
+    const permissions = mv2.permissions.filter((p) => p !== "debugger");
+    return { ...rest, permissions, content_scripts: [HOOK_MAIN, ...mv2.content_scripts] };
 }
 
 /** manifest.json → MV3 manifest object */
@@ -159,8 +167,8 @@ function mv3Manifest(mv2) {
     };
 }
 
-async function buildOnce(dist, mv3) {
-    const entries = entriesFor(dist, mv3);
+async function buildOnce(dist, mv3, firefox = false) {
+    const entries = entriesFor(dist, mv3, firefox);
     // the page hook first: MV2 Chromium's bridge injects its source inline
     const isHook = (e) => e.output.file === path.join(dist, "hook.js");
     const hook = entries.find(isHook);
@@ -173,14 +181,14 @@ async function buildOnce(dist, mv3) {
         await bundle.close();
         console.log("built", path.relative(root, entry.output.file));
     }
-    await copyStatic(dist, mv3);
+    await copyStatic(dist, mv3, firefox);
 }
 
 /**
  * lib/monaco/: Monaco's ESM build, bundled.
  *
  *   editor.main.js/.css  src/ui/monacoBundle.ts (window.monaco), and the codicon font
- *   *.worker.js          its module workers (monacoSetup.ts's getWorkerUrl)
+ *   *.worker.js          its module workers (monacoSetup.ts's getWorker)
  *   ts.libs.js           the TS worker's lib .d.ts files
  *
  * The TS worker's compiler is our typescript (6.x), not the TS 5.9 Monaco bundles,
@@ -208,7 +216,7 @@ function buildMonaco() {
 
 async function buildMonacoTo(out, libRoots) {
     await rm(out, { recursive: true, force: true });
-    // TS's compiler uses eval; Monaco's `new URL("…worker.js", import.meta.url)` fallbacks never run (getWorkerUrl wins)
+    // TS's compiler uses eval; Monaco's `new URL("…worker.js", import.meta.url)` fallbacks never run (getWorker wins)
     const quiet = { logLevel: "warn", onLog: (level, log, handler) => log.code !== "EVAL" && log.code !== "EMPTY_IMPORT_META" && handler(level, log) };
 
     const fonts = new Set();
@@ -324,7 +332,7 @@ async function builtinTypes() {
     return out;
 }
 
-async function copyStatic(dist, mv3) {
+async function copyStatic(dist, mv3, firefox = false) {
     await mkdir(path.join(dist, "lib", "monaco"), { recursive: true });
 
     // storeIcon.png is for the store listing only — no manifest references it
@@ -334,6 +342,10 @@ async function copyStatic(dist, mv3) {
         await writeFile(path.join(dist, "manifest.json"), JSON.stringify(mv3Manifest(mv2), null, 4) + "\n");
         await copyFile(path.join(root, "src/background/offscreen.html"), path.join(dist, "offscreen.html"));
         await copyFile(path.join(root, "src/background/sandbox.html"), path.join(dist, "sandbox.html"));
+    } else if (firefox) {
+        const mv2 = JSON.parse(await readFile(path.join(root, "manifest.json"), "utf8"));
+        await writeFile(path.join(dist, "manifest.json"), JSON.stringify(firefoxManifest(mv2), null, 4) + "\n");
+        await copyFile(path.join(root, "src/background/background.html"), path.join(dist, "background.html"));
     } else {
         await copyFile(path.join(root, "manifest.json"), path.join(dist, "manifest.json"));
         await copyFile(path.join(root, "src/background/background.html"), path.join(dist, "background.html"));
@@ -442,6 +454,7 @@ async function buildSdk() {
         transform: {
             define: {
                 __MV3__: "false",
+                __FIREFOX__: "false",
                 __NO_EVAL__: "false",
                 __COMMIT__: JSON.stringify(gitCommit()),
                 __HOOK_SRC__: JSON.stringify(""),
@@ -541,6 +554,18 @@ async function getSdkJson() {
     return cachedSdkJson ?? buildSdk();
 }
 
+/** Firefox lacks these: AMO's linter flags each call (UNSUPPORTED_API), so `__FIREFOX__` must leave them out */
+const CHROMIUM_ONLY_CALL = /\bchrome\.debugger\.\w|\bonActionIgnored\??\.addListener|\bonUserScriptConnect\??\.addListener/;
+
+async function checkFirefoxBuild(dir) {
+    const bad = [];
+    for (const name of await readdir(dir)) {
+        if (name.endsWith(".js") && CHROMIUM_ONLY_CALL.test(await readFile(path.join(dir, name), "utf8"))) bad.push(name);
+    }
+    if (bad.length) throw new Error(`dist-firefox/: Chromium-only API calls in ${bad.join(", ")} (guard them with __FIREFOX__)`);
+    console.log("dist-firefox/: no Chromium-only API calls");
+}
+
 async function buildAll() {
     cachedSdkJson = null;
     await buildSdk();
@@ -553,10 +578,9 @@ async function buildAll() {
     console.log("dist-mv2/ (copy of dist/) written");
     const firefox = path.join(root, "dist-firefox");
     await rm(firefox, { recursive: true, force: true });
-    await cp(path.join(root, "dist"), firefox, { recursive: true });
-    const mv2 = JSON.parse(await readFile(path.join(root, "manifest.json"), "utf8"));
-    await writeFile(path.join(firefox, "manifest.json"), JSON.stringify(firefoxManifest(mv2), null, 4) + "\n");
-    console.log("dist-firefox/ (dist/ + MAIN-world hook) written");
+    await mkdir(firefox, { recursive: true });
+    await buildOnce(firefox, false, true);
+    await checkFirefoxBuild(firefox);
 
     // MV3: service worker + sandbox compile host
     await rm(path.join(root, "dist-mv3"), { recursive: true, force: true });

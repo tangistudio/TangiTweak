@@ -246,10 +246,14 @@ until its code hash changes or the page reloads.
 `npm run build` produces both bundles:
 
 - **`dist/` (= `dist-mv2/`)** — the MV2 build for Chromium.
-- **`dist-firefox/`** — the same MV2 build for Firefox (the `.xpi`): its
+- **`dist-firefox/`** — the MV2 build for Firefox (the `.xpi`): its
   manifest also registers the page hook as a MAIN-world content script,
   which Chromium's MV2 rejects ("The 'world' property is restricted…").
   On Chromium MV2 the bridge injects the hook with a `<script>` tag instead.
+  It's built with `__FIREFOX__`, which leaves out what Firefox lacks
+  (`chrome.debugger`, `webRequest.onActionIgnored`, `serve.html`) so AMO's
+  linter doesn't flag it; the build fails if such a call gets back in. Check
+  it with `npx addons-linter dist-firefox`.
 - **`dist-mv3/`** — the Manifest V3 build (`manifest_version: 3`,
   background service worker, `action`, `host_permissions`).
 

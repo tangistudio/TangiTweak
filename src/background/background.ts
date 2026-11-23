@@ -144,7 +144,7 @@ chrome.runtime.onMessage.addListener((msg: any, _s, sendResponse) => {
 
 // ---- manager UI port: logs stream over it ----
 // L6: a script's isolated-world onPage code (MV3 chrome.userScripts world)
-(chrome.runtime as any).onUserScriptConnect?.addListener((port: chrome.runtime.Port) => addUserScriptPort(port));
+if (__MV3__) (chrome.runtime as any).onUserScriptConnect?.addListener((port: chrome.runtime.Port) => addUserScriptPort(port));
 chrome.runtime.onConnect.addListener((port) => {
     if (addBridgePort(port)) return; // L2: a content-script bridge
     if (addPreviewPort(port)) return; // L5: the Editor's Preview tab
@@ -232,7 +232,7 @@ chrome.runtime.onMessage.addListener((msg: any, sender, sendResponse) => {
 (globalThis as any).__resDebugBuffer = getDebugBuffer;
 
 // ---- CDP debugger events (debugger strategy) ----
-if (chrome.debugger) {
+if (!__FIREFOX__ && chrome.debugger) {
     chrome.debugger.onEvent.addListener((source, method, params) => {
         if (method === "Fetch.requestPaused" && source.tabId !== undefined) {
             const pp = params as any; dlog("debugger", "requestPaused", { tabId: source.tabId, url: pp?.request?.url, status: pp?.responseStatusCode });

@@ -148,6 +148,15 @@ try {
     };
     await mgr.waitForFunction(() => (window as any).monaco?.editor.getEditors().length === 1, null, { timeout: 20000 }).catch((e: any) => console.log("waitForFunction editor failed:", e.message.slice(0, 100)));
     check("manager opens", true);
+    // Monaco's editor worker (diffs, word completions) starts: from a blob: it couldn't import chrome-extension:// modules
+    const diff = await mgr.evaluate(() => new Promise<any>((r) => {
+        const m = (window as any).monaco;
+        const d = m.editor.createDiffEditor(document.body.appendChild(document.createElement("div")));
+        d.setModel({ original: m.editor.createModel("a\nb", "plaintext"), modified: m.editor.createModel("a\nc", "plaintext") });
+        d.onDidUpdateDiff(() => { r(d.getLineChanges()); d.getModel().original.dispose(); d.getModel().modified.dispose(); d.dispose(); });
+        setTimeout(() => r("timeout"), 8000);
+    }));
+    check("Monaco's editor worker loads (a diff computes)", Array.isArray(diff) && diff.length === 1, JSON.stringify(diff));
     const contexts = await mgr.evaluate(() => new Promise<any>((r) => (chrome.runtime as any).getContexts({}, (cs: any[]) => r(cs?.map((c: any) => c.contextType) ?? []))));
     // this chromium reports the MV3 background SW as "BACKGROUND"
     check("extension service worker registered", contexts.includes("BACKGROUND") || contexts.includes("SERVICE_WORKER"), JSON.stringify(contexts));

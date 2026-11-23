@@ -4,7 +4,7 @@ Status: research only, no code changed. Written 2026-11. Line numbers refer to t
 
 ## TL;DR
 
-**Are we using web workers now?** Only for the Editor's type checking. Monaco's TypeScript language service runs in its own worker (`lib/monaco/ts.worker.js`, loaded through `MonacoEnvironment.getWorkerUrl` in `src/ui/monacoSetup.ts`). Everything on the save path runs on main threads:
+**Are we using web workers now?** Only for the Editor's type checking. Monaco's TypeScript language service runs in its own worker (`lib/monaco/ts.worker.js`, started by `MonacoEnvironment.getWorker` in `src/ui/monacoSetup.ts`). Everything on the save path runs on main threads:
 - MV3: the TS to JS transpile and the top-level runs happen in the sandbox iframe (`src/background/sandbox.ts`) inside the offscreen document. The service worker only orchestrates.
 - MV2 and Firefox: they run in the background page.
 - Pages: the hook, bridge, isolated world and overlay run already-transpiled code with `new Function`.

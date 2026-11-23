@@ -32,12 +32,12 @@ export function tweakHost(make: (file: string) => object): TweakHost {
     };
 }
 
-/** `require` for `file`'s code run with `host`: "tangitweak" is that file's `tweak`, anything else `require`'s */
-export function tweakRequire(host: TweakHost | undefined, file: string, require: unknown): (spec: string) => any {
+/** `require` for `file`'s code run with `host`: "tangitweak" is that file's `tweak`, anything else `load`'s */
+export function tweakRequire(host: TweakHost | undefined, file: string, load: unknown): (spec: string) => any {
     return (spec) => {
         if (spec === TWEAK_MODULE && host && typeof host.module === "function") return host.module(file);
-        if (typeof require !== "function") throw new Error(`cannot import "${spec}" here`);
-        return require(spec);
+        if (typeof load !== "function") throw new Error(`cannot import "${spec}" here`);
+        return load(spec);
     };
 }
 

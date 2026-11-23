@@ -663,7 +663,8 @@ export function createPipeline(
         }, FILTER);
         // another extension's conflicting change won (e.g. two copies of
         // TangiTweak, or an ad blocker redirecting the same request)
-        (chrome.webRequest as any).onActionIgnored?.addListener((d: any) => {
+        // (Chromium only)
+        if (!__FIREFOX__) (chrome.webRequest as any).onActionIgnored?.addListener((d: any) => {
             const t = traced.get(d.requestId);
             log(t?.tabId ?? -1, `[extension] the browser IGNORED this extension's "${d.action}"${t ? ` for ${t.url}` : ""} — another extension's change to the same request took precedence (disable other request-modifying extensions, e.g. a second TangiTweak install)`, "warn");
         });

@@ -8,6 +8,7 @@ const src = (p: string) => fileURLToPath(new URL(`./src/${p}`, import.meta.url))
 export default defineConfig({
     define: {
         __MV3__: "false",
+        __FIREFOX__: "false",
         __NO_EVAL__: "false",
         __COMMIT__: JSON.stringify("test"),
         __HOOK_SRC__: JSON.stringify(""),

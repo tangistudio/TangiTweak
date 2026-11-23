@@ -537,11 +537,7 @@ export class DebuggerStrategy {
         const key = `tab:${tabId}`;
         if (this.attached.has(key)) {
             this.attached.delete(key);
-            try {
-                await chrome.debugger.detach({ tabId });
-            } catch {
-                /* already gone */
-            }
+            await debuggerDetach({ tabId }); // resolves even if it's already gone
         }
     }
 }

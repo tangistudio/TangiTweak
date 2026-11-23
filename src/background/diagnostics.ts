@@ -103,8 +103,8 @@ async function environment(): Promise<Record<string, unknown>> {
     } catch {}
     env.apis = {
         webRequestBlocking: !__MV3__ && !!chrome.webRequest?.onBeforeRequest,
-        onActionIgnored: !!(chrome.webRequest as any)?.onActionIgnored,
-        debugger: !!chrome.debugger,
+        onActionIgnored: !__FIREFOX__ && !!(chrome.webRequest as any)?.onActionIgnored,
+        debugger: !__FIREFOX__ && !!chrome.debugger,
         proxy: !!chrome.proxy,
         nativeMessaging: !!chrome.runtime.connectNative,
     };

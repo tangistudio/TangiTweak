@@ -15,7 +15,7 @@
 ## Firefox
 
 Each release ships `tangitweak-firefox-vX.Y.Z.xpi` (add-on id
-`tangitweak@tangistudio`). When the release was signed through AMO, drag the
+`tangitweak@tangistudio`) for Firefox 140 or later (142 or later on Android). When the release was signed through AMO, drag the
 file onto Firefox to install it. An unsigned `.xpi` (the release notes say
 which) installs permanently only on Developer Edition, Nightly or ESR with
 `xpinstall.signatures.required` set to `false` in `about:config`; on regular

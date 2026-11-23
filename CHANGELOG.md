@@ -36,6 +36,8 @@ Handlers from several tweaks now stack predictably: they run from general to spe
 - `ctx.requestHeaders` in `onRequest` and `ctx.responseHeaders` in `onResponseHeaders` include the edits of the handlers that ran before.
 - On `rules`, the run order becomes the rules' priority.
 - **Open pages ask for the `onSite` code they lack** (Chrome 135+), instead of every save sending its new code into every open tab. Only the frames a tweak runs in get its code. A page asks again every 1.5 seconds while the code hasn't come, so a failed delivery recovers by itself.
+- The Firefox build gets fewer warnings from Firefox Add-ons (61 down to 39 in `addons-linter`, no errors). It's now its own build that leaves out what Firefox doesn't have (the `debugger` permission and its calls, `webRequest.onActionIgnored` and the Chromium-only `serve.html` page), and its manifest says TangiTweak collects no data (`data_collection_permissions`). The build fails if a Chromium-only call gets back in. What's left is needed: running scripts' code (`eval`/`Function`, the CSP's `'unsafe-eval'`) and React's and Monaco's own `innerHTML`.
+- Firefox needs version 140 or later (142 on Android), which the data-collection setting needs. Every older Firefox stopped getting updates by September 2025.
 
 ### Removed
 
@@ -49,6 +51,7 @@ Handlers from several tweaks now stack predictably: they run from general to spe
 - **A page restored with Back or Forward runs the `onSite` and `onPage` code saved meanwhile, and keeps getting saves**: a page kept in the browser's back/forward cache got no updates, came back with its old code and missed every later save until it was reloaded. Nothing runs again when nothing changed.
 - **`onPage` changes reach open tabs after the service worker restarts** (Chrome MV3): a save that woke the worker left open tabs running their old `onPage` code until they were reloaded.
 - **Firefox: the first page loaded after the extension starts runs its `onSite` code**. It could miss it and hold its first fetch/XHR requests for 3 seconds, because the page hook asked for its scripts before the extension's side was listening.
+- Editor: Monaco's editor worker loads again (diffs, word completions and links ran without it). It logged `Failed to fetch dynamically imported module: …/lib/monaco/editor.worker.js` each time it started.
 
 ## [0.40.2-alpha] - 2026-11-22
 
