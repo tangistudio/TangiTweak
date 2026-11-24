@@ -81,7 +81,7 @@ import { runOp, type OpScript } from "../shared/bodyOps";
 import type { NetKind } from "../shared/netTypes";
 import { startOverlay, type OverlayRuntime } from "../overlay/overlayRuntime";
 import { setPackageFetch } from "../background/engine/packageImports";
-import { routeLabel } from "../shared/route";
+import { handlerLayer, routeLabel, sortByLayer } from "../shared/route";
 import { Window as HappyWindow } from "happy-dom";
 import { backgroundScope, inScope, pageScope, windowScope } from "./worlds";
 import type { ScriptScope } from "../shared/scriptScope";
@@ -1310,6 +1310,8 @@ export async function loadTweak(source: TweakSource, options: LoadTweakOptions =
 
     const knownTabIds = new Set<number>([1]);
 
+    // the tweak's package.json layer (a test has no user setting)
+    const layers = { pkg: ws.manifest?.layer };
     let currentRuleGroups: RuleGroupRef[] = [];
     let ruleWarnings: string[] = [];
     // the rules Chrome would take, after its checks (RE2, size, counts: ruleChecks.ts)
@@ -1322,10 +1324,10 @@ export async function loadTweak(source: TweakSource, options: LoadTweakOptions =
             const c = compiledMap.get(s.id);
             if (!c || c.error) continue;
             const probed = await probeScriptRules(c.handlers, [...knownTabIds]);
-            for (const r of probed.rules) groups.push({ scriptId: s.id, scriptName: s.name, route: r.route, specs: r.specs });
+            for (const r of probed.rules) groups.push({ scriptId: s.id, scriptName: s.name, route: r.route, specs: r.specs, layer: handlerLayer(r.route, layers).layer });
             for (const err of probed.errors) errs.push(`${s.name}: ${err}`);
         }
-        const checked = checkRules(groups);
+        const checked = checkRules(sortByLayer(groups, (g) => g.layer!));
         errs.push(...checked.errors);
         ruleWarnings = checked.warnings;
         currentRuleGroups = checked.accepted as RuleGroupRef[];
@@ -1399,7 +1401,7 @@ export async function loadTweak(source: TweakSource, options: LoadTweakOptions =
         errs.push(...probed.errors);
         warns.push(...ruleWarnings);
         allScripts = entryScripts
-            .map((s) => ({ id: s.id, name: s.name, handlers: compiledMap.get(s.id)!.handlers }))
+            .map((s) => ({ id: s.id, name: s.name, handlers: compiledMap.get(s.id)!.handlers, layers }))
             .filter((s) => Boolean(s.handlers));
         layered = layerScripts(allScripts, browser, (s, route) =>
             logSink(s.name, "error", "", `async ${routeLabel(route)}: Chrome's blocking webRequest cannot await. Return synchronously, or set strategy: "debugger" or "helper" on this route.`)

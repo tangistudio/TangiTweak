@@ -1,11 +1,11 @@
 /**
  * Tweak data folders ⇄ storage (shared/tweakData.ts). The files are
  * rendered from storage, never stored: each bundle's entry owns its
- * folder's settings.json (enable switch, non-default params) and one
+ * folder's settings.json (enable switch, layer setting, non-default params) and one
  * stores/<id>.json per persisted global store. A file edited in the Editor
  * or on disk applies only when all of it is valid.
  */
-import { listDataFiles, listFolders, listScripts, loadAllParamValues, setEnabled, setParamValue, type Script } from "./engine/scriptStore";
+import { listDataFiles, listFolders, listScripts, loadAllParamValues, loadScriptLayers, setEnabled, setParamValue, setScriptLayer, type Script } from "./engine/scriptStore";
 import { storeOwner } from "./engine/stores";
 import { bundleOf, dataReader, entryName } from "../shared/tweakBundle";
 import { STORE_ID } from "../shared/tweakApi";
@@ -73,11 +73,11 @@ export interface TweakDataFile {
 
 /** each bundle's data folder files */
 export async function tweakDataFiles(only?: TweakTarget[]): Promise<TweakDataFile[]> {
-    const [df, targets, values] = await Promise.all([getDataFolder(), only ? Promise.resolve(only) : tweakTargets(), loadAllParamValues()]);
+    const [df, targets, values, layers] = await Promise.all([getDataFolder(), only ? Promise.resolve(only) : tweakTargets(), loadAllParamValues(), loadScriptLayers()]);
     const out: TweakDataFile[] = [];
     for (const { root, script } of targets) {
         const at = { root, scriptId: script.id };
-        out.push({ path: tweakSettingsPath(root, df), text: renderTweakSettings(script.enabled, script.paramDefs, values[script.id]), ...at });
+        out.push({ path: tweakSettingsPath(root, df), text: renderTweakSettings(script.enabled, script.paramDefs, values[script.id], layers[script.id]), ...at });
         const stores = (await storeOwner.exportPersisted([{ id: script.id, name: "s" }])).s ?? {};
         for (const id of Object.keys(stores).sort()) if (STORE_ID.test(id)) out.push({ path: storeFilePath(root, df, id), text: renderStoreFile(stores[id] as Record<string, any>), ...at });
     }
@@ -97,8 +97,9 @@ export async function applyTweakDataFile(path: string, text: string | null): Pro
     const { script } = target;
     try {
         if ("settings" in where) {
-            const plan = planTweakSettings(text ?? "{}", { enabled: script.enabled, defs: script.paramDefs, values: (await loadAllParamValues())[script.id] });
+            const plan = planTweakSettings(text ?? "{}", { enabled: script.enabled, layer: (await loadScriptLayers())[script.id], defs: script.paramDefs, values: (await loadAllParamValues())[script.id] });
             for (const [k, v] of Object.entries(plan.params)) await setParamValue(script.id, k, v);
+            if (plan.layer !== undefined) await setScriptLayer(script.id, plan.layer ?? undefined);
             if (plan.enabled !== undefined) await setEnabled(script.id, plan.enabled);
         } else if (text === null) await storeOwner.deleteStore(script.id, where.store);
         else await storeOwner.replace(script.id, where.store, parseStoreFile(text));

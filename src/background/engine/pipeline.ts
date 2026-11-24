@@ -13,13 +13,14 @@ import { IS_FIREFOX, onHelperActiveChange, helperActive, strategyUnavailable } f
 import type { HeaderChanges } from "./strategies/types";
 import type { Script } from "./scriptStore";
 import {
-    listScripts, getScript, onScriptsChanged, saveScript, deleteScript, setEnabled, newId, scriptStorageGet, scriptStorageSet, loadAllParamValues, getParamValues, setParamValue, setParamFromCode,
+    listScripts, getScript, onScriptsChanged, saveScript, deleteScript, setEnabled, newId, scriptStorageGet, scriptStorageSet, loadAllParamValues, getParamValues, setParamValue, setParamFromCode, loadScriptLayers, setScriptLayer,
     listDataFiles, getDataFile, saveDataFile, deleteDataFile, listFolders, createFolder, renameFolder, deleteFolder,
 } from "./scriptStore";
-import { loadDataFiles } from "./dataFiles";
+import { dataFilesSnapshot, ensureDataFiles, loadDataFiles } from "./dataFiles";
 import { analyzePackage, applyPending, checkPackages, dismissPending, forgetPackage, installPackage, listPackages, offerPackage, rollbackPackage, setAutoUpdate, upgradePackage } from "./packages";
 import { resolveWorkspaceIcons } from "../../shared/packageModel";
-import { scriptRoles } from "../../shared/tweakBundle";
+import { bundleOf, dataReader, scriptRoles } from "../../shared/tweakBundle";
+import { layerOf } from "../../shared/packageMetadata";
 import { loadPackages, packagesSnapshot, requestPackages } from "./packageImports";
 import { isUrlSpec, packageClosure, type PackageModules } from "../../shared/packageImports";
 import { packageUnit, scriptUnit, siteKey } from "../../shared/siteCode";
@@ -35,6 +36,7 @@ import { missedLine } from "../../shared/netTypes";
 import { binaryOptedOut, debuggerMissedLine, frameHasHook as pingHook, isLoopbackUrl, missedReason, missedWhat, routeProblem, MISSED_SKIP_TYPES } from "../../shared/missedTap";
 import { resolveParamValues } from "../../shared/scriptDef";
 import { shippedLibIds, type ShippedLib } from "../../shared/scriptImports";
+import { autoLayerLabel, isLayer, type ScriptLayers } from "../../shared/route";
 import { effectiveStrategy, hookCanSee, indexRoutes, isNetKind, pageWorld, routeLabel, routeMatches, routeMayMatch, takesBinary, type RouteMeta, type Strategy } from "../../shared/route";
 import { analyzeScripts, runBodyOp, type Analyzed } from "../compileHost";
 import { recordNetBody } from "../network";
@@ -96,6 +98,26 @@ function withAnalyzedMeta(scripts: Script[], analyzed: Map<string, Analyzed>): S
         const a = analyzed.get(s.id);
         return a ? { ...s, meta: { ...a.meta, name: s.meta.name } } : s;
     });
+}
+
+/** each script's explicit layers: the user's setting and its package.json `tangitweak.layer` (data files must be loaded) */
+async function scriptLayersOf(scripts: Script[]): Promise<Map<string, ScriptLayers>> {
+    const user = await loadScriptLayers();
+    const read = dataReader(dataFilesSnapshot());
+    // a bundle's modules take the setting of its entry (the tweak the user sets)
+    const roles = scriptRoles(scripts, dataFilesSnapshot());
+    const idOf = new Map(scripts.map((s) => [s.meta.name, s.id]));
+    const out = new Map<string, ScriptLayers>();
+    for (const s of scripts) {
+        const l: ScriptLayers = {};
+        const r = roles.get(s.id);
+        const u = user[s.id] ?? (r?.role === "module" && r.entry ? user[idOf.get(r.entry) ?? ""] : undefined);
+        if (u) l.user = u;
+        const pkg = layerOf(bundleOf(s.meta.name, read)?.pkg);
+        if (pkg) l.pkg = pkg;
+        out.set(s.id, l);
+    }
+    return out;
 }
 
 /** `libsOf(deps)`: the library sources, data files and package modules a set of imports ships (transitively) */
@@ -994,6 +1016,29 @@ export function createPipeline(
             })();
             return true;
         }
+        if (msg && msg.type === "getScriptLayer") {
+            void (async () => {
+                const scripts = await listScripts();
+                const s = scripts.find((x) => x.id === msg.scriptId);
+                if (!s) return sendResponse({ auto: "Automatic" });
+                await ensureDataFiles();
+                const l = (await scriptLayersOf(scripts)).get(s.id)!;
+                sendResponse({ layer: l.user, auto: autoLayerLabel(s.meta.routes || [], l.pkg) });
+            })();
+            return true;
+        }
+        if (msg && msg.type === "setScriptLayer") {
+            void (async () => {
+                const layer = isLayer(msg.layer) ? msg.layer : undefined;
+                const s = (await listScripts()).find((x) => x.id === msg.scriptId);
+                if (s) {
+                    await setScriptLayer(s.id, layer);
+                    log(-1, `[${s.meta.name}] layer = ${layer ?? "automatic"}`, "info", s.id);
+                }
+                sendResponse({});
+            })();
+            return true;
+        }
         if (msg && msg.type === "setScriptParam") {
             void (async () => {
                 const scripts = await listScripts();
@@ -1098,6 +1143,8 @@ export function createPipeline(
         } catch (e: any) {
             dlogLevel("pipeline", "warn", `script analysis failed, using saved routes: ${e?.message || e}`);
         }
+        const layers = await scriptLayersOf(scripts);
+        scripts = scripts.map((s) => ({ ...s, layers: layers.get(s.id) }));
         const isoScripts: IsoScript[] = scripts
             .filter((x) => x.enabled && x.meta.active)
             .map((x) => ({ id: x.id, routes: (x.meta.routes || []).filter((r) => r.kind === "onDocument" && pageWorld(r) === "isolated") }))

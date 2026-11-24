@@ -26,7 +26,7 @@ import { tabScope } from "../../../shared/storeOps";
 import { pages } from "../pages";
 import { recordNetBody } from "../../network";
 import { isThenable, type Routed } from "../../../shared/compile";
-import { effectiveStrategy, indexRoutes, routeGroups, routeLabel, takesBinary, takesText, type RouteMeta } from "../../../shared/route";
+import { effectiveStrategy, handlerLayer, indexRoutes, routeGroups, routeLabel, sortByLayer, takesBinary, takesText, type Layer, type RouteMeta, type ScriptLayers } from "../../../shared/route";
 import { formatScriptError } from "../../../shared/scriptError";
 import type { HeaderChanges, HookDisposition, InterceptionStrategy, MaybePromise, WebRequestDetailsLike } from "./types";
 import type { Script } from "../scriptStore";
@@ -54,6 +54,18 @@ interface Entry {
     id: string;
     name: string;
     handlers: Record<Kind, Routed[]>;
+    layers?: ScriptLayers;
+}
+
+/** one handler to run, in run order: by layer, then list order, then registration order */
+interface Step {
+    entry: Entry;
+    h: Routed;
+    layer: Layer;
+}
+
+function layered<E extends { layers?: ScriptLayers }>(pairs: { entry: E; h: Routed }[]): { entry: E; h: Routed; layer: Layer }[] {
+    return sortByLayer(pairs.map((p) => ({ ...p, layer: handlerLayer(p.h.route, p.entry.layers).layer })), (p) => p.layer);
 }
 
 const KINDS: Kind[] = ["onRequest", "onResponseHeaders", "onResponseBody"];
@@ -77,12 +89,12 @@ export class ExtensionStrategy implements InterceptionStrategy {
             this.entries = [];
             return;
         }
-        this.entries = compileMv2(scripts, paramValues, (s) => ownsAny(s, "extension")).map(({ id, name, compiled }) => {
+        this.entries = compileMv2(scripts, paramValues, (s) => ownsAny(s, "extension")).map(({ id, name, compiled, layers }) => {
             // a compile error is a problem (Problems view), not a Log line
             const handlers = {} as Record<Kind, Routed[]>;
             for (const k of KINDS) handlers[k] = compiled.handlers[k].filter((h) => effectiveStrategy(h.route) === "extension");
             dlogLevel("extension", "debug", `loaded "${name}" routes: ${KINDS.flatMap((k) => handlers[k].map((h) => `${routeLabel(h.route)} ${JSON.stringify(h.route.url)}`)).join(", ") || "none"}${compiled.error ? ` ERROR: ${compiled.error}` : ""}`);
-            return { id, name, handlers };
+            return { id, name, handlers, layers };
         });
     }
 
@@ -118,8 +130,7 @@ export class ExtensionStrategy implements InterceptionStrategy {
         if (!matched.length) return { kind: "allow" };
         rememberRequestBody(details);
         trace(details, `onBeforeRequest ${details.type} ${details.method} ${details.url} (tab url: ${tabUrl ?? "unknown"}) → scripts: ${matched.map((m) => `"${m.name}"`).join(", ")}`);
-        const steps: { entry: Entry; h: Routed }[] = [];
-        for (const entry of matched) for (const h of this.hits(entry, "onRequest", details)) steps.push({ entry, h });
+        const steps = layered(matched.flatMap((entry) => this.hits(entry, "onRequest", details).map((h) => ({ entry, h }))));
         const state: RequestState = { headers: makeCtx(details, tabUrl).requestHeaders, decision: null };
         const run = (i: number): MaybePromise<HookDisposition> => {
             for (; i < steps.length; i++) {
@@ -162,7 +173,7 @@ export class ExtensionStrategy implements InterceptionStrategy {
             const transforms = this.hits(entry, "onResponseBody", details);
             if (!transforms.length) continue;
             const list = pendingFirefoxStreams.get(details.requestId)?.list ?? [];
-            list.push({ id: entry.id, name: entry.name, handlers: transforms });
+            list.push({ id: entry.id, name: entry.name, handlers: transforms, layers: entry.layers });
             pendingFirefoxStreams.set(details.requestId, { list, tabUrl });
         }
     }
@@ -205,9 +216,9 @@ export class ExtensionStrategy implements InterceptionStrategy {
     }
 
     /** one handler's result: updates the decision and the request header edits */
-    private decide(details: WebRequestDetailsLike, step: { entry: Entry; h: Routed }, result: any, state: RequestState): void {
-        const { entry, h } = step;
-        const who: Who = { scriptId: entry.id, scriptName: entry.name, kind: "onRequest", index: h.route.index };
+    private decide(details: WebRequestDetailsLike, step: Step, result: any, state: RequestState): void {
+        const { entry, h, layer } = step;
+        const who: Who = { scriptId: entry.id, scriptName: entry.name, kind: "onRequest", index: h.route.index, layer };
         const single = singleRequestResult(result);
         if (single.dropped.length && overrideThrottle(`mixed|${entry.id}|${h.route.index}`)) {
             log(details.tabId, mixedResultLine(entry.name, routeLabel(h.route), single.kept!, single.dropped, details.url), "warn", entry.id, undefined, undefined, details.requestId);
@@ -329,18 +340,17 @@ export class ExtensionStrategy implements InterceptionStrategy {
         }
     }
 
-    /** onResponseHeaders in list order; the later handler wins per header and sees the earlier edits. Firefox awaits async ones in place. */
+    /** onResponseHeaders in layer then list order; the later handler wins per header and sees the earlier edits. Firefox awaits async ones in place. */
     private responseHeaderChanges(details: WebRequestDetailsLike, tabUrl: string | null, replacedBy?: ReplacedBy): MaybePromise<HeaderChanges | null> {
-        const steps: { entry: Entry; h: Routed }[] = [];
-        for (const entry of this.entries) for (const h of this.hits(entry, "onResponseHeaders", details)) steps.push({ entry, h });
+        const steps = layered(this.entries.flatMap((entry) => this.hits(entry, "onResponseHeaders", details).map((h) => ({ entry, h }))));
         if (!steps.length) return null;
         const stack = new HeaderStack();
         let seen: { name: string; value?: string }[] = details.responseHeaders || [];
-        const apply = ({ entry, h }: { entry: Entry; h: Routed }, result: any) => {
+        const apply = ({ entry, h, layer }: Step, result: any) => {
             const mods = result?.headers;
             if (!(mods && (mods.set || mods.remove))) return logObserved(details.tabId, entry.name, "onResponseHeaders", details.url, entry.id, details.requestId);
             log(details.tabId, `[${entry.name}] onResponseHeaders → ${describeHeaderMods(mods)} ${details.url}`, "info", entry.id, undefined, undefined, details.requestId);
-            for (const o of stack.add(mods, { scriptId: entry.id, scriptName: entry.name, kind: "onResponseHeaders", index: h.route.index })) {
+            for (const o of stack.add(mods, { scriptId: entry.id, scriptName: entry.name, kind: "onResponseHeaders", index: h.route.index, layer })) {
                 if (overrideThrottle(`r|${o.header}|${o.by.scriptId}|${o.by.index}|${o.over.scriptId}|${o.over.index}`)) log(details.tabId, overrideLine(o, "response", details.url), "warn", entry.id, undefined, undefined, details.requestId);
             }
             seen = editPairs(seen, mods);
@@ -417,37 +427,37 @@ export class ExtensionStrategy implements InterceptionStrategy {
         }
     }
 
-    /** onResponseBody handlers in list order, each on the previous one's output (a void / null result: no change) */
+    /** onResponseBody handlers in layer then list order, each on the previous one's output (a void / null result: no change) */
     private async runBodyHandlers(details: WebRequestDetailsLike, list: StreamEntry[], tabUrl: string | null, body: string | Uint8Array, contentType: string | undefined, binary: boolean, replacedBy?: ReplacedBy, requestBody = pendingRequestBodies.get(details.requestId)): Promise<{ body: string | Uint8Array; modified: boolean }> {
         const decoder = new TextDecoder("utf-8");
         const page = pageOf(details);
         const tab = tabOf(details);
         let modified = false;
         if (binary && !list.some((e) => e.handlers.some((h) => takesBinary(h.route)))) noteBodySkip("extension", details.url, "binary", contentType || "", details.requestId);
-        for (const entry of list) {
-            const { id: scriptId, name: scriptName, handlers } = entry;
-            const runs = handlers.filter((h) => (binary ? takesBinary(h.route) : takesText(h.route)));
+        for (const { id, name, handlers } of list) {
             // every route opted out of this kind of body: say so (no "never ran" warning)
-            if (!runs.length && handlers.every((h) => h.route.binary !== undefined)) log(details.tabId, kindSkipLine(scriptName, details.url, binary), "debug", scriptId, "observed", undefined, details.requestId);
-            for (const h of runs) {
-                const ctx: any = { ...ctxFor(details, tabUrl, h.route, requestBody), contentType };
-                if (replacedBy) {
-                    ctx.replacedBy = replacedBy;
-                    ranOnMock(details, entry, h, replacedBy);
-                }
-                // a text body an earlier binary route returned as bytes is still text here
-                if (typeof body !== "string" && !takesBinary(h.route)) body = decoder.decode(body);
-                try {
-                    const out = await withPage(page, () => h.fn(ctx, body), tab);
-                    if (out !== undefined && out !== null) {
-                        const size = (b: any) => (typeof b === "string" ? b.length : (b?.byteLength ?? 0));
-                        log(details.tabId, `[${scriptName}] onResponseBody applied (${size(body)}b → ${size(out)}b) ${details.url}`, "info", scriptId, undefined, undefined, details.requestId);
-                        body = out;
-                        modified = true;
-                    } else logObserved(details.tabId, scriptName, "onResponseBody", details.url, scriptId, details.requestId);
-                } catch (e: any) {
-                    scriptError(scriptId, formatScriptError(scriptName, e, "onResponseBody"));
-                }
+            if (!handlers.some((h) => (binary ? takesBinary(h.route) : takesText(h.route))) && handlers.every((h) => h.route.binary !== undefined)) log(details.tabId, kindSkipLine(name, details.url, binary), "debug", id, "observed", undefined, details.requestId);
+        }
+        const steps = layered(list.flatMap((entry) => entry.handlers.filter((h) => (binary ? takesBinary(h.route) : takesText(h.route))).map((h) => ({ entry, h }))));
+        for (const { entry, h } of steps) {
+            const { id: scriptId, name: scriptName } = entry;
+            const ctx: any = { ...ctxFor(details, tabUrl, h.route, requestBody), contentType };
+            if (replacedBy) {
+                ctx.replacedBy = replacedBy;
+                ranOnMock(details, entry, h, replacedBy);
+            }
+            // a text body an earlier binary route returned as bytes is still text here
+            if (typeof body !== "string" && !takesBinary(h.route)) body = decoder.decode(body);
+            try {
+                const out = await withPage(page, () => h.fn(ctx, body), tab);
+                if (out !== undefined && out !== null) {
+                    const size = (b: any) => (typeof b === "string" ? b.length : (b?.byteLength ?? 0));
+                    log(details.tabId, `[${scriptName}] onResponseBody applied (${size(body)}b → ${size(out)}b) ${details.url}`, "info", scriptId, undefined, undefined, details.requestId);
+                    body = out;
+                    modified = true;
+                } else logObserved(details.tabId, scriptName, "onResponseBody", details.url, scriptId, details.requestId);
+            } catch (e: any) {
+                scriptError(scriptId, formatScriptError(scriptName, e, "onResponseBody"));
             }
         }
         return { body, modified };
@@ -591,6 +601,7 @@ interface StreamEntry {
     id: string;
     name: string;
     handlers: Routed[];
+    layers?: ScriptLayers;
 }
 
 /** requestId → the onResponseBody handlers awaiting a Firefox stream filter */

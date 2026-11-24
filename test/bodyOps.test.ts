@@ -103,7 +103,7 @@ describe("precedence in runOp", () => {
     it("a final decision names the handler that made it", async () => {
         const scripts = [{ id: "a", name: "A", handlers: routed({ onRequest: [() => null, () => ({ block: true })] }) }];
         const out = await runOp(scripts as any, "requestDecision", { url: "https://x.test/y", method: "GET" }, { log: () => {} } as any);
-        expect(out).toEqual({ kind: "cancel", who: { scriptId: "a", scriptName: "A", kind: "onRequest", index: 1 } });
+        expect(out).toEqual({ kind: "cancel", who: { scriptId: "a", scriptName: "A", kind: "onRequest", index: 1, layer: "site" } });
     });
 });
 
@@ -141,6 +141,45 @@ describe("onRequest handlers stack: every one runs, the last decision wins", () 
         ]);
         expect(out).toEqual({ kind: "headers", changes: { set: { "x-a": "1" }, remove: [] } });
         expect(lines.map((l) => l.msg)).toContain(`[B] onRequest → allow ${url}`);
+    });
+
+    describe("layers: base, then site, then override, whatever the list order", () => {
+        const on = (url: string, fn: Function, layer?: string) => ({ onRequest: [{ fn, route: normalizeRoute("onRequest", { url, strategy: "helper", ...(layer ? { layer } : {}) } as any, 0) }] });
+        const decide = async (scripts: any[]) => {
+            const lines: string[] = [];
+            const handlers = (h: any) => Object.fromEntries([...NET_KINDS, "onDocument"].map((k) => [k, h[k] ?? []]));
+            const out = await runOp(scripts.map((s) => ({ ...s, name: s.id, handlers: handlers(s.handlers) })) as any, "requestDecision", { url, method: "GET" }, { log: (_: string, level: string, msg: string) => level === "warn" && lines.push(msg) } as any);
+            return { out, lines };
+        };
+        const block = () => ({ block: true });
+        const redirect = () => ({ redirect: "https://x.test/site" });
+
+        it("an any-host api interceptor runs first, so the site tweak has the last word", async () => {
+            const { out, lines } = await decide([
+                { id: "Site", handlers: on("https://x.test/*", redirect) },
+                { id: "Interceptor", handlers: on("*://*/*", block) },
+            ]);
+            expect(out).toMatchObject({ kind: "redirect", who: { scriptId: "Site", layer: "site" } });
+            expect(lines).toEqual([`[Interceptor] onRequest #1 → block was overruled: [Site] onRequest #1 → redirect has the last word (layer "site" runs after "base") ${url}`]);
+        });
+
+        it("package.json base keeps a named-host interceptor below the site tweak", async () => {
+            const { out } = await decide([
+                { id: "Site", handlers: on("https://x.test/*", redirect) },
+                { id: "Interceptor", layers: { pkg: "base" }, handlers: on("https://x.test/*", block) },
+            ]);
+            expect(out).toMatchObject({ kind: "redirect", who: { scriptId: "Site" } });
+        });
+
+        it("override runs last; the user setting beats the route option", async () => {
+            const scripts = [
+                { id: "Over", handlers: on("https://x.test/*", block, "override") },
+                { id: "Site", handlers: on("https://x.test/*", redirect) },
+            ];
+            expect((await decide(scripts)).out).toMatchObject({ kind: "cancel", who: { scriptId: "Over", layer: "override" } });
+            scripts[0] = { ...scripts[0], layers: { user: "base" } } as any;
+            expect((await decide(scripts)).out).toMatchObject({ kind: "redirect", who: { scriptId: "Site" } });
+        });
     });
 
     it("ctx.requestHeaders shows the earlier handlers' edits", async () => {

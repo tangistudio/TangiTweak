@@ -3,7 +3,7 @@ import { describe, it, expect } from "vitest";
 import "../src/shared/transpile";
 import { compileWithLibs } from "../src/shared/compile";
 import { fileExtension } from "../src/shared/scriptName";
-import { compareVersions, connectAllows, connectOf, highestVersion, isBundlePackageJson, minTangiTweakOf, minTangiTweakProblem, parseManifest, rangeMinimum } from "../src/shared/packageMetadata";
+import { compareVersions, connectAllows, connectOf, highestVersion, isBundlePackageJson, layerOf, minTangiTweakOf, minTangiTweakProblem, parseManifest, rangeMinimum } from "../src/shared/packageMetadata";
 import { resolveWorkspaceIcons } from "../src/shared/packageModel";
 
 const SCRIPT = `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*://example.com/*", strategy: "extension" }, () => {});`;
@@ -134,5 +134,15 @@ describe("connect (onPage tweak.fetch's hosts)", () => {
         expect(connectAllows(connect, "https://example.com.evil.net/")).toBe(false);
         expect(connectAllows(connect, "ftp://example.com/")).toBe(false);
         expect(connectAllows(connectOf({ dependencies: { tangitweak: "*" } }), "https://example.com/")).toBe(false);
+    });
+});
+
+describe("tangitweak.layer", () => {
+    it("is validated and read", () => {
+        expect(parseManifest(pkg({ name: "i", tangitweak: { layer: "base" } })).layer).toBe("base");
+        expect(() => parseManifest(pkg({ name: "i", tangitweak: { layer: "low" } }))).toThrow(/layer/);
+        expect(layerOf({ tangitweak: { layer: "override" } })).toBe("override");
+        expect(layerOf({ tangitweak: { layer: "low" } })).toBeUndefined();
+        expect(layerOf(undefined)).toBeUndefined();
     });
 });

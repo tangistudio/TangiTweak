@@ -1,6 +1,6 @@
 /** Per-handler routes: normalization, matching, required strategy, and the page-side shim. */
 import { describe, expect, it } from "vitest";
-import { RouteIndex, effectiveStrategy, hookCanSee, normalizeRoute, routeGroups, routeLabel, routeMatches, routeMayMatch, sampleUrl, scriptUrls, type RouteMeta } from "../src/shared/route";
+import { RouteIndex, autoLayerLabel, effectiveStrategy, handlerLayer, inferLayer, sortByLayer, hookCanSee, normalizeRoute, routeGroups, routeLabel, routeMatches, routeMayMatch, sampleUrl, scriptUrls, type RouteMeta } from "../src/shared/route";
 import { domHandlersFor, makePageShim } from "../src/shared/pageShim";
 import { compileScript } from "../src/shared/compile";
 
@@ -207,5 +207,41 @@ describe("sampleUrl (the Editor preview's default page URL)", () => {
         expect(sampleUrl([r(["https://a.example/*"], ["https://a.example/*"])])).toBe("https://a.example/");
         expect(sampleUrl([r(["*"])])).toBe("https://example.com/");
         expect(sampleUrl([])).toBe("https://example.com/");
+    });
+});
+
+describe("handler layers", () => {
+    it("infers base for any-host patterns and site otherwise", () => {
+        expect(inferLayer({ url: ["*://*/*"] })).toBe("base");
+        expect(inferLayer({ url: ["<all_urls>"] })).toBe("base");
+        expect(inferLayer({ url: ["https://a.com/*"] })).toBe("site");
+        expect(inferLayer({ url: ["*://*.a.com/*"] })).toBe("site");
+        expect(inferLayer({ url: ["https://a.com/*", "*://*/api/*"] })).toBe("base");
+    });
+
+    it("the user setting beats the route option, which beats package.json, which beats inference", () => {
+        const r = { url: ["*://*/*"], layer: "override" as const };
+        expect(handlerLayer(r, { user: "site", pkg: "base" })).toEqual({ layer: "site", source: "user" });
+        expect(handlerLayer(r, { pkg: "base" })).toEqual({ layer: "override", source: "route" });
+        expect(handlerLayer({ url: ["https://a.com/*"] }, { pkg: "base" })).toEqual({ layer: "base", source: "package" });
+        expect(handlerLayer({ url: ["https://a.com/*"] })).toEqual({ layer: "site", source: "inferred" });
+    });
+
+    it("normalizeRoute validates the layer option", () => {
+        expect(normalizeRoute("onRequest", { url: "*://a.com/*", strategy: "helper", layer: "override" }, 0).layer).toBe("override");
+        expect(() => normalizeRoute("onRequest", { url: "*://a.com/*", strategy: "helper", layer: "top" } as any, 0)).toThrow(/layer/);
+    });
+
+    it("sorts stably by layer", () => {
+        const items = [{ n: 1, l: "site" }, { n: 2, l: "override" }, { n: 3, l: "base" }, { n: 4, l: "site" }] as const;
+        expect(sortByLayer([...items], (i) => i.l).map((i) => i.n)).toEqual([3, 1, 4, 2]);
+    });
+
+    it("labels the automatic choice", () => {
+        const site = normalizeRoute("onRequest", { url: "https://a.com/*", strategy: "helper" }, 0);
+        const any = normalizeRoute("onRequest", { url: "*://*/*", strategy: "helper" }, 1);
+        expect(autoLayerLabel([site])).toBe("Automatic (site)");
+        expect(autoLayerLabel([site, any])).toBe("Automatic (base and site)");
+        expect(autoLayerLabel([site], "base")).toContain("base");
     });
 });

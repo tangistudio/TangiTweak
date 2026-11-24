@@ -4,6 +4,7 @@
 import { whileBusy } from "./busy";
 import { dependantsOf, folderOf } from "../../shared/scriptImports";
 import type { ResMeta } from "../../shared/metaParser";
+import { isLayer, type Layer, type ScriptLayers } from "../../shared/route";
 import { compileForStorage, compileManyForStorage, SANDBOX_COMPILE_FAILED } from "../compileHost";
 import { ensurePackages, packageUrlsIn, prunePackages } from "./packageImports";
 import { dlogLevel } from "../../shared/debugLog";
@@ -23,6 +24,8 @@ export interface Script {
     meta: ResMeta;
     /** param definitions from tweak.params (captured at save time) */
     paramDefs?: ParamTree;
+    /** runtime only, never stored: explicit layers (user setting, package.json) the pipeline attaches on reload */
+    layers?: ScriptLayers;
 }
 
 const STORE_KEY = "resScripts";
@@ -633,6 +636,25 @@ export async function scriptStorageDelete(scriptId: string, key: string): Promis
     if (!data || !(key in data)) return;
     delete data[key];
     await storageSet({ [storeKey]: data });
+}
+
+// ---- per-script layer set by the user (popup, Editor, .tweak/settings.json) ----
+const LAYERS_KEY = "resScriptLayers";
+
+/** The user's layer per script id: { scriptId: layer }. */
+export async function loadScriptLayers(): Promise<Record<string, Layer>> {
+    const all = (await storageGet(LAYERS_KEY))[LAYERS_KEY] || {};
+    return Object.fromEntries(Object.entries(all).filter(([, l]) => isLayer(l))) as Record<string, Layer>;
+}
+
+/** Sets (or, with undefined, clears) the user's layer for a script and reloads the strategies. */
+export async function setScriptLayer(scriptId: string, layer: Layer | undefined): Promise<void> {
+    const all = await loadScriptLayers();
+    if (all[scriptId] === layer) return;
+    if (layer) all[scriptId] = layer;
+    else delete all[scriptId];
+    await storageSet({ [LAYERS_KEY]: all });
+    notify();
 }
 
 // ---- per-script parameter values (tweak.params) ----

@@ -31,7 +31,7 @@
 import { withPage } from "./currentPage";
 import { tabScope } from "./storeOps";
 import { formatScriptError } from "./scriptError";
-import { effectiveStrategy, routeGroups, routeLabel, routeMatches, takesBinary, takesText, type Strategy } from "./route";
+import { effectiveStrategy, handlerLayer, routeGroups, routeLabel, routeMatches, sortByLayer, takesBinary, takesText, type Layer, type ScriptLayers, type Strategy } from "./route";
 import type { Routed, ScriptHandlers } from "./compile";
 import { kindSkipLine, observedLine, type NetKind } from "./netTypes";
 import { HeaderStack, mockFlowLine, mixedResultLine, overrideLine, overruledLine, singleRequestResult, type RequestDecision, type Who } from "./precedence";
@@ -52,6 +52,8 @@ export interface OpScript {
     name: string;
     /** The handlers its compile collected (`CompiledScript.handlers`). */
     handlers: ScriptHandlers;
+    /** The script's explicit layers (user setting, package.json); its handlers' layers come from these and their routes ({@link handlerLayer}). */
+    layers?: ScriptLayers;
 }
 
 /**
@@ -171,20 +173,29 @@ const HANDLER_OF: Record<BodyOp, keyof ScriptHandlers> = {
     responseHeaders: "onResponseHeaders",
 };
 
+/** One handler an op runs, with its script and layer. */
+interface Step {
+    s: OpScript;
+    h: Routed;
+    layer: Layer;
+}
+
 /**
- * The handlers matching `f` for `op`, grouped per script, in script list
- * order then registration order. Every op runs them in this order, so this
- * is the one place that orders them.
+ * The handlers matching `f` for `op`, in run order: by layer (base, site,
+ * override), then script list order, then registration order. Every op runs
+ * them in this order, so this is the one place that orders them.
  */
-function matching(scripts: OpScript[], op: BodyOp, f: OpFilter, env: OpEnv): { s: OpScript; handlers: Routed[] }[] {
+function matching(scripts: OpScript[], op: BodyOp, f: OpFilter, env: OpEnv): Step[] {
     const kind = HANDLER_OF[op];
-    const out: { s: OpScript; handlers: Routed[] }[] = [];
+    const steps: Step[] = [];
     for (const s of scripts) {
         if (f.onlyIds && !f.onlyIds.includes(s.id)) continue;
-        const handlers = ((s.handlers as any)[kind] as Routed[] || []).filter((h) => handlerRuns(h, f));
-        if (handlers.length) out.push({ s, handlers });
+        for (const h of ((s.handlers as any)[kind] as Routed[]) || []) {
+            if (handlerRuns(h, f)) steps.push({ s, h, layer: handlerLayer(h.route, s.layers).layer });
+        }
     }
-    env.debug?.(`run ${op} ${f.url}${f.tier ? ` [${f.tier}]` : ""} → ${out.length} matching script(s) [${out.map((m) => m.s.name).join(", ")}]`);
+    const out = sortByLayer(steps, (x) => x.layer);
+    env.debug?.(`run ${op} ${f.url}${f.tier ? ` [${f.tier}]` : ""} → ${out.length} matching handler(s) [${out.map((m) => `${m.s.name} ${routeLabel(m.h.route)} (${m.layer})`).join(", ")}]`);
     return out;
 }
 
@@ -320,8 +331,10 @@ export async function runOp(scripts: OpScript[], op: BodyOp, args: any, env: OpE
     if (op === "transform") {
         // A script whose every matching route opted out of this kind of body: say so (no "never ran" warning).
         const ran = new Set(list.map((m) => m.s.id));
-        for (const { s, handlers } of matching(scripts, op, filter, { log: env.log })) {
-            if (!ran.has(s.id) && handlers.every((h) => h.route.binary !== undefined)) env.log(s.id, "debug", kindSkipLine(s.name, url, binaryBody), "observed");
+        const skipped = new Map<OpScript, Routed[]>();
+        for (const { s, h } of matching(scripts, op, filter, { log: env.log })) if (!ran.has(s.id)) skipped.set(s, [...(skipped.get(s) || []), h]);
+        for (const [s, handlers] of skipped) {
+            if (handlers.every((h) => h.route.binary !== undefined)) env.log(s.id, "debug", kindSkipLine(s.name, url, binaryBody), "observed");
         }
     }
     const observed = (s: OpScript, handler: string, why?: string) => env.log(s.id, "debug", observedLine(s.name, handler, url, why), "observed");
@@ -355,53 +368,51 @@ export async function runOp(scripts: OpScript[], op: BodyOp, args: any, env: OpE
         const stack = new HeaderStack();
         type Decision = { who: Who & { outcome: RequestDecision }; h: Routed; result: any };
         let decision: Decision | null = null;
-        for (const { s, handlers } of list) {
-            for (const h of handlers) {
-                const who: Who = { scriptId: s.id, scriptName: s.name, kind: "onRequest", index: h.route.index };
-                try {
-                    const single = singleRequestResult(await withPage(args.page, () => h.fn(base(h)), callTab));
-                    const result: any = single.result;
-                    if (!result) {
-                        observed(s, "onRequest");
-                        continue;
-                    }
-                    if (single.dropped.length && mixedThrottle(`${s.id}|${h.route.index}`)) {
-                        env.log(s.id, "warn", mixedResultLine(s.name, routeLabel(h.route), single.kept!, single.dropped, url));
-                    }
-                    const outcome: RequestDecision | null = result.replaceResponse ? "replace" : result.redirect ? "redirect" : result.block === true ? "block" : result.allow === true ? "allow" : null;
-                    if (outcome) {
-                        const next: Decision = { who: { ...who, outcome }, h, result };
-                        if (outcome === "replace") {
-                            const r = result.replaceResponse;
-                            const { mime, content } = replacementBody(r, url, resourceType);
-                            next.result = { kind: "respond", mime, content, status: r.status, headers: r.headers?.set, scriptId: s.id, scriptName: s.name, who };
-                            env.log(s.id, "info", `[${s.name}] onRequest → replaceResponse ${r.status || 200} ${mime} (${content.length}b) ${url}`);
-                        } else if (outcome === "redirect") {
-                            next.result = { kind: "redirect", url: result.redirect, who };
-                            env.log(s.id, "info", `[${s.name}] onRequest → redirect ${url} → ${result.redirect}`);
-                        } else if (outcome === "block") {
-                            next.result = { kind: "cancel", who };
-                            env.log(s.id, "info", `[${s.name}] onRequest → block ${url}`);
-                        } else if (decision) env.log(s.id, "info", `[${s.name}] onRequest → allow ${url}`);
-                        else observed(s, "onRequest", "allow, and nothing to undo");
-                        if (decision) {
-                            const o = decision.who;
-                            if (overruledThrottle(`${o.scriptId}|${o.index}|${s.id}|${h.route.index}`)) env.log(o.scriptId, "warn", overruledLine(o, next.who, url));
-                        }
-                        decision = outcome === "allow" ? null : next;
-                        continue;
-                    }
-                    if (hasHeaderMods(result.headers)) {
-                        const parts: string[] = [];
-                        if (result.headers.set && Object.keys(result.headers.set).length) parts.push(`set ${Object.keys(result.headers.set).join(", ")}`);
-                        if (result.headers.remove && result.headers.remove.length) parts.push(`remove ${result.headers.remove.join(", ")}`);
-                        env.log(s.id, "info", `[${s.name}] onRequest → request headers (${parts.join("; ")}) ${url}`);
-                        stackHeaders(stack, result.headers, who, "request", url, env);
-                        requestHeaders = editRecord(requestHeaders, result.headers);
-                    } else observed(s, "onRequest");
-                } catch (e: any) {
-                    env.log(s.id, "error", formatScriptError(s.name, e, "onRequest"));
+        for (const { s, h, layer } of list) {
+            const who: Who = { scriptId: s.id, scriptName: s.name, kind: "onRequest", index: h.route.index, layer };
+            try {
+                const single = singleRequestResult(await withPage(args.page, () => h.fn(base(h)), callTab));
+                const result: any = single.result;
+                if (!result) {
+                    observed(s, "onRequest");
+                    continue;
                 }
+                if (single.dropped.length && mixedThrottle(`${s.id}|${h.route.index}`)) {
+                    env.log(s.id, "warn", mixedResultLine(s.name, routeLabel(h.route), single.kept!, single.dropped, url));
+                }
+                const outcome: RequestDecision | null = result.replaceResponse ? "replace" : result.redirect ? "redirect" : result.block === true ? "block" : result.allow === true ? "allow" : null;
+                if (outcome) {
+                    const next: Decision = { who: { ...who, outcome }, h, result };
+                    if (outcome === "replace") {
+                        const r = result.replaceResponse;
+                        const { mime, content } = replacementBody(r, url, resourceType);
+                        next.result = { kind: "respond", mime, content, status: r.status, headers: r.headers?.set, scriptId: s.id, scriptName: s.name, who };
+                        env.log(s.id, "info", `[${s.name}] onRequest → replaceResponse ${r.status || 200} ${mime} (${content.length}b) ${url}`);
+                    } else if (outcome === "redirect") {
+                        next.result = { kind: "redirect", url: result.redirect, who };
+                        env.log(s.id, "info", `[${s.name}] onRequest → redirect ${url} → ${result.redirect}`);
+                    } else if (outcome === "block") {
+                        next.result = { kind: "cancel", who };
+                        env.log(s.id, "info", `[${s.name}] onRequest → block ${url}`);
+                    } else if (decision) env.log(s.id, "info", `[${s.name}] onRequest → allow ${url}`);
+                    else observed(s, "onRequest", "allow, and nothing to undo");
+                    if (decision) {
+                        const o = decision.who;
+                        if (overruledThrottle(`${o.scriptId}|${o.index}|${s.id}|${h.route.index}`)) env.log(o.scriptId, "warn", overruledLine(o, next.who, url));
+                    }
+                    decision = outcome === "allow" ? null : next;
+                    continue;
+                }
+                if (hasHeaderMods(result.headers)) {
+                    const parts: string[] = [];
+                    if (result.headers.set && Object.keys(result.headers.set).length) parts.push(`set ${Object.keys(result.headers.set).join(", ")}`);
+                    if (result.headers.remove && result.headers.remove.length) parts.push(`remove ${result.headers.remove.join(", ")}`);
+                    env.log(s.id, "info", `[${s.name}] onRequest → request headers (${parts.join("; ")}) ${url}`);
+                    stackHeaders(stack, result.headers, who, "request", url, env);
+                    requestHeaders = editRecord(requestHeaders, result.headers);
+                } else observed(s, "onRequest");
+            } catch (e: any) {
+                env.log(s.id, "error", formatScriptError(s.name, e, "onRequest"));
             }
         }
         if (decision?.result.kind === "respond" && args.mockFlows !== false) return flowMock(decision.result, routeLabel(decision.h.route));
@@ -413,20 +424,18 @@ export async function runOp(scripts: OpScript[], op: BodyOp, args: any, env: OpE
         const stack = new HeaderStack();
         // each handler sees the earlier ones' edits
         let responseHeaders: { name: string; value?: string }[] = args.responseHeaders || [];
-        for (const { s, handlers } of list) {
-            for (const h of handlers) {
-                const who: Who = { scriptId: s.id, scriptName: s.name, kind: "onResponseHeaders", index: h.route.index };
-                try {
-                    ranOnMock(s, h);
-                    const result = await withPage(args.page, () => h.fn({ ...base(h), status: args.status, statusLine: args.statusLine || "", responseHeaders, ...(replacedBy ? { replacedBy } : {}) }), callTab);
-                    if (hasHeaderMods(result?.headers)) {
-                        env.log(s.id, "info", `[${s.name}] onResponseHeaders → ${Object.keys(result.headers.set || {}).length} set, ${(result.headers.remove || []).length} removed ${url}`);
-                        stackHeaders(stack, result.headers, who, "response", url, env);
-                        responseHeaders = editPairs(responseHeaders, result.headers);
-                    } else observed(s, "onResponseHeaders");
-                } catch (e: any) {
-                    env.log(s.id, "error", formatScriptError(s.name, e, "onResponseHeaders"));
-                }
+        for (const { s, h, layer } of list) {
+            const who: Who = { scriptId: s.id, scriptName: s.name, kind: "onResponseHeaders", index: h.route.index, layer };
+            try {
+                ranOnMock(s, h);
+                const result = await withPage(args.page, () => h.fn({ ...base(h), status: args.status, statusLine: args.statusLine || "", responseHeaders, ...(replacedBy ? { replacedBy } : {}) }), callTab);
+                if (hasHeaderMods(result?.headers)) {
+                    env.log(s.id, "info", `[${s.name}] onResponseHeaders → ${Object.keys(result.headers.set || {}).length} set, ${(result.headers.remove || []).length} removed ${url}`);
+                    stackHeaders(stack, result.headers, who, "response", url, env);
+                    responseHeaders = editPairs(responseHeaders, result.headers);
+                } else observed(s, "onResponseHeaders");
+            } catch (e: any) {
+                env.log(s.id, "error", formatScriptError(s.name, e, "onResponseHeaders"));
             }
         }
         return stack.empty ? null : stack.result();
@@ -435,24 +444,22 @@ export async function runOp(scripts: OpScript[], op: BodyOp, args: any, env: OpE
     if (op === "transform") {
         let out: string | Uint8Array = args.body || "";
         let touched = false;
-        for (const { s, handlers } of list) {
-            for (const h of handlers) {
-                try {
-                    // A text-only handler only ever sees text.
-                    if (out instanceof Uint8Array && !takesBinary(h.route)) out = new TextDecoder().decode(out);
-                    ranOnMock(s, h);
-                    const result: any = await withPage(args.page, () => h.fn({ ...base(h), contentType: args.contentType, status: args.status, ...(replacedBy ? { replacedBy } : {}) }, out), callTab);
-                    if (result !== undefined && result !== null) {
-                        const before = typeof out === "string" ? out.length : out.byteLength;
-                        const next = typeof result === "string" ? result : result instanceof Uint8Array ? result : JSON.stringify(result);
-                        const after = typeof next === "string" ? next.length : next.byteLength;
-                        out = next;
-                        env.log(s.id, "info", `[${s.name}] onResponseBody applied (${before}b → ${after}b) ${url}`);
-                        touched = true;
-                    } else observed(s, "onResponseBody");
-                } catch (e: any) {
-                    env.log(s.id, "error", formatScriptError(s.name, e, "onResponseBody"));
-                }
+        for (const { s, h } of list) {
+            try {
+                // A text-only handler only ever sees text.
+                if (out instanceof Uint8Array && !takesBinary(h.route)) out = new TextDecoder().decode(out);
+                ranOnMock(s, h);
+                const result: any = await withPage(args.page, () => h.fn({ ...base(h), contentType: args.contentType, status: args.status, ...(replacedBy ? { replacedBy } : {}) }, out), callTab);
+                if (result !== undefined && result !== null) {
+                    const before = typeof out === "string" ? out.length : out.byteLength;
+                    const next = typeof result === "string" ? result : result instanceof Uint8Array ? result : JSON.stringify(result);
+                    const after = typeof next === "string" ? next.length : next.byteLength;
+                    out = next;
+                    env.log(s.id, "info", `[${s.name}] onResponseBody applied (${before}b → ${after}b) ${url}`);
+                    touched = true;
+                } else observed(s, "onResponseBody");
+            } catch (e: any) {
+                env.log(s.id, "error", formatScriptError(s.name, e, "onResponseBody"));
             }
         }
         // Every handler returned nothing (void or null): no change, the strategy keeps the original bytes.

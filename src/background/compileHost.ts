@@ -37,6 +37,8 @@ interface PlainScript {
     code: string;
     updatedAt: number;
     enabled: boolean;
+    /** the user's and package.json layer (handler order) */
+    layers?: { user?: "base" | "site" | "override"; pkg?: "base" | "site" | "override" };
 }
 
 export interface Analyzed {

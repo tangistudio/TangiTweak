@@ -219,10 +219,10 @@ export class HelperStrategy {
             return;
         }
         if (__MV3__) {
-            this.mv3Plain = scripts.map((s) => ({ id: s.id, name: s.meta.name, code: s.code, updatedAt: s.updatedAt, enabled: s.enabled }));
+            this.mv3Plain = scripts.map((s) => ({ id: s.id, name: s.meta.name, code: s.code, updatedAt: s.updatedAt, enabled: s.enabled, layers: s.layers }));
             this.mv3Params = paramValues;
         } else {
-            this.mv2Ops = compileMv2(scripts, paramValues, (s) => ownsAny(s, "helper")).map((c) => ({ id: c.id, name: c.name, handlers: c.compiled.handlers }));
+            this.mv2Ops = compileMv2(scripts, paramValues, (s) => ownsAny(s, "helper")).map((c) => ({ id: c.id, name: c.name, handlers: c.compiled.handlers, layers: c.layers }));
         }
         this.owned = owned;
         if (!owned.length) {

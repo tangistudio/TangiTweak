@@ -1,7 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { AS_IS, URL_TOKEN, captureToken, patternGroups, patternToRegex, regexCost, rulesForProbe, substitute, type RuleProbe } from "../src/shared/dnrRules";
+import { AS_IS, URL_TOKEN, captureToken, patternGroups, patternToRegex, regexCost, rulePriority, rulesForProbe, substitute, type RuleProbe } from "../src/shared/dnrRules";
 import { matchAny, matchGroups } from "../src/shared/matcher";
 import { normalizeRoute, type NetKind } from "../src/shared/route";
+import { requestThroughLayers, type LayerEnv } from "../src/testing/layers";
 
 const PATTERNS = [
     "*://example.com/*",
@@ -177,6 +178,19 @@ describe("rulesForProbe", () => {
         expect(ok(probe("onRequest", "*://example.com/*", { redirect: "https://x.com/", block: true }))[0].action.type).toBe("redirect");
     });
 
+    it("allow is a final allow rule that drops the handler's own header edits", () => {
+        const rules = ok(probe("onRequest", "*://example.com/*", { allow: true, headers: { set: { a: "1" } } }));
+        expect(rules).toEqual([expect.objectContaining({ final: true, action: { type: "allow" }, summary: "allow" })]);
+    });
+
+    it("priority follows run order: later decisions and header edits outrank earlier ones", () => {
+        const decision = { final: true }, headers = { final: false };
+        expect(rulePriority(decision, 2)).toBeGreaterThan(rulePriority(decision, 1));
+        expect(rulePriority(decision, 2)).toBeGreaterThan(rulePriority(headers, 1));
+        // a later handler's header edits outrank an earlier allow, so they still apply
+        expect(rulePriority(headers, 2)).toBeGreaterThan(rulePriority(decision, 1));
+    });
+
     it("errors", () => {
         expect(err(probe("onRequest", "*://e.com/*", { block: true }, { forbidden: ["method"] }))).toContain("it reads ctx.method");
         expect(err(probe("onRequest", "*://e.com/*", { block: true }, { error: "boom" }))).toBe("boom");
@@ -203,5 +217,34 @@ describe("regexCost", () => {
     it("counts character classes (incl. `.`), groups and captures, skipping escapes and class contents", () => {
         expect(regexCost(String.raw`^https://a\.com/([^/?]+)(?:/(.*))?\.[(.]x`)).toEqual({ classes: 3, groups: 3, captures: 2 });
         expect(regexCost(String.raw`^a\(b\[c\]`)).toEqual({ classes: 0, groups: 0, captures: 0 });
+    });
+});
+
+describe("rules simulation: the last matching decision wins", () => {
+    const group = (id: string, url: string, result: RuleProbe["result"]) => {
+        const p = probe("onRequest", url, result);
+        return { scriptId: id, scriptName: id, route: p.route, specs: ok(p) };
+    };
+    const through = (rules: LayerEnv["rules"]) =>
+        requestThroughLayers(
+            { browser: "chrome", scripts: [], refs: [], disabled: [], rules, opEnv: { log: () => {} } as any, upstream: async (h) => ({ status: 200, headers: { echo: h["x-a"] ?? "" }, body: "ok" }) },
+            { url: "https://example.com/x", method: "GET", tabId: 1, page: "tab:1", tabUrl: "https://example.com/", resourceType: "xmlhttprequest", requestHeaders: {} }
+        );
+
+    it("a later redirect beats an earlier block", async () => {
+        const r = await through([group("Base", "*://*/*", { block: true }), group("Site", "*://example.com/*", { redirect: "https://example.com/y" })]);
+        expect(r).toMatchObject({ action: "redirected", redirectedTo: "https://example.com/y", decidedBy: expect.objectContaining({ script: "Site" }) });
+    });
+
+    it("a later allow lets the request through, keeping only later header edits", async () => {
+        const r = await through([
+            group("A", "*://*/*", { headers: { set: { "x-a": "early" } } }),
+            group("B", "*://*/*", { block: true }),
+            group("C", "*://example.com/*", { allow: true }),
+        ]);
+        expect(r.action).toBe("passthrough");
+        expect(r.requestHeaders).toEqual({});
+        const later = await through([group("B", "*://*/*", { block: true }), group("C", "*://example.com/*", { allow: true }), group("D", "*://*/*", { headers: { set: { "x-a": "late" } } })]);
+        expect(later.requestHeaders).toEqual({ "x-a": "late" });
     });
 });

@@ -107,10 +107,10 @@ export class DebuggerStrategy {
         this.owned = owned;
         this.patterns = fetchPatternsOf(owned);
         if (__MV3__) {
-            this.mv3Plain = scripts.filter((s) => s.enabled).map((s) => ({ id: s.id, name: s.meta.name, code: s.code, updatedAt: s.updatedAt, enabled: true }));
+            this.mv3Plain = scripts.filter((s) => s.enabled).map((s) => ({ id: s.id, name: s.meta.name, code: s.code, updatedAt: s.updatedAt, enabled: true, layers: s.layers }));
             this.mv3Params = paramValues || {};
         } else {
-            this.ops = compileMv2(scripts, paramValues, (s) => ownsAny(s, "debugger")).map((c) => ({ id: c.id, name: c.name, handlers: c.compiled.handlers }));
+            this.ops = compileMv2(scripts, paramValues, (s) => ownsAny(s, "debugger")).map((c) => ({ id: c.id, name: c.name, handlers: c.compiled.handlers, layers: c.layers }));
         }
         // announce only when the owning set changes (reloads are frequent)
         const names = [...new Set(owned.map((o) => o.name))];

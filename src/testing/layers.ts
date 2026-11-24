@@ -18,7 +18,7 @@ import { bodyKind } from "../shared/bodyKind";
 import { resolveFileRef, runOp, type OpEnv, type OpScript } from "../shared/bodyOps";
 import { debuggerMissedLine, isLoopbackUrl, MISSED_REASONS, routeProblem } from "../shared/missedTap";
 import { LAYERS, skippedBy, skipReason, winnerOf, type RouteRef, type Winner } from "../shared/precedence";
-import { routeLabel, routeMatches, type RouteMeta, type Strategy } from "../shared/route";
+import { handlerLayer, routeLabel, routeMatches, type Layer, type RouteMeta, type Strategy } from "../shared/route";
 import { substitute, type RuleSpec } from "../shared/dnrRules";
 import type { Routed } from "../shared/compile";
 import { NET_KINDS } from "../shared/route";
@@ -75,6 +75,8 @@ export interface RuleGroupRef {
     route: RouteMeta;
     /** The declarativeNetRequest rules the probe produced, in order. */
     specs: RuleSpec[];
+    /** The handler's layer; {@link LayerEnv.rules} lists the handlers by layer, then list order. */
+    layer?: Layer;
 }
 
 /**
@@ -132,7 +134,7 @@ export function layerScripts(
         const handlers: any = { ...s.handlers };
         for (const kind of NET_KINDS) {
             handlers[kind] = ((s.handlers as any)[kind] as Routed[]).flatMap((h) => {
-                const ref: RouteRef = { scriptId: s.id, scriptName: s.name, order, route: h.route, strategy: h.route.strategy! };
+                const ref: RouteRef = { scriptId: s.id, scriptName: s.name, order, route: h.route, layer: handlerLayer(h.route, s.layers).layer, strategy: h.route.strategy! };
                 const why = routeProblem({ kind: h.route.kind, strategy: ref.strategy, resourceTypes: h.route.resourceTypes }, env);
                 if (why) {
                     disabled.push({ ref, why });
@@ -202,7 +204,7 @@ export interface LayerEnv {
         /** Why it is off, as the Problems view says it. */
         why: string;
     }[];
-    /** Every script's probed `rules` handlers. */
+    /** Every script's probed `rules` handlers, in run order (layer, then list order): a later one gets a higher rule priority. */
     rules: RuleGroupRef[];
     /** Where handlers' log lines (and optional trace lines) go. */
     opEnv: OpEnv;
@@ -286,9 +288,11 @@ const dec = new TextDecoder();
  * Matching routes the browser turns off are listed as skipped first. Then,
  * layer by layer:
  *
- * - `rules` applies the probed rules' request header edits. Its first
- *   block or redirect ends the walk instead (dropping those edits); a
- *   redirect to a `data:` URL becomes a replacement with status 200.
+ * - `rules` applies the probed rules' request header edits. Its last
+ *   matching block or redirect (the highest rule priority) ends the walk
+ *   instead, dropping those edits; a redirect to a `data:` URL becomes a
+ *   replacement with status 200. A last `allow` lets the request on and
+ *   drops the header edits of handlers before it.
  * - `page` only sees `xmlhttprequest` requests and `helper` never sees
  *   loopback URLs; their handlers are listed as skipped otherwise.
  * - For a tab's first document, `debugger` handlers are listed as ones
@@ -334,30 +338,39 @@ export async function requestThroughLayers(env: LayerEnv, req: LayerRequest): Pr
         const mine = env.refs.filter((r) => r.strategy === layer && matches(r));
         if (layer === "rules") {
             reached.push(layer);
-            const ops: any[] = [];
-            for (const g of env.rules) {
+            // rule priority follows run order: the last matching decision wins, and an
+            // allow on top keeps only later handlers' header edits (they outrank it)
+            let top: { g: RuleGroupRef; spec: RuleSpec; rank: number } | undefined;
+            const edits: { rank: number; a: any }[] = [];
+            env.rules.forEach((g, rank) => {
                 for (const spec of g.specs) {
                     if (!specMatches(spec, req)) continue;
                     const a = spec.action || {};
-                    if (a.type === "modifyHeaders") {
-                        ops.push(...(a.requestHeaders || []));
-                        responseRules.push(...(a.responseHeaders || []));
-                        continue;
-                    }
-                    if (a.type !== "block" && a.type !== "redirect") continue;
-                    const who = { scriptId: g.scriptId, scriptName: g.scriptName, kind: g.route.kind as any, index: g.route.index };
-                    route = g.route;
-                    if (a.type === "block") winner = { ...who, strategy: "rules", outcome: "block" };
-                    else {
-                        const target = a.redirect?.url ?? substitute(spec.condition.regexFilter, a.redirect?.regexSubstitution ?? "", url) ?? url;
-                        if (target.startsWith("data:")) {
-                            const f = resolveFileRef(target, url);
-                            replaced = { status: 200, headers: { "content-type": f.mime }, body: f.content };
-                            winner = { ...who, strategy: "rules", outcome: "replace" };
-                        } else winner = { ...who, strategy: "rules", outcome: "redirect", target };
-                    }
-                    break layers;
+                    if (a.type === "modifyHeaders") edits.push({ rank, a });
+                    else if (a.type === "block" || a.type === "redirect" || a.type === "allow") top = { g, spec, rank };
                 }
+            });
+            if (top && top.spec.action.type !== "allow") {
+                const { g, spec } = top;
+                const a = spec.action;
+                const who = { scriptId: g.scriptId, scriptName: g.scriptName, kind: g.route.kind as any, index: g.route.index };
+                route = g.route;
+                if (a.type === "block") winner = { ...who, strategy: "rules", outcome: "block" };
+                else {
+                    const target = a.redirect?.url ?? substitute(spec.condition.regexFilter, a.redirect?.regexSubstitution ?? "", url) ?? url;
+                    if (target.startsWith("data:")) {
+                        const f = resolveFileRef(target, url);
+                        replaced = { status: 200, headers: { "content-type": f.mime }, body: f.content };
+                        winner = { ...who, strategy: "rules", outcome: "replace" };
+                    } else winner = { ...who, strategy: "rules", outcome: "redirect", target };
+                }
+                break layers;
+            }
+            const ops: any[] = [];
+            for (const e of edits) {
+                if (top && e.rank <= top.rank) continue;
+                ops.push(...(e.a.requestHeaders || []));
+                responseRules.push(...(e.a.responseHeaders || []));
             }
             if (applyOps(requestHeaders, ops)) reqModified = true;
             continue;

@@ -85,12 +85,13 @@ export function tweakSettingsSchema(defs: ParamTree = {}): Record<string, any> {
     return {
         $schema: "http://json-schema.org/draft-07/schema#",
         title: "A tweak's settings",
-        description: "This tweak's enable switch and the params that differ from their defaults. Omitted params use their defaults.",
+        description: "This tweak's enable switch, its layer and the params that differ from their defaults. Omitted params use their defaults.",
         type: "object",
         additionalProperties: false,
         properties: {
             $schema: { type: "string" },
             enabled: { type: "boolean", default: true, description: "Run this tweak" },
+            layer: { enum: ["base", "site", "override"], description: "Where this tweak's handlers run in the stack: base first, override last. Omit it for automatic: base for routes on any host, site for named hosts" },
             params: { type: "object", description: "Values of the params from tweak.params", properties: params, additionalProperties: !Object.keys(defs).length },
         },
     };

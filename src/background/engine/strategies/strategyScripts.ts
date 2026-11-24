@@ -4,7 +4,7 @@
  * sandbox instead — see compileHost).
  */
 import { compileScript, makeModuleResolver, makeScriptOverrides, type CompiledScript } from "../../../shared/compile";
-import { effectiveStrategy, isNetKind, type RouteMeta, type Strategy } from "../../../shared/route";
+import { effectiveStrategy, isNetKind, type RouteMeta, type ScriptLayers, type Strategy } from "../../../shared/route";
 import type { ResMeta } from "../../../shared/metaParser";
 import { scriptLogLine } from "../../../shared/scriptLog";
 import { log } from "../logs";
@@ -19,6 +19,8 @@ export interface ScriptLike {
     code: string;
     enabled: boolean;
     meta: ResMeta;
+    /** explicit layers (user setting, package.json), attached on reload */
+    layers?: ScriptLayers;
 }
 
 export interface OwnedRoute {
@@ -43,6 +45,7 @@ export interface CompiledEntry {
     id: string;
     name: string;
     compiled: CompiledScript;
+    layers?: ScriptLayers;
 }
 
 /**
@@ -73,7 +76,7 @@ export function compileMv2(scripts: ScriptLike[], paramValues: { [scriptId: stri
         if (!s.enabled || !want(s)) continue;
         const compiled = compileScript(s.code, { ...overridesFor({ id: s.id, name: s.meta.name, code: s.code }), name: s.meta.name });
         // errored compiles stay in so the strategy logs the error (meta.active is false then)
-        if (compiled.meta.active || compiled.error) out.push({ id: s.id, name: s.meta.name, compiled });
+        if (compiled.meta.active || compiled.error) out.push({ id: s.id, name: s.meta.name, compiled, layers: s.layers });
     }
     return out;
 }

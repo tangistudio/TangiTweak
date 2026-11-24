@@ -654,6 +654,8 @@ export interface ProbeResult {
     redirect?: string;
     /** Set when the result blocks the request. */
     block?: boolean;
+    /** Set when the result is `{ allow: true }`: it drops lower-priority (earlier) decisions. */
+    allow?: boolean;
     /** Header edits: request headers for onRequest, response headers for onResponseHeaders. */
     headers?: {
         /** Header name → value (stringified) to set. */
@@ -668,11 +670,11 @@ export interface ProbeResult {
  * priority (the rules strategy assigns those).
  */
 export interface RuleSpec {
-    /** Block / redirect (first script wins) vs modifyHeaders (later handlers win). */
+    /** A decision (`block`, `redirect` or `allow`) vs `modifyHeaders`; the rules strategy ranks both by handler order, the later handler winning. */
     final: boolean;
     /** The url pattern this rule came from. */
     pattern: string;
-    /** The rule's declarativeNetRequest action: `block`, `redirect` (a `url` or a `regexSubstitution`) or `modifyHeaders`. */
+    /** The rule's declarativeNetRequest action: `block`, `redirect` (a `url` or a `regexSubstitution`), `allow` or `modifyHeaders`. */
     action: any;
     /**
      * The rule's declarativeNetRequest condition: the pattern's case-sensitive
@@ -681,7 +683,7 @@ export interface RuleSpec {
      * lowercase `requestMethods`.
      */
     condition: any;
-    /** Network-view line: "block", "redirect → …", "request headers (set x)". */
+    /** Network-view line: "block", "redirect → …", "allow", "request headers (set x)". */
     summary: string;
 }
 
@@ -734,9 +736,10 @@ export function rulesForProbe(o: RuleProbe):
     if (o.kind === "onRequest" && r.replaceResponse) return fail("a `replaceResponse` result is not supported on rules — use another strategy for this handler");
     const redirect = o.kind === "onRequest" && r.redirect ? r.redirect : undefined;
     const block = o.kind === "onRequest" && !redirect && !!r.block;
-    // a final action drops header edits (as at runtime)
-    const headers = redirect || block ? undefined : r.headers;
-    if (!redirect && !block && !hasHeaderMods(headers)) {
+    const allow = o.kind === "onRequest" && !redirect && !block && !!r.allow;
+    // a decision drops header edits (as at runtime: an onRequest result is one thing)
+    const headers = redirect || block || allow ? undefined : r.headers;
+    if (!redirect && !block && !allow && !hasHeaderMods(headers)) {
         return o.conditional ? { rules: [] } : fail("does nothing on `rules` (rules can't just observe requests)");
     }
     if (headers && HAS_TOKEN.test(JSON.stringify(headers))) return fail(AS_IS);
@@ -781,25 +784,44 @@ export function rulesForProbe(o: RuleProbe):
             resourceTypes: [...(route.resourceTypes ?? RESOURCE_TYPES)],
         };
         if (requestMethods) condition.requestMethods = requestMethods;
-        let action: any;
-        let summary: string;
         if (redirect) {
-            summary = "redirect";
+            let action: any;
             if (!used.size) action = { type: "redirect", redirect: { url: redirect } };
             else {
                 const sub = redirect.replace(/\\/g, "\\\\").replace(ANY_TOKEN, (t) => (t === URL_TOKEN ? "\\0" : `\\${pr.index[o.captures.find((n) => captureToken(n) === t)!]}`));
                 action = { type: "redirect", redirect: { regexSubstitution: sub } };
             }
-        } else if (block) {
-            summary = "block";
-            action = { type: "block" };
-        } else {
-            summary = headerSummary(o.kind, headers!);
-            action = { type: "modifyHeaders", [o.kind === "onResponseHeaders" ? "responseHeaders" : "requestHeaders"]: headerOps(headers!) };
+            rules.push({ final: true, pattern, action, condition, summary: "redirect" });
+        } else if (block) rules.push({ final: true, pattern, action: { type: "block" }, condition, summary: "block" });
+        else if (allow) rules.push({ final: true, pattern, action: { type: "allow" }, condition, summary: "allow" });
+        else {
+            const action = { type: "modifyHeaders", [o.kind === "onResponseHeaders" ? "responseHeaders" : "requestHeaders"]: headerOps(headers!) };
+            rules.push({ final: false, pattern, action, condition, summary: headerSummary(o.kind, headers!) });
         }
-        rules.push({ final: !!(redirect || block), pattern, action, condition, summary });
     }
     return { rules };
+}
+
+/**
+ * A rule's declarativeNetRequest priority from its handler's run order, so
+ * the last handler wins as on the other strategies: a decision (block,
+ * redirect, allow) gets `2 × rank` and a header edit `2 × rank + 1`.
+ *
+ * - A later decision outranks an earlier one; an `allow` rule lets the
+ *   request through when it is the top decision.
+ * - A later `set` of a header wins: Chrome applies higher-priority
+ *   modifyHeaders rules first, and lower ones can then only append.
+ * - Chrome only applies modifyHeaders rules with a higher priority than
+ *   every matching allow rule, so later handlers' header edits survive an
+ *   `allow`. Earlier handlers' header edits are dropped, unlike at runtime
+ *   where `allow` only drops earlier decisions.
+ *
+ * https://developer.chrome.com/docs/extensions/reference/api/declarativeNetRequest#rules-priority
+ *
+ * @param rank - The handler's position in run order (layer, then list order), 1-based.
+ */
+export function rulePriority(spec: Pick<RuleSpec, "final">, rank: number): number {
+    return 2 * rank + (spec.final ? 0 : 1);
 }
 
 /**

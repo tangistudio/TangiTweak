@@ -37,11 +37,11 @@ export class PageStrategy implements InterceptionStrategy {
         if (__MV3__) {
             // the SW cannot compile — handlers execute in the sandbox page; the
             // sandbox needs every enabled script (imports)
-            this.mv3Scripts = scripts.filter((s) => s.enabled).map((s) => ({ id: s.id, name: s.meta.name, code: s.code, updatedAt: s.updatedAt, enabled: true }));
+            this.mv3Scripts = scripts.filter((s) => s.enabled).map((s) => ({ id: s.id, name: s.meta.name, code: s.code, updatedAt: s.updatedAt, enabled: true, layers: s.layers }));
             this.mv3Params = paramValues || {};
             return;
         }
-        this.ops = compileMv2(scripts, paramValues, (s) => ownsAny(s, "page")).map((c) => ({ id: c.id, name: c.name, handlers: c.compiled.handlers }));
+        this.ops = compileMv2(scripts, paramValues, (s) => ownsAny(s, "page")).map((c) => ({ id: c.id, name: c.name, handlers: c.compiled.handlers, layers: c.layers }));
     }
 
     /** does any enabled script own a hook route? */

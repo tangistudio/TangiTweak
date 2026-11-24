@@ -8,7 +8,7 @@ import { useEffect, useState, type MouseEvent } from "react";
 import { Switch } from "../components/Switch";
 import { ParamTreeFields } from "../components/ParamField";
 import { IconPen } from "../components/icons";
-import type { PopupApi, ScriptInfo, ScriptParams } from "./api";
+import type { PopupApi, ScriptInfo, ScriptLayer, ScriptParams } from "./api";
 import { TAB_NOTICE, type TabStatus } from "../../shared/tabStatus";
 
 type Load = { state: "loading" } | { state: "ready"; scripts: ScriptInfo[] } | { state: "error" };
@@ -99,6 +99,9 @@ export function Popup({ api }: { api: PopupApi }) {
 const sameIds = (a: ReadonlySet<string>, b: string[]) => a.size === b.length && b.every((id) => a.has(id));
 
 const hasParams = (s: ScriptInfo) => !!s.paramDefs && Object.keys(s.paramDefs).length > 0;
+const NET_KINDS = new Set(["onRequest", "onResponseHeaders", "onResponseBody"]);
+/** network handlers run in a layer the user can set */
+const hasLayer = (s: ScriptInfo) => !!s.meta.routes?.some((r) => NET_KINDS.has(r.kind));
 
 function ScriptRow({ script, api, onChanged, version, activeHere }: { script: ScriptInfo; api: PopupApi; onChanged: () => void; version: number; activeHere: boolean }) {
     const [open, setOpen] = useState(false);
@@ -149,10 +152,10 @@ function ScriptRow({ script, api, onChanged, version, activeHere }: { script: Sc
                 <button className="btn-icon" title="Open in the Editor" aria-label="Edit" onClick={() => api.openManager(script.id)}>
                     <IconPen />
                 </button>
-                {hasParams(script) && (
+                {(hasParams(script) || hasLayer(script)) && (
                     <button
                         className="btn-fold"
-                        title={open ? "Hide parameters" : "Show parameters"}
+                        title={open ? "Hide settings" : "Show settings"}
                         aria-label="Toggle parameters"
                         aria-expanded={open}
                         onClick={() => setOpen(!open)}
@@ -161,25 +164,27 @@ function ScriptRow({ script, api, onChanged, version, activeHere }: { script: Sc
                     </button>
                 )}
             </li>
-            {open && <ParamFold scriptId={script.id} api={api} version={version} />}
+            {open && <ParamFold scriptId={script.id} api={api} version={version} layered={hasLayer(script)} />}
         </>
     );
 }
 
-function ParamFold({ scriptId, api, version }: { scriptId: string; api: PopupApi; version: number }) {
+function ParamFold({ scriptId, api, version, layered }: { scriptId: string; api: PopupApi; version: number; layered: boolean }) {
     const [params, setParams] = useState<ScriptParams | null>(null);
+    const [layer, setLayer] = useState<ScriptLayer | null>(null);
     useEffect(() => {
         let live = true;
         api.getParams(scriptId).then((p) => live && setParams(p));
+        if (layered && api.getLayer) api.getLayer(scriptId).then((l) => live && setLayer(l));
         return () => void (live = false);
-    }, [scriptId, version]);
+    }, [scriptId, version, layered]);
 
     if (!params) return <li className="param-fold">Loading…</li>;
     const entries = Object.entries(params.defs);
     return (
         <li className="param-fold">
             {entries.length === 0 ? (
-                "This script declares no parameters."
+                layer ? null : "This script declares no parameters."
             ) : (
                 <ParamTreeFields
                     defs={params.defs}
@@ -189,6 +194,28 @@ function ParamFold({ scriptId, api, version }: { scriptId: string; api: PopupApi
                         void api.setParam(scriptId, path.join("."), v);
                     }}
                 />
+            )}
+            {layer && (
+                <div className="param-row">
+                    <div className="param-label">
+                        <span>Layer</span>
+                    </div>
+                    <div className="param-desc">Handlers run base first, then site, then override. The last word wins.</div>
+                    <select
+                        aria-label="Layer"
+                        value={layer.layer ?? ""}
+                        onChange={(e) => {
+                            const v = (e.currentTarget.value || undefined) as ScriptLayer["layer"];
+                            setLayer({ ...layer, layer: v });
+                            void api.setLayer?.(scriptId, v);
+                        }}
+                    >
+                        <option value="">{layer.auto}</option>
+                        <option value="base">base</option>
+                        <option value="site">site</option>
+                        <option value="override">override</option>
+                    </select>
+                </div>
             )}
         </li>
     );

@@ -163,6 +163,75 @@ export interface RouteMeta {
     key?: string;
     /** onResponseBody only: which bodies the handler gets (see {@link takesBinary} / {@link takesText}). */
     binary?: BinaryOption;
+    /** The route's `layer` option; absent = not declared (see {@link handlerLayer}). */
+    layer?: Layer;
+}
+
+/**
+ * Where a handler sits in the stack of one stage: `base` runs first,
+ * `override` last, and the last word wins.
+ */
+export type Layer = "base" | "site" | "override";
+
+/** Every {@link Layer}, in run order. */
+export const LAYER_ORDER: readonly Layer[] = ["base", "site", "override"];
+
+/** Whether `v` is a {@link Layer} name. */
+export function isLayer(v: unknown): v is Layer {
+    return typeof v === "string" && (LAYER_ORDER as readonly string[]).includes(v);
+}
+
+/** A layer's position in {@link LAYER_ORDER}; an unknown or missing one counts as `site`. */
+export function layerRank(l: Layer | undefined): number {
+    const i = l ? LAYER_ORDER.indexOf(l) : -1;
+    return i < 0 ? 1 : i;
+}
+
+/** The layer a route gets from its hosts alone: `base` if any url pattern can match any host, else `site`. */
+export function inferLayer(route: Pick<RouteMeta, "url">): Layer {
+    const ps = routePatterns(route.url);
+    return ps.some((p) => hostKeyOf(p) === null) ? "base" : "site";
+}
+
+/** A script's explicit layers, from outside its routes. */
+export interface ScriptLayers {
+    /** Set by the user in the tweak's settings (popup, Editor, `.tweak/settings.json`). */
+    user?: Layer;
+    /** The tweak's package.json `tangitweak.layer`. */
+    pkg?: Layer;
+}
+
+/** Where a handler's layer came from. */
+export type LayerSource = "user" | "route" | "package" | "inferred";
+
+/** A handler's layer and where it came from. */
+export interface HandlerLayer {
+    /** The layer the handler runs in. */
+    layer: Layer;
+    /** Where that layer came from. */
+    source: LayerSource;
+}
+
+/**
+ * A handler's layer and where it came from. The user's setting wins, then
+ * the route's `layer` option, then package.json, then {@link inferLayer}.
+ */
+export function handlerLayer(route: Pick<RouteMeta, "url" | "layer">, scriptLayers?: ScriptLayers): HandlerLayer {
+    if (isLayer(scriptLayers?.user)) return { layer: scriptLayers!.user!, source: "user" };
+    if (isLayer(route.layer)) return { layer: route.layer, source: "route" };
+    if (isLayer(scriptLayers?.pkg)) return { layer: scriptLayers!.pkg!, source: "package" };
+    return { layer: inferLayer(route), source: "inferred" };
+}
+
+/**
+ * Stable-sorts items by their handler's layer (base first), keeping the
+ * given order (script list, then registration) within a layer.
+ */
+export function sortByLayer<T>(items: T[], layerOf: (item: T) => Layer): T[] {
+    return items
+        .map((item, i) => ({ item, i, r: layerRank(layerOf(item)) }))
+        .sort((a, b) => a.r - b.r || a.i - b.i)
+        .map((x) => x.item);
 }
 
 /**
@@ -233,7 +302,7 @@ function checkPatterns(ps: string[], what: string, where: string): void {
  * - onSite / onPage / onOverlay take a URL pattern, a list of them or
  *   `{ url, exclude, when, navigation }`; `when` defaults to
  *   `"document_start"` for onSite and `"document_end"` otherwise.
- * - Network handlers take `{ url, exclude, methods, resourceTypes, strategy }`
+ * - Network handlers take `{ url, exclude, methods, resourceTypes, strategy, layer }`
  *   (plus `binary` for onResponseBody); `strategy` is required, methods are
  *   uppercased.
  *
@@ -270,7 +339,7 @@ export function normalizeRoute(kind: RouteKind, raw: unknown, index: number, api
     if (api === "onSite" || api === "onPage") route.api = api;
     if (doc) {
         const runs = kind === "onOverlay" ? "in the overlay" : api === "onSite" ? "in the site's world" : "in the page";
-        for (const k of ["methods", "resourceTypes", "strategy", "binary"]) {
+        for (const k of ["methods", "resourceTypes", "strategy", "binary", "layer"]) {
             if (obj[k] !== undefined) throw new Error(`${where}: "${k}" doesn't apply to ${name} (it runs ${runs}, not on requests)`);
         }
         if (obj.when !== undefined) {
@@ -305,6 +374,10 @@ export function normalizeRoute(kind: RouteKind, raw: unknown, index: number, api
     if (Array.isArray(obj.strategy)) throw new Error(`${where}: strategy is a single value (one of ${STRATEGIES.join(", ")}), not a priority list`);
     if (!STRATEGIES.includes(obj.strategy)) throw new Error(`${where}: unknown strategy "${obj.strategy}" — one of ${STRATEGIES.join(", ")}`);
     route.strategy = obj.strategy;
+    if (obj.layer !== undefined) {
+        if (!isLayer(obj.layer)) throw new Error(`${where}: layer must be one of ${LAYER_ORDER.map((l) => JSON.stringify(l)).join(", ")}, got ${JSON.stringify(obj.layer)}`);
+        route.layer = obj.layer;
+    }
     return route;
 }
 
@@ -497,4 +570,22 @@ export const pageWorld = (route: Pick<RouteMeta, "world">): PageWorld => route.w
  */
 export function hookCanSee(route: RouteMeta): boolean {
     return !route.resourceTypes || route.resourceTypes.includes("xmlhttprequest");
+}
+
+/**
+ * The popup and Editor label of a tweak's "Automatic" layer choice: the
+ * layers its network handlers get without a user setting, e.g.
+ * `"Automatic (site)"`, `"Automatic (base, from package.json)"` or
+ * `"Automatic (base and site)"`.
+ *
+ * @param routes - The script's routes; only network ones count.
+ * @param pkg - The tweak's package.json `tangitweak.layer`.
+ */
+export function autoLayerLabel(routes: RouteMeta[], pkg?: Layer): string {
+    const got = routes.filter((r) => isNetKind(r.kind)).map((r) => handlerLayer(r, { pkg }));
+    if (!got.length) return "Automatic";
+    const layers = LAYER_ORDER.filter((l) => got.some((g) => g.layer === l));
+    const sources = new Set(got.map((g) => g.source));
+    const from = sources.size === 1 && sources.has("package") ? ", from package.json" : sources.size === 1 && sources.has("route") ? ", from the routes" : "";
+    return `Automatic (${layers.length > 1 ? `${layers.slice(0, -1).join(", ")} and ${layers[layers.length - 1]}` : layers[0]}${from})`;
 }

@@ -12,7 +12,7 @@ export interface ScriptInfo {
     runtimeError?: ScriptHealthInput["runtimeError"];
     typeErrors?: string[];
     ruleErrors?: string[];
-    meta: { name: string; active?: boolean; description?: string };
+    meta: { name: string; active?: boolean; description?: string; routes?: { kind: string }[] };
     /** in its tweak bundle: the entry (a tweak: it has the switch), a module of `entry`, or a file outside any bundle */
     role: ScriptRole["role"];
     entry?: string;
@@ -22,6 +22,13 @@ export interface ScriptInfo {
     /** resolved `<img src>` URL from script or bundle metadata `icon` */
     iconUrl?: string;
     paramDefs?: ParamTree;
+}
+
+/** A tweak's layer setting: the user's choice (unset: automatic) and what automatic gives. */
+export interface ScriptLayer {
+    layer?: "base" | "site" | "override";
+    /** e.g. "Automatic (site)"; plain "Automatic" when the tweak has no network handlers */
+    auto: string;
 }
 
 export interface ScriptParams {
@@ -42,6 +49,9 @@ export interface PopupApi {
     clearError(id: string): Promise<void>;
     getParams(scriptId: string): Promise<ScriptParams>;
     setParam(scriptId: string, key: string, value: any): Promise<void>;
+    getLayer?(scriptId: string): Promise<ScriptLayer>;
+    /** undefined: automatic */
+    setLayer?(scriptId: string, layer: ScriptLayer["layer"]): Promise<void>;
     openManager(scriptId?: string): void;
     loadSize(): Promise<{ w: number; h: number } | null>;
     saveSize(size: { w: number; h: number }): void;
@@ -82,6 +92,8 @@ export const chromePopupApi: PopupApi = {
     clearError: async (id) => void (await send({ type: "clearScriptError", scriptId: id })),
     getParams: (scriptId) => send({ type: "getScriptParams", scriptId }),
     setParam: async (scriptId, key, value) => void (await send({ type: "setScriptParam", scriptId, key, value })),
+    getLayer: async (scriptId) => (await send<ScriptLayer>({ type: "getScriptLayer", scriptId })) || { auto: "Automatic" },
+    setLayer: async (scriptId, layer) => void (await send({ type: "setScriptLayer", scriptId, layer })),
     openManager(scriptId) {
         const url = chrome.runtime.getURL("editor.html") + (scriptId ? `?script=${encodeURIComponent(scriptId)}` : "");
         chrome.tabs.create({ url });
@@ -97,7 +109,7 @@ export const chromePopupApi: PopupApi = {
     saveSize: (size) => void chrome.storage.local.set({ resPopupSize: size }),
     onChange(fn) {
         const l = (c: Record<string, chrome.storage.StorageChange>, area: string) => {
-            if (area === "local" && (c.resScripts || c.resScriptOrder || c.resParams || c.resDataFiles || c[PACKAGES_KEY])) fn();
+            if (area === "local" && (c.resScripts || c.resScriptOrder || c.resParams || c.resScriptLayers || c.resDataFiles || c[PACKAGES_KEY])) fn();
         };
         chrome.storage.onChanged.addListener(l);
         return () => chrome.storage.onChanged.removeListener(l);

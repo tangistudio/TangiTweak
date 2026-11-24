@@ -35,6 +35,15 @@ describe("a tweak's data folder", () => {
         expect(() => planTweakSettings(JSON.stringify({ scripts: {} }), cur)).toThrow(/unknown key/);
     });
 
+    it("settings.json holds the layer choice", () => {
+        expect(JSON.parse(renderTweakSettings(true, undefined, undefined, "base"))).toEqual({ enabled: true, layer: "base" });
+        const cur = { enabled: true, layer: "base" as const };
+        expect(planTweakSettings(JSON.stringify({ enabled: true, layer: "base" }), cur)).toEqual({ params: {} });
+        expect(planTweakSettings(JSON.stringify({ enabled: true, layer: "override" }), cur)).toEqual({ params: {}, layer: "override" });
+        expect(planTweakSettings(JSON.stringify({ enabled: true }), cur)).toEqual({ params: {}, layer: null });
+        expect(() => planTweakSettings(JSON.stringify({ layer: "top" }), cur)).toThrow(/layer/);
+    });
+
     it("maps paths to a bundle's settings.json or a store file per ID", () => {
         const roots = ["", "mock/", "mock/inner/"];
         expect(dataFileTarget("mock/.tweak/settings.json", ".tweak", roots)).toEqual({ root: "mock/", settings: true });

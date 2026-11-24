@@ -37,6 +37,7 @@
  */
 
 import { parseSource } from "./packageSource";
+import { isLayer, LAYER_ORDER, type Layer } from "./route";
 
 /**
  * A tweak's package.json fields as TangiTweak shows and compares them: what an
@@ -79,6 +80,12 @@ export interface PackageMetadata {
      * Trimmed, lower case and deduplicated; empty when not set.
      */
     connect: string[];
+    /**
+     * `tangitweak.layer`: the layer of every handler in the tweak whose route
+     * doesn't name one (see `handlerLayer` in `shared/route.ts`); unset =
+     * inferred from each route's hosts.
+     */
+    layer?: Layer;
 }
 
 /** A bundle's package.json as {@link parseManifest} reads it: the {@link PackageMetadata} plus what compiling and downloading need. */
@@ -236,6 +243,10 @@ export function parseManifest(text: string, where = MANIFEST_FILE): Manifest {
         if (!Array.isArray(block.connect) || block.connect.some((h: unknown) => typeof h !== "string")) throw new Error(`${where}: "tangitweak.connect" must be a list of host names`);
         out.connect = [...new Set((block.connect as string[]).map((h) => h.trim().toLowerCase()).filter(Boolean))];
     }
+    if (block.layer !== undefined) {
+        if (!isLayer(block.layer)) throw new Error(`${where}: "tangitweak.layer" must be one of ${LAYER_ORDER.map((l) => JSON.stringify(l)).join(", ")}`);
+        out.layer = block.layer;
+    }
     const main = normalizeMain(raw.main);
     if (raw.main !== undefined && main === undefined) throw new Error(`${where}: "main" must be a file path`);
     if (main !== undefined) {
@@ -257,6 +268,17 @@ export function parseManifest(text: string, where = MANIFEST_FILE): Manifest {
 export function connectOf(pkg: any): string[] {
     const list = isObject(pkg) && isObject(pkg.tangitweak) ? pkg.tangitweak.connect : undefined;
     return Array.isArray(list) ? [...new Set(list.filter((h): h is string => typeof h === "string").map((h) => h.trim().toLowerCase()).filter(Boolean))] : [];
+}
+
+/**
+ * A parsed package.json's `"tangitweak.layer"`. Never throws, unlike
+ * {@link parseManifest}: the background reads it on every reload.
+ *
+ * @returns Undefined when there's no `tangitweak` block or `layer` isn't a layer name.
+ */
+export function layerOf(pkg: any): Layer | undefined {
+    const l = isObject(pkg) && isObject(pkg.tangitweak) ? pkg.tangitweak.layer : undefined;
+    return isLayer(l) ? l : undefined;
 }
 
 /**
@@ -393,6 +415,13 @@ export const MANIFEST_SCHEMA = {
                     uniqueItems: true,
                     /** What the Editor shows on hover. */
                     description: "Hosts the tweak's tweak.fetch calls reach (onPage code can reach only these, and their subdomains); an update that adds one waits for review",
+                },
+                /** `tangitweak.layer`. */
+                layer: {
+                    /** One of the layer names. */
+                    enum: ["base", "site", "override"],
+                    /** What the Editor shows on hover. */
+                    description: "Where the tweak's handlers run in the stack: base first, override last, and the last word wins. Unset: base for routes on any host, site for named hosts",
                 },
                 /** `tangitweak.updateURL`. */
                 updateURL: {

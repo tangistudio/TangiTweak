@@ -12,10 +12,13 @@
  *
  * Requests matched by an active rule are marked Modified in the Network
  * view (our own matcher on observed requests; no feedback permission).
+ *
+ * Order: handlers run by layer (base, site, override), then list order, and
+ * the last one wins, so that order becomes rule priority (`rulePriority`).
  */
-import { indexRoutes, routeLabel, routeMatches, type NetKind, type RouteMeta } from "../../../shared/route";
+import { handlerLayer, indexRoutes, routeLabel, routeMatches, sortByLayer, type Layer, type NetKind, type RouteMeta } from "../../../shared/route";
 import { reportSkipped } from "../skipped";
-import { regexProblemText, ruleErrorLine, substitute, type RuleSpec } from "../../../shared/dnrRules";
+import { regexProblemText, rulePriority, ruleErrorLine, substitute, type RuleSpec } from "../../../shared/dnrRules";
 import { probeScriptRules, type ScriptRules } from "../../../shared/rulesProbe";
 import { strategyUnsupported } from "../../../shared/strategyInfo";
 import { dlogLevel } from "../../../shared/debugLog";
@@ -38,6 +41,9 @@ interface ActiveRule {
     name: string;
     route: RouteMeta;
     spec: RuleSpec;
+    /** the handler's position in run order (layer, then list order), 1-based: a later handler outranks an earlier one */
+    rank: number;
+    layer: Layer;
 }
 
 const CACHE_KEY = "ttRulesState";
@@ -139,7 +145,7 @@ export class RulesStrategy {
         }
         const enabled = scripts.filter((s) => s.enabled);
         const state = await this.storeState(enabled.map((s) => s.id));
-        const sig = JSON.stringify([enabled.map((s) => [s.id, s.updatedAt, s.meta.name]), paramValues, dataFilesSig(), packagesSig(), state.revs, state.tabIds]);
+        const sig = JSON.stringify([enabled.map((s) => [s.id, s.updatedAt, s.meta.name, s.layers ?? {}]), paramValues, dataFilesSig(), packagesSig(), state.revs, state.tabIds]);
         if (__MV3__ && (await this.restoreCache(sig))) return;
 
         let probed: Map<string, ScriptRules>;
@@ -152,14 +158,15 @@ export class RulesStrategy {
         }
         const errors = new Map<string, string[]>();
         const addError = (id: string, line: string) => errors.set(id, [...(errors.get(id) || []), line]);
-        // group rule specs per handler, in script order (= runtime order)
-        const groups: { scriptId: string; name: string; route: RouteMeta; specs: RuleSpec[] }[] = [];
+        // group rule specs per handler, in run order: layer, then script order
+        const listed: { scriptId: string; name: string; route: RouteMeta; specs: RuleSpec[]; layer: Layer }[] = [];
         for (const s of scripts) {
             const r = probed.get(s.id);
             if (!r) continue;
             for (const e of r.errors) addError(s.id, e);
-            for (const h of r.rules) groups.push({ scriptId: s.id, name: s.meta.name, route: h.route, specs: h.specs });
+            for (const h of r.rules) listed.push({ scriptId: s.id, name: s.meta.name, route: h.route, specs: h.specs, layer: handlerLayer(h.route, s.layers).layer });
         }
+        const groups = sortByLayer(listed, (g) => g.layer);
         // RE2 pre-check: attribute an unsupported regex to its handler
         const regexOk = new Map<string, string | null>();
         const accepted: typeof groups = [];
@@ -177,7 +184,7 @@ export class RulesStrategy {
             else accepted.push(g);
         }
         let nextId = 1;
-        const handlerRules = accepted.map((g) => g.specs.map((spec) => ({ id: nextId++, scriptId: g.scriptId, name: g.name, route: g.route, spec })));
+        const handlerRules = accepted.map((g, i) => g.specs.map((spec) => ({ id: nextId++, scriptId: g.scriptId, name: g.name, route: g.route, spec, rank: i + 1, layer: g.layer })));
         const all = handlerRules.flat();
         const priorities = this.priorities(all);
         const asRules = (list: ActiveRule[]) => list.map((r) => toRule(r, priorities.get(r.id)!));
@@ -204,13 +211,9 @@ export class RulesStrategy {
         if (__MV3__) await this.saveCache({ sig, active: applied, errors: Object.fromEntries(errors), names: Object.fromEntries(names) });
     }
 
-    /** final rules: earlier handler wins (higher priority); header rules: later handler wins */
+    /** each rule's priority from its handler's run order ({@link rulePriority}) */
     private priorities(all: ActiveRule[]): Map<number, number> {
-        const out = new Map<number, number>();
-        const finals = all.filter((r) => r.spec.final);
-        finals.forEach((r, i) => out.set(r.id, 100000 + finals.length - i));
-        all.filter((r) => !r.spec.final).forEach((r, i) => out.set(r.id, 1 + i));
-        return out;
+        return new Map(all.map((r) => [r.id, rulePriority(r.spec, r.rank)]));
     }
 
     private async probe(scripts: Script[], owners: Script[], paramValues: ParamValues, tabIds: number[], storeSnaps: Record<string, any>): Promise<Map<string, ScriptRules>> {
@@ -305,14 +308,20 @@ export class RulesStrategy {
             })
             .map((a) => a.rule);
         if (!hits.length) return;
-        const final = hits.find((r) => r.spec.final);
-        for (const r of final ? [final] : hits) {
+        // the top decision; an allow only keeps the later handlers' header edits (they outrank it)
+        const final = hits.filter((r) => r.spec.final).reduce<ActiveRule | undefined>((a, r) => (!a || r.rank >= a.rank ? r : a), undefined);
+        const allowed = final?.spec.action.type === "allow";
+        for (const r of !final ? hits : allowed ? hits.filter((h) => h === final || (!h.spec.final && h.rank > final.rank)) : [final]) {
             const what = r.spec.summary;
             const sub = r.spec.action.redirect?.regexSubstitution;
             const to = sub ? substitute(r.spec.condition.regexFilter, sub, d.url) : r.spec.action.redirect?.url;
             const label = `[rules] [${r.name}] ${routeLabel(r.route).replace(/ #\d+$/, "")}`;
             if (d.type === "websocket" && r.spec.action.type === "redirect" && !IS_FIREFOX) {
                 log(d.tabId ?? -1, `${label} → ${wsNotApplied(what === "redirect" ? "redirect" : "replaceResponse", "rules", d.url, to)}`, "warn", r.scriptId, undefined, d.url);
+                continue;
+            }
+            if (r.spec.action.type === "allow") {
+                log(d.tabId ?? -1, `${label} → allow ${d.url}`, "info", r.scriptId, undefined, d.url);
                 continue;
             }
             log(d.tabId ?? -1, to ? `${label} → redirect ${d.url} → ${to}` : `${label} → ${what} ${d.url}`, "info", r.scriptId, "modified", d.url);

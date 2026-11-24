@@ -229,6 +229,26 @@ declare namespace TangiTweak {
          * @example { url: "*://ads.example.com/*", strategy: tweak.isMV3 ? "rules" : "extension" }
          */
         strategy: Strategy;
+        /**
+         * Where this handler sits in the stack of its stage. Handlers run
+         * `"base"` first and `"override"` last, and the last word wins:
+         * a later `block`, `redirect`, `replaceResponse` or `allow`
+         * overrules an earlier one, a later header edit wins per header and
+         * a later body handler shapes the body the page gets. Within a
+         * layer, the script list order decides, then registration order.
+         *
+         * Unset: the tweak's package.json `tangitweak.layer`, else
+         * inferred from the hosts: `"base"` when a url pattern can match
+         * any host (`"<all_urls>"`), `"site"` for named hosts. The user's
+         * layer setting for the tweak overrides both this and package.json.
+         *
+         * Layers order handlers within one strategy only: strategies still
+         * run page, rules, extension, debugger, helper. On `rules` the
+         * layer becomes the rule's priority.
+         *
+         * @example { url: "<all_urls>", resourceTypes: ["xmlhttprequest"], strategy: "helper", layer: "override" } // a broad block that must win
+         */
+        layer?: "base" | "site" | "override";
     }
 
     /** Full route form for `tweak.onResponseBody`. */

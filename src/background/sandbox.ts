@@ -87,6 +87,8 @@ interface PlainScript {
     code: string;
     updatedAt: number;
     enabled: boolean;
+    /** the user's and package.json layer (handler order) */
+    layers?: { user?: "base" | "site" | "override"; pkg?: "base" | "site" | "override" };
 }
 
 interface AnalyzeResult {
@@ -310,7 +312,7 @@ function run(scripts: PlainScript[], paramValues: Record<string, any>, op: BodyO
     for (const [id, c] of cache) {
         const s = scripts.find((x) => x.id === id);
         if (!s || !s.enabled || !c.result.meta.active) continue;
-        list.push({ id, name: s.name, handlers: c.compiled.handlers });
+        list.push({ id, name: s.name, handlers: c.compiled.handlers, layers: s.layers });
     }
     // tabId/requestId ride along so the SW attributes the line to the right tab and request
     const tabId = typeof args?.tabId === "number" ? args.tabId : -1;

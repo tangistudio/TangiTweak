@@ -32,7 +32,7 @@
  * @module
  */
 
-import { isNetKind, routeLabel, routeMatches, type NetKind, type RouteMeta, type Strategy } from "./route";
+import { isNetKind, routeLabel, routeMatches, type Layer, type NetKind, type RouteMeta, type Strategy } from "./route";
 
 /**
  * The layers a request passes, page side first: one per strategy, in the
@@ -53,6 +53,8 @@ export interface Who {
     kind: NetKind;
     /** The handler's registration order within its kind in the script ({@link RouteMeta.index}, 0-based; labels show it 1-based). */
     index: number;
+    /** The handler's layer (`handlerLayer` in `shared/route.ts`); absent = unknown, worded as the same layer. */
+    layer?: Layer;
 }
 
 /**
@@ -90,6 +92,8 @@ export interface RouteRef {
     order: number;
     /** The handler's route. */
     route: RouteMeta;
+    /** The handler's layer ({@link handlerLayer}); it runs after lower layers in its stage. */
+    layer?: Layer;
     /** The strategy that runs it: its layer in {@link LAYERS}. */
     strategy: Strategy;
 }
@@ -228,14 +232,22 @@ export function skipReason(r: RouteRef, w: Winner, opts: SkipOptions = {}): stri
 export const SAME_LAYER_LATER = "same layer, it comes later in the list";
 
 /**
+ * Why `by` runs after `over` in one stage: a later layer
+ * (`layer "site" runs after "base"`) or {@link SAME_LAYER_LATER}.
+ */
+export function laterWhy(over: Pick<Who, "layer">, by: Pick<Who, "layer">): string {
+    return over.layer && by.layer && over.layer !== by.layer ? `layer "${by.layer}" runs after "${over.layer}"` : SAME_LAYER_LATER;
+}
+
+/**
  * Builds the WARN line for an onRequest decision a later handler replaced:
  * `[A] onRequest #1 → block was overruled: [B] onRequest #1 → replaceResponse has the last word (why) <url>`.
  *
  * @param over - The earlier decision, which no longer applies.
  * @param by - The later decision, which applies unless another replaces it.
- * @param why - Why `by` comes later. @defaultValue {@link SAME_LAYER_LATER}
+ * @param why - Why `by` comes later. @defaultValue {@link laterWhy} of their layers
  */
-export function overruledLine(over: Decided, by: Decided, url: string, why = SAME_LAYER_LATER): string {
+export function overruledLine(over: Decided, by: Decided, url: string, why = laterWhy(over, by)): string {
     return `[${over.scriptName}] ${winnerLabel(over)} was overruled: [${by.scriptName}] ${winnerLabel(by)} has the last word (${why}) ${url}`;
 }
 
@@ -380,12 +392,14 @@ export function mergeHeaderEdits(
 
 /**
  * Builds the WARN line for a header edit a later handler replaced:
- * `[B] onRequest #1 overrides request header "x" from [A] onRequest #1 (the later one in the list wins) <url>`.
+ * `[B] onRequest #1 overrides request header "x" from [A] onRequest #1 (the later one in the list wins) <url>`,
+ * or `(layer "site" runs after "base")` when their layers differ.
  *
  * @param which - Whether it is a request or a response header.
  */
 export function overrideLine(o: HeaderOverride, which: "request" | "response", url: string): string {
-    return `[${o.by.scriptName}] ${o.by.kind} #${o.by.index + 1} overrides ${which} header "${o.header}" from [${o.over.scriptName}] ${o.over.kind} #${o.over.index + 1} (the later one in the list wins) ${url}`;
+    const why = o.over.layer && o.by.layer && o.over.layer !== o.by.layer ? laterWhy(o.over, o.by) : "the later one in the list wins";
+    return `[${o.by.scriptName}] ${o.by.kind} #${o.by.index + 1} overrides ${which} header "${o.header}" from [${o.over.scriptName}] ${o.over.kind} #${o.over.index + 1} (${why}) ${url}`;
 }
 
 /** The keys of an onRequest result, in the order {@link singleRequestResult} keeps the first used one. */

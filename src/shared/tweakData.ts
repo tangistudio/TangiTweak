@@ -13,6 +13,7 @@
 import { isParamDef, isParamGroup, isValidParamValue, paramDefault, resolveParamValues, type ParamTree } from "./scriptDef";
 import { badValue, isPlainObject, STORE_MAX_BYTES } from "./storeOps";
 import { STORE_ID } from "./tweakApi";
+import { isLayer, LAYER_ORDER, type Layer } from "./route";
 
 export const DEFAULT_DATA_FOLDER = ".tweak";
 /** chrome.storage key of the data folder's name (absent: DEFAULT_DATA_FOLDER) */
@@ -69,14 +70,16 @@ export function nonDefaultParams(defs: ParamTree, vals: Record<string, any> | un
     return out;
 }
 
-/** a tweak's settings.json: its enable switch and its non-default params */
-export function renderTweakSettings(enabled: boolean, defs: ParamTree | undefined, values: Record<string, any> | undefined): string {
+/** a tweak's settings.json: its enable switch, its layer setting (when set) and its non-default params */
+export function renderTweakSettings(enabled: boolean, defs: ParamTree | undefined, values: Record<string, any> | undefined, layer?: Layer): string {
     const params = defs ? nonDefaultParams(defs, resolveParamValues(defs, values)) : {};
-    return JSON.stringify({ enabled, ...(Object.keys(params).length ? { params } : {}) }, null, 2) + "\n";
+    return JSON.stringify({ enabled, ...(layer ? { layer } : {}), ...(Object.keys(params).length ? { params } : {}) }, null, 2) + "\n";
 }
 
 export interface TweakSettingsPlan {
     enabled?: boolean;
+    /** the layer setting to store; null clears it (automatic); absent when unchanged */
+    layer?: Layer | null;
     /** dotted param key → value to store */
     params: Record<string, any>;
 }
@@ -94,15 +97,17 @@ function parseJson(text: string): unknown {
  * (nothing applies) when anything in it is invalid. A param it leaves out
  * goes back to its default.
  */
-export function planTweakSettings(text: string, cur: { enabled: boolean; defs?: ParamTree; values?: Record<string, any> }): TweakSettingsPlan {
+export function planTweakSettings(text: string, cur: { enabled: boolean; layer?: Layer; defs?: ParamTree; values?: Record<string, any> }): TweakSettingsPlan {
     const doc = parseJson(text);
     if (!isPlainObject(doc)) throw new Error(`${TWEAK_SETTINGS_FILE} must be a JSON object`);
-    for (const k of Object.keys(doc)) if (k !== "enabled" && k !== "params" && k !== "$schema") throw new Error(`unknown key "${k}" (it holds "enabled" and "params")`);
+    for (const k of Object.keys(doc)) if (k !== "enabled" && k !== "layer" && k !== "params" && k !== "$schema") throw new Error(`unknown key "${k}" (it holds "enabled", "layer" and "params")`);
     if (doc.enabled !== undefined && typeof doc.enabled !== "boolean") throw new Error(`"enabled" must be true or false`);
+    if (doc.layer !== undefined && !isLayer(doc.layer)) throw new Error(`"layer" must be one of ${LAYER_ORDER.map((l) => `"${l}"`).join(", ")}`);
     if (doc.params !== undefined && !isPlainObject(doc.params)) throw new Error(`"params" must be an object`);
     const plan: TweakSettingsPlan = { params: {} };
     const enabled = doc.enabled ?? true;
     if (enabled !== cur.enabled) plan.enabled = enabled;
+    if ((doc.layer as Layer | undefined) !== cur.layer) plan.layer = (doc.layer as Layer | undefined) ?? null;
     const defs = cur.defs ?? {};
     const resolved = resolveParamValues(defs, cur.values);
     const walk = (tree: ParamTree, given: Record<string, any>, now: Record<string, any> | undefined, prefix: string, top: boolean) => {
