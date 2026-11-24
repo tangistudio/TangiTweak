@@ -1077,6 +1077,7 @@ body.dock-dragging iframe, body.dock-dragging #monaco-host { pointer-events: non
 .pb-ico { display: inline-flex; flex-shrink: 0; }
 .pb-ico.error { color: var(--err); }
 .pb-ico.warn { color: var(--warn); }
+.pb-ico.info { color: var(--fg-dim); }
 .pb-msg { color: var(--fg); overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 0 1 auto; }
 .pb-src, .pb-pos { color: var(--fg-dim); flex-shrink: 0; }
 .pb-link { color: var(--accent); text-decoration: none; cursor: pointer; }
@@ -1324,6 +1325,13 @@ body.net-dragging { user-select: none; }
 .net-hrow dt { color: var(--key); flex: 0 0 auto; max-width: 40%; }
 .net-hrow dt::after { content: ":"; }
 .net-hrow dd { margin: 0; word-break: break-all; }
+.net-stack ol { margin: 0 0 6px 14px; padding: 0 0 0 14px; font: 11px/1.7 "SF Mono", Menlo, Consolas, monospace; }
+.net-stack-row span + span { margin-left: 8px; }
+.net-stack-name { font-weight: 600; }
+.net-stack-meta { color: var(--fg-dim); }
+.net-stack-outcome { color: var(--fg-dim); }
+.net-stack-row.decided .net-stack-outcome { color: var(--key); }
+.net-stack-row.overruled .net-stack-outcome, .net-stack-row.skipped .net-stack-outcome { color: var(--warn); }
 .net-actions { list-style: none; margin: 0; padding: 0; font: 11px/1.7 "SF Mono", Menlo, Consolas, monospace; }
 .net-action { display: flex; gap: 6px; align-items: baseline; border-bottom: 1px solid var(--line-sep); }
 .net-action time { color: var(--fg-dim); }

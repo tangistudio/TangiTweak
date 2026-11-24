@@ -169,7 +169,10 @@ at the right of the toolbar do the same.
   file path like VS Code's (`mock/api mock.ts`): TypeScript errors and warnings, compile errors,
   invalid `rules` handlers, the last runtime error (exception in a handler),
   route warnings (a handler its strategy can't run here, or the helper being
-  down), `settings.json` errors, JSON syntax errors in data files, a tweak
+  down), hints (an ⓘ, not counted) when handlers of two tweaks may match the
+  same request in the same stage, with which one runs after the other
+  ([how handlers stack](scripting.md#multiple-handlers--how-they-stack)),
+  `settings.json` errors, JSON syntax errors in data files, a tweak
   that needs a newer TangiTweak (from its `package.json`'s
   `dependencies.tangitweak`), and **Needs a rewrite** on files that no
   longer load — a `.ts` file outside a tweak's folder, or one in a folder
@@ -236,7 +239,7 @@ at the right of the toolbar do the same.
   sortable/resizable columns (right-click the header to pick columns) and a
   waterfall. Requests a script handled are flagged with their outcome:
   - **Observed** — a handler (`onRequest`, `onResponseHeaders`, `onResponseBody`,
-    `replaceResponse`, …) ran on the request but changed nothing (returned
+    …) ran on the request but changed nothing (returned
     `undefined` / `null`). Dashed, muted marker; each such run also
     logs a DEBUG line like `[Foo] onRequest → observed (no change) https://…`.
     An `onResponseBody` that returns a body — even the one it received —
@@ -280,11 +283,16 @@ at the right of the toolbar do the same.
   no extra browser listeners, just the engine's own log lines — up to the
   newest 500, without bodies, headers or timing (status shows as unknown).
   Opening the view shows them; closing the Editor keeps only such rows.
-  - **Missed** — a script's `onResponseBody` / `replaceResponse` route
+  - **Missed** — a script's `onResponseBody` route
     matched a request but the handler never ran on it (the
     [Missed warning](strategies.md#missed-warning)). It is logged as
     a WARN line and shown as a yellow *missed* entry in the request's
     details; it does not mark the row observed or modified.
+  - **Handler stack** — the details' **TangiTweak** tab lists every
+    handler that matches the request, in the order they run, with its
+    strategy, its layer (and where the layer came from) and what it did:
+    decided, overruled, skipped, ran on mock, ran or not seen
+    ([how handlers stack](scripting.md#multiple-handlers--how-they-stack)).
 - **Preview view** — the open script's [overlay](scripting.md#overlays--wtonoverlay),
   live, over a placeholder page; see [Preview](#preview).
 

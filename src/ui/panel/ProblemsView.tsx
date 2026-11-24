@@ -18,6 +18,12 @@ const WARN_ICON = (
         <path d="M8 6.5v3.5M8 11.5v.6" stroke="currentColor" strokeWidth="1.3" />
     </svg>
 );
+const INFO_ICON = (
+    <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+        <circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" strokeWidth="1.3" />
+        <path d="M8 7v4.5M8 4.6v.6" stroke="currentColor" strokeWidth="1.3" />
+    </svg>
+);
 const CHEVRON = (
     <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
         <path d="M6 4l4 4-4 4" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
@@ -75,7 +81,7 @@ function ProblemMessage({ text }: { text: string }) {
 
 function groupTitle(g: ProblemGroup): string {
     const c = problemCounts([g]);
-    return `${g.label}: ${[c.errors && `${c.errors} error${c.errors > 1 ? "s" : ""}`, c.warnings && `${c.warnings} warning${c.warnings > 1 ? "s" : ""}`].filter(Boolean).join(", ")}`;
+    return `${g.label}: ${[c.errors && `${c.errors} error${c.errors > 1 ? "s" : ""}`, c.warnings && `${c.warnings} warning${c.warnings > 1 ? "s" : ""}`, c.hints && `${c.hints} hint${c.hints > 1 ? "s" : ""}`].filter(Boolean).join(", ")}`;
 }
 
 /** The Problems view: a tree of files and their problems (VS Code's), keyboard-navigable with one tab stop. */
@@ -159,7 +165,7 @@ export function ProblemsView({ hidden }: { hidden: boolean }) {
                         return [
                             head,
                             ...g.problems.map((p, i) => {
-                                const sev = p.severity === "error" ? "error" : "warn";
+                                const sev = p.severity === "error" ? "error" : p.severity === "warning" ? "warn" : "info";
                                 return (
                                     <div
                                         key={`p:${g.id}:${i}`}
@@ -172,7 +178,7 @@ export function ProblemsView({ hidden }: { hidden: boolean }) {
                                         onDoubleClick={() => actions.focusEditor()}
                                     >
                                         <span className={`pb-ico ${sev}`} role="img" aria-label={p.severity}>
-                                            {p.severity === "error" ? ERROR_ICON : WARN_ICON}
+                                            {p.severity === "error" ? ERROR_ICON : p.severity === "warning" ? WARN_ICON : INFO_ICON}
                                         </span>
                                         <ProblemMessage text={p.message.split("\n")[0]} />
                                         <span className="pb-src">{p.kind}</span>

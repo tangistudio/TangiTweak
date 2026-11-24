@@ -8,9 +8,11 @@ import { scriptFrame } from "../shared/scriptError";
 import { userFrames } from "../shared/scriptHealth";
 import { USER_SCRIPTS_PROBLEM } from "../shared/userScriptsStatus";
 import { NO_SITE_STORE, SITE_NO_STORES } from "../shared/remote";
+import { HINT_PREFIX } from "../shared/precedence";
 import type { TabBadge } from "./logBadge";
 
-export type ProblemSeverity = "error" | "warning";
+/** `info` is a hint (e.g. two tweaks' handlers overlap): listed but not counted. */
+export type ProblemSeverity = "error" | "warning" | "info";
 export type ProblemKind = "compile" | "rules" | "runtime" | "ts" | "route" | "settings" | "json";
 
 /** Settings dialog sections a message can point at ("… (Settings → Local helper)") → their element id */
@@ -255,9 +257,11 @@ function tokenRange(lines: string[], p: Position): Range {
 const fromMarkers = (markers: ProblemMarker[], kind: ProblemKind): Problem[] =>
     markers.map((m) => ({ severity: m.severity, kind, message: m.message, line: m.line, column: m.column }));
 
-/** VS Code order: errors before warnings, then by position. */
+const RANK: Record<ProblemSeverity, number> = { error: 0, warning: 1, info: 2 };
+
+/** VS Code order: errors, then warnings, then hints, then by position. */
 function byPosition(a: Problem, b: Problem): number {
-    if (a.severity !== b.severity) return a.severity === "error" ? -1 : 1;
+    if (a.severity !== b.severity) return RANK[a.severity] - RANK[b.severity];
     return (a.line ?? 0) - (b.line ?? 0) || (a.column ?? 0) - (b.column ?? 0);
 }
 
@@ -301,6 +305,11 @@ export function collectProblems(scripts: ProblemScript[], liveMarkers: Map<strin
         const taken = new Set<number>();
         const marked = new Set(live?.map((m) => m.message));
         for (const w of s.routeWarnings || []) {
+            if (w.startsWith(HINT_PREFIX)) {
+                const msg = w.slice(HINT_PREFIX.length);
+                problems.push({ severity: "info", kind: "route", message: msg, ...handler(msg) });
+                continue;
+            }
             const lint = /^line (\d+) \((error|warning)\): ([\s\S]*)$/.exec(w);
             if (marked.has(lint ? lint[3] : w)) continue;
             if (lint) {
@@ -315,11 +324,13 @@ export function collectProblems(scripts: ProblemScript[], liveMarkers: Map<strin
     return groups;
 }
 
-export function problemCounts(groups: ProblemGroup[]): { errors: number; warnings: number } {
+/** Errors and warnings; hints (`info`) are counted apart and stay out of the badge. */
+export function problemCounts(groups: ProblemGroup[]): { errors: number; warnings: number; hints: number } {
     let errors = 0;
     let warnings = 0;
-    for (const g of groups) for (const p of g.problems) p.severity === "error" ? errors++ : warnings++;
-    return { errors, warnings };
+    let hints = 0;
+    for (const g of groups) for (const p of g.problems) p.severity === "error" ? errors++ : p.severity === "warning" ? warnings++ : hints++;
+    return { errors, warnings, hints };
 }
 
 /** Case-insensitive substring filter on the message and the file name; groups left empty are dropped. */

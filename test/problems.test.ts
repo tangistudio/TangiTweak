@@ -26,6 +26,17 @@ describe("collectProblems", () => {
         expect(g.problems).toHaveLength(1);
         expect(g.problems[0]).toMatchObject({ kind: "compile", line: 2, column: 24, endColumn: 24 + "https://unpkg.com/asyncbox".length });
     });
+    it("an overlap hint is an info problem at its handler, after warnings and left out of the counts", () => {
+        const code = 'tweak.onRequest("*://shop.test/*", () => {});\ntweak.onRequest("*://x.test/*", () => {});';
+        const hint = 'hint: onRequest #2 "*://x.test/*" overlaps "base" onRequest #1 (layer "base"); "a" runs after it (layer "site")';
+        const groups = collectProblems([script("a", { code, routeWarnings: [hint, "onRequest #1: something"] })], none);
+        expect(groups[0].problems.map((p) => [p.severity, p.line])).toEqual([
+            ["warning", 1],
+            ["info", 2],
+        ]);
+        expect(groups[0].problems[1].message.startsWith("onRequest #2")).toBe(true);
+        expect(problemCounts(groups)).toEqual({ errors: 0, warnings: 1, hints: 1 });
+    });
     it("no problems → no groups", () => {
         expect(collectProblems([script("a"), script("b", { typeErrors: [], ruleErrors: [], routeWarnings: [], runtimeError: null })], none)).toEqual([]);
         expect(collectProblems([], none, [])).toEqual([]);
@@ -210,8 +221,8 @@ describe("problemCounts / filterProblems", () => {
     );
 
     it("counts errors and warnings across groups", () => {
-        expect(problemCounts(groups)).toEqual({ errors: 2, warnings: 3 });
-        expect(problemCounts([])).toEqual({ errors: 0, warnings: 0 });
+        expect(problemCounts(groups)).toEqual({ errors: 2, warnings: 3, hints: 0 });
+        expect(problemCounts([])).toEqual({ errors: 0, warnings: 0, hints: 0 });
     });
 
     it("filters by message or file name, case-insensitively", () => {

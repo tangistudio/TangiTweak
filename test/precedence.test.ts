@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { HeaderStack, mergeHeaderEdits, overruledLine, skippedBy, skippedLine, winnerOf, type RouteRef, type Winner } from "../src/shared/precedence";
+import { HeaderStack, handlerStack, mergeHeaderEdits, overlapHints, overruledLine, skippedBy, skippedLine, winnerOf, type RouteRef, type Winner } from "../src/shared/precedence";
 import type { NetKind, RouteMeta, Strategy } from "../src/shared/route";
 
 const URL = "https://api.test/v1/data";
@@ -106,5 +106,41 @@ describe("header edits: the later one wins per header", () => {
         expect(s.add({ set: { a: "1", b: "1" } }, A)).toEqual([]);
         expect(s.add({ set: { a: "2", b: "1" } }, B)).toEqual([{ header: "a", by: B, over: A }]);
         expect(s.result()).toEqual({ set: { a: "2", b: "1" }, remove: [] });
+    });
+});
+
+describe("handlerStack", () => {
+    it("lists matching handlers in run order: strategy, stage, layer, list, registration", () => {
+        const site = { ...ref("shop", 0, "onRequest", "debugger"), layer: "site" as const, layerSource: "inferred" as const };
+        const base = { ...ref("api", 1, "onRequest", "debugger"), layer: "base" as const, layerSource: "package" as const };
+        const body = ref("api", 1, "onResponseBody", "debugger");
+        const page = ref("pg", 2, "onRequest", "page");
+        const other = ref("x", 3, "onRequest", "debugger", 0, ["*://other.test/*"]);
+        const rows = handlerStack([site, base, body, page, other], { url: URL, type: "xmlhttprequest" });
+        expect(rows.map((r) => `${r.scriptId}:${r.label}@${r.strategy}/${r.layer}`)).toEqual(["pg:onRequest #1@page/site", "api:onRequest #1@debugger/base", "shop:onRequest #1@debugger/site", "api:onResponseBody #1@debugger/site"]);
+        expect(rows[1].layerSource).toBe("package");
+        expect(handlerStack([page], { url: URL, type: "script" })).toEqual([]);
+    });
+});
+
+describe("overlapHints", () => {
+    it("hints the later of two tweaks' handlers that may match one request, in the same stage and strategy", () => {
+        const base = { ...ref("api", 0, "onRequest", "debugger", 0, ["*://*/*"]), layer: "base" as const };
+        const site = { ...ref("shop", 1, "onRequest", "debugger", 0, ["*://api.test/v1/*"]), layer: "site" as const };
+        const hints = overlapHints([site, base]);
+        expect([...hints.keys()]).toEqual(["shop"]);
+        expect(hints.get("shop")).toEqual([`hint: onRequest #1 "*://api.test/v1/*" overlaps "API" onRequest #1 (layer "base"); "SHOP" runs after it (layer "site")`]);
+    });
+    it("stays quiet for other stages, other strategies, disjoint URLs or disjoint methods", () => {
+        const a = ref("a", 0, "onRequest", "debugger");
+        expect(overlapHints([a, ref("b", 1, "onResponseBody", "debugger")]).size).toBe(0);
+        expect(overlapHints([a, ref("b", 1, "onRequest", "helper")]).size).toBe(0);
+        expect(overlapHints([a, ref("b", 1, "onRequest", "debugger", 0, ["*://other.test/*"])]).size).toBe(0);
+        const get = { ...a, route: { ...a.route, methods: ["GET"] } };
+        const post = ref("b", 1, "onRequest", "debugger");
+        expect(overlapHints([get, { ...post, route: { ...post.route, methods: ["POST"] } }]).size).toBe(0);
+    });
+    it("same layer: the one later in the list runs after", () => {
+        expect(overlapHints([ref("a", 0, "onRequest", "debugger"), ref("b", 1, "onRequest", "debugger")]).get("b")?.[0]).toContain(`runs after it (same layer "site", later in the list)`);
     });
 });

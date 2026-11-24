@@ -25,6 +25,8 @@ import { compileQuery, parseQuery, suggestData, type QNode } from "./netQuery";
 import { FilterBar, effectiveQuery, initialFilterState, type FilterState } from "./NetFilterBar";
 import { copyWithToast } from "../toast";
 import { copyRequests, type CopyKind } from "./netCopy";
+import { stackOutcomes, type StackRow } from "./netStack";
+import type { StackHandler } from "../../shared/precedence";
 
 export interface TabInfo {
     id: number;
@@ -119,7 +121,18 @@ function dragX(down: MouseEvent, onMove: (dx: number) => void, cursor: string): 
 }
 
 /** `toolsHost`: where the filter and clear button go (the panel header, beside the Log's); without one they sit above the table */
-export function NetworkPanel({ store, listTabs, toolsHost }: { store: NetStore; listTabs?: () => Promise<TabInfo[]>; toolsHost?: HTMLElement | null }) {
+export function NetworkPanel({
+    store,
+    listTabs,
+    toolsHost,
+    stackOf,
+}: {
+    store: NetStore;
+    listTabs?: () => Promise<TabInfo[]>;
+    toolsHost?: HTMLElement | null;
+    /** The handlers that match a request, in run order (the details' "Handler stack"). */
+    stackOf?: (e: NetEntry) => Promise<StackHandler[]>;
+}) {
     const [tabs, setTabs] = useState<TabInfo[]>([]);
     const [fq, setFq] = useState<FilterState>(initialFilterState);
     const parsed = useMemo(() => parseQuery(effectiveQuery(fq)), [fq]);
@@ -443,7 +456,7 @@ export function NetworkPanel({ store, listTabs, toolsHost }: { store: NetStore; 
                     )}
                 </div>
                 {selected && <div className="net-splitter" role="separator" aria-orientation="vertical" title="Drag to resize" onMouseDown={startDetailsResize} />}
-                {selected && <Details e={selected} width={layout.detailsWidth} onClose={() => setSel(NO_SELECTION)} />}
+                {selected && <Details e={selected} width={layout.detailsWidth} stackOf={stackOf} onClose={() => setSel(NO_SELECTION)} />}
             </div>
             {colMenu && (
                 <ul className="net-colmenu" role="menu" ref={colMenuRef} style={{ left: `${colMenu.x}px`, top: `${colMenu.y}px` }}>
@@ -637,8 +650,17 @@ function Row({
 
 type DetailTab = "headers" | "payload" | "response" | "tangitweak";
 
-function Details({ e, width, onClose }: { e: NetEntry; width: number | null; onClose: () => void }) {
+function Details({ e, width, stackOf, onClose }: { e: NetEntry; width: number | null; stackOf?: (e: NetEntry) => Promise<StackHandler[]>; onClose: () => void }) {
     const [tab, setTab] = useState<DetailTab>(e.outcomes.length ? "tangitweak" : "headers");
+    const [stack, setStack] = useState<StackHandler[]>([]);
+    useEffect(() => {
+        let live = true;
+        setStack([]);
+        stackOf?.(e).then((s) => live && setStack(s));
+        return () => {
+            live = false;
+        };
+    }, [e.id, e.url, stackOf]);
     const general: [string, string | undefined][] = [
         ["Request URL", e.url],
         ["Request Method", e.method],
@@ -687,18 +709,23 @@ function Details({ e, width, onClose }: { e: NetEntry; width: number | null; onC
                     <BodyView body={e.requestBody} mime={headerOf(e.requestHeaders, "content-type")} />
                 ) : tab === "response" ? (
                     <ResponseView e={e} />
-                ) : e.outcomes.length ? (
-                    <ul className="net-actions">
-                        {e.outcomes.map((i, n) => (
-                            <li key={n} className={`net-action ${i.level} ${i.kind}`} title={KIND_TITLE[i.kind]}>
-                                <time>{new Date(i.at).toLocaleTimeString()}</time>
-                                <span className={`net-badge ${i.kind}`}>{i.scriptName}</span>
-                                <span>{i.action}</span>
-                            </li>
-                        ))}
-                    </ul>
                 ) : (
-                    <div className="net-empty">No TangiTweak script handler ran on this request.</div>
+                    <>
+                        {stack.length ? <StackSection rows={stackOutcomes(stack, e.outcomes)} /> : null}
+                        {e.outcomes.length ? (
+                            <ul className="net-actions">
+                                {e.outcomes.map((i, n) => (
+                                    <li key={n} className={`net-action ${i.level} ${i.kind}`} title={KIND_TITLE[i.kind]}>
+                                        <time>{new Date(i.at).toLocaleTimeString()}</time>
+                                        <span className={`net-badge ${i.kind}`}>{i.scriptName}</span>
+                                        <span>{i.action}</span>
+                                    </li>
+                                ))}
+                            </ul>
+                        ) : (
+                            <div className="net-empty">No TangiTweak script handler ran on this request.</div>
+                        )}
+                    </>
                 )}
             </div>
         </div>
@@ -766,6 +793,43 @@ function ResponseView({ e }: { e: NetEntry }) {
             </div>
             <BodyView body={which === "modified" ? e.responseBody : e.originalResponseBody} mime={mime} />
         </>
+    );
+}
+
+const OUTCOME_TITLE: Record<StackRow["outcome"], string> = {
+    decided: "It made the final onRequest decision.",
+    overruled: "Its decision was overruled by a handler that runs later.",
+    skipped: "It matched but did not run: an earlier result took priority.",
+    "ran on mock": "It ran on a mocked response (ctx.replacedBy is set).",
+    ran: "It ran on this request.",
+    "not seen": "It matches this URL but logged nothing for this request.",
+};
+
+const SOURCE_LABEL: Record<StackRow["layerSource"], string> = { user: "your setting", route: "route option", package: "package.json", inferred: "inferred" };
+
+/** The handlers that match the request, in run order, and what each did. */
+function StackSection({ rows }: { rows: StackRow[] }) {
+    const [open, setOpen] = useState(true);
+    return (
+        <section className="net-hsec net-stack">
+            <h4 onClick={() => setOpen(!open)}>
+                {open ? "▾" : "▸"} Handler stack<span className="net-count"> ({rows.length})</span>
+            </h4>
+            {open && (
+                <ol>
+                    {rows.map((r, n) => (
+                        <li key={n} className={`net-stack-row ${r.outcome.replace(/ /g, "-")}`} title={`${r.url.join(", ")}\n${OUTCOME_TITLE[r.outcome]}`}>
+                            <span className="net-stack-name">{r.scriptName}</span>
+                            <span>{r.label}</span>
+                            <span className="net-stack-meta">
+                                {r.strategy} · layer {r.layer} ({SOURCE_LABEL[r.layerSource]})
+                            </span>
+                            <span className="net-stack-outcome">{r.outcome}</span>
+                        </li>
+                    ))}
+                </ol>
+            )}
+        </section>
     );
 }
 

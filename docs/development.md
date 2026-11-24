@@ -14,7 +14,7 @@ npm run test:e2e     # full browser e2e (needs E2E_CHROMIUM, see below)
 The e2e suite (`test/e2e.ts`) launches a fresh MV2-capable Chromium, loads the
 extension, seeds sample scripts through the real Editor page, and verifies
 every strategy against a local HTTP server: matcher, redirect, block, request +
-response headers, replaceResponse (main frame + fetch), onResponseBody (fetch /
+response headers, onRequest mocks (main frame + fetch), onResponseBody (fetch /
 XHR / script-tag CDP), per-tab badge, and enable/disable toggling.
 
 ```bash
@@ -272,7 +272,7 @@ pages, and drops blocking `webRequest`):
   The service worker
   drives `chrome.debugger` / CDP `Fetch` (pausing only URLs matching those
   handlers' routes, fetch/XHR included);
-  handler decisions (`onRequest`, `replaceResponse`, `onResponseBody`) are
+  handler decisions (`onRequest`, `onResponseHeaders`, `onResponseBody`) are
   computed in the sandbox, so only the owning handlers apply.
   `page` handlers stay fetch/XHR-only (a page load they match is warned about).
   Caveats:

@@ -186,6 +186,28 @@ describe("NetworkPanel", () => {
         expect(rowNames(container)).toEqual(["b.js", "c.js", "a.js"]);
     });
 
+    it("shows the handler stack in run order with what each handler did", async () => {
+        const out = (scriptId: string, scriptName: string, action: string) => ({ scriptId, scriptName, action, level: "info" as const, kind: "modified" as const, at: base });
+        const hit = entry("api", {
+            outcomes: [out("a", "API", 'onRequest #1 → replaceResponse was overruled: [Shop] onRequest #1 → allow has the last word (layer "site")'), out("s", "Shop", "onRequest → allow"), out("s", "Shop", "onResponseBody applied (1b → 2b)")],
+        });
+        const h = (scriptId: string, scriptName: string, kind: "onRequest" | "onResponseBody", layer: "base" | "site") => ({ scriptId, scriptName, kind, label: `${kind} #1`, url: ["*://site.test/*"], strategy: "debugger" as const, layer, layerSource: "inferred" as const });
+        const stack = [h("a", "API", "onRequest", "base"), h("s", "Shop", "onRequest", "site"), h("s", "Shop", "onResponseBody", "site"), h("x", "Other", "onResponseBody", "site")];
+        const store = createNetStore();
+        store.apply({ type: "netSnapshot", entries: [hit] });
+        const { container } = render(<NetworkPanel store={store} stackOf={async () => stack} />);
+        fireEvent.click(container.querySelector("tbody tr")!);
+        await waitFor(() => expect(container.querySelectorAll(".net-stack-row")).toHaveLength(4));
+        const rows = [...container.querySelectorAll(".net-stack-row")].map((r) => [r.querySelector(".net-stack-name")!.textContent, r.querySelector(".net-stack-outcome")!.textContent]);
+        expect(rows).toEqual([
+            ["API", "overruled"],
+            ["Shop", "decided"],
+            ["Shop", "ran"],
+            ["Other", "not seen"],
+        ]);
+        expect(container.querySelector(".net-stack-meta")!.textContent).toBe("debugger · layer base (inferred)");
+    });
+
     it("opens details with headers and TangiTweak actions", () => {
         const hit = entry("api", {
             responseHeaders: [["content-type", "application/json"]],

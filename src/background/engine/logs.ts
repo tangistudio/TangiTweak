@@ -2,7 +2,7 @@
  * Rolling per-tab request log, pushed to the manager UI over a port.
  */
 import { annotateFromLog, URL_AT_END } from "../network";
-import { SKIPPED_MARK } from "../../shared/precedence";
+import { HINT_PREFIX, SKIPPED_MARK } from "../../shared/precedence";
 import { outcomeKind, observedLine, RAN_ACTIONS, isRanApi, type OutcomeKind, type NetKind } from "../../shared/netTypes";
 import type { Strategy } from "../../shared/route";
 
@@ -293,7 +293,8 @@ export function onScriptProblemsChanged(cb: () => void): () => void {
 export async function getScriptProblems(): Promise<Map<string, "error" | "warning">> {
     await loadErrors();
     const out = new Map<string, "error" | "warning">();
-    for (const [id, w] of routeWarnings) if (w.length) out.set(id, "warning");
+    // (hints, like two tweaks' overlapping handlers, are not problems)
+    for (const [id, w] of routeWarnings) if (w.some((x) => !x.startsWith(HINT_PREFIX))) out.set(id, "warning");
     for (const id of runtimeErrors.keys()) out.set(id, "error");
     for (const [id, e] of typeErrors) if (e.length) out.set(id, "error");
     for (const [id, e] of ruleErrors) if (e.length) out.set(id, "error");

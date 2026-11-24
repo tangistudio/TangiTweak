@@ -6,22 +6,33 @@
  * Network view shows as "missed" (`is:missed`).
  */
 import { effectiveStrategy, handlerLayer, isNetKind } from "../../shared/route";
-import { skippedBy, skippedLine, type RouteRef, type SkipOptions, type SkipRequest, type Winner } from "../../shared/precedence";
+import { handlerStack, skippedBy, skippedLine, type RouteRef, type StackHandler, type SkipOptions, type SkipRequest, type Winner } from "../../shared/precedence";
 import { log } from "./logs";
 import type { Script } from "./scriptStore";
 
 let routes: RouteRef[] = [];
 
-/** enabled scripts' routes, in list order */
-export function setSkipRoutes(scripts: Script[]): void {
-    const next: RouteRef[] = [];
+/** enabled scripts' network routes, in list order */
+export function netRouteRefs(scripts: Script[]): RouteRef[] {
+    const out: RouteRef[] = [];
     scripts.forEach((s, order) => {
         if (!s.enabled || !s.meta.active) return;
         for (const route of s.meta.routes || []) {
-            if (isNetKind(route.kind)) next.push({ scriptId: s.id, scriptName: s.meta.name, order, route, layer: handlerLayer(route, s.layers).layer, strategy: effectiveStrategy(route) });
+            if (!isNetKind(route.kind)) continue;
+            const l = handlerLayer(route, s.layers);
+            out.push({ scriptId: s.id, scriptName: s.meta.name, order, route, layer: l.layer, layerSource: l.source, strategy: effectiveStrategy(route) });
         }
     });
-    routes = next;
+    return out;
+}
+
+export function setSkipRoutes(scripts: Script[]): void {
+    routes = netRouteRefs(scripts);
+}
+
+/** the handlers that match a request, in run order (the Network view's stack) */
+export function stackFor(req: SkipRequest): StackHandler[] {
+    return handlerStack(routes, req);
 }
 
 /** warn for every handler `w` kept from running on this request */

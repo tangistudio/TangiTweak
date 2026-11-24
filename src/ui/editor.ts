@@ -1275,7 +1275,7 @@ function markProblems(): void {
                 const column = p.column ?? m.getLineFirstNonWhitespaceColumn(line) ?? 1;
                 const endLine = Math.min(p.endLine ?? line, m.getLineCount());
                 const endColumn = p.endColumn ?? Math.max(m.getLineLastNonWhitespaceColumn(endLine), column + 1);
-                const severity = p.severity === "error" ? monaco.MarkerSeverity.Error : monaco.MarkerSeverity.Warning;
+                const severity = p.severity === "error" ? monaco.MarkerSeverity.Error : p.severity === "warning" ? monaco.MarkerSeverity.Warning : monaco.MarkerSeverity.Info;
                 // "(Settings → Local helper)" in the message: the hover links there
                 const link = settingsLink(p.message);
                 const code = link ? { value: ` · Open ${link.text}`, target: monaco.Uri.parse(`command:${OPEN_SETTINGS_SECTION}?${encodeURIComponent(JSON.stringify([link.section]))}`) } : p.kind;

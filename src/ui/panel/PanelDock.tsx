@@ -4,6 +4,7 @@ import { ref, useSnapshot } from "valtio";
 import { LogFilterBar, type LogFilter } from "../logFilter";
 import { NetworkPanel } from "../network/NetworkPanel";
 import { listTabs } from "../network/listTabs";
+import { fetchStack } from "../network/netStack";
 import { applySize, startPanelDrag, startPanelResize } from "../panelDock";
 import { actions } from "../shell/actions";
 import { keyHint } from "../shortcuts";
@@ -157,7 +158,7 @@ function Panel() {
             </div>
             <LogView hidden={tab !== "log"} />
             <div id="network-view" hidden={tab !== "network"}>
-                {net ? <NetworkPanel store={net} listTabs={listTabs} toolsHost={netHost} /> : null}
+                {net ? <NetworkPanel store={net} listTabs={listTabs} toolsHost={netHost} stackOf={fetchStack} /> : null}
             </div>
             <ProblemsView hidden={tab !== "problems"} />
             {tab === "preview" ? <OverlayPreview hidden={false} /> : null}

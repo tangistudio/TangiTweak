@@ -7,9 +7,33 @@ its section below.
 
 ## [Unreleased]
 
+Handlers from several tweaks now stack predictably: they run from general to specific and the last word wins ([docs](docs/scripting.md#multiple-handlers--how-they-stack)).
+
+### Added
+
+- **Layers**: every network handler runs in a layer, `base`, `site` or `override`, before list order. A route on any host (`*://*/*`) is `base` and a route on a named host is `site`, so a site tweak builds on a general one whatever their order in the explorer. Set it in the popup's **Layer** select or `"layer"` in `.tweak/settings.json` (wins), on the route (`layer: "override"`) or in `package.json` (`"tangitweak": { "layer": "base" }`).
+- **`{ allow: true }`** from `onRequest` lets the request through and drops an earlier `block`, `redirect` or mock. On `rules` it becomes an allow rule.
+- **`ctx.replacedBy`** in `onResponseHeaders` and `onResponseBody`: `{ tweak, handler }` when the response is a mock, so a transform can skip mocks.
+- **`replaceResponse: { body: { file } }`** serves a `data:` URL with its media type (it used to be `tweak.replaceResponse` only).
+- **Handler stack** in the Network view: a request's **TangiTweak** tab lists the handlers that match it in run order, with strategy, layer and where it came from, and what each did (decided, overruled, skipped, ran on mock, ran).
+- **Overlap hints** in Problems: when two tweaks' handlers may match the same request in the same stage, the later one gets an info hint naming who runs after whom. Hints aren't counted as warnings.
+- **Log lines** when a decision is overruled by a later handler (with the layer reason) and when a response handler runs on a mock, throttled.
+
 ### Changed
 
+- **Breaking:** the last decision wins instead of the first. When two `onRequest` handlers in the same layer return `block`, `redirect` or `replaceResponse`, the one later in the list now wins.
+- **Breaking:** every `onRequest` handler runs. Handlers after the deciding one used to be skipped, so their side effects (counters, logging) now happen. Returning nothing keeps the earlier decision.
+- **Breaking:** handlers on any host are `base` and run before named-host handlers, whatever the explorer order.
+- **Breaking:** mocks go through `onResponseHeaders` and `onResponseBody`. A transform written for the real response now runs on mocks too unless it checks `ctx.replacedBy`. Not on Chromium's MV2 `extension` strategy or `rules`, which serve mocks by redirect.
+- **Breaking:** a mock for a document, stylesheet or script with no known URL extension gets its Content-Type from the resource type (HTML, CSS, JavaScript) instead of `application/json`.
+- **Breaking:** `ctx.patch` in `onSite` shares one chain per patched function and frame, ordered by layer then list: the `base` patch sits closest to the original. `orig` is the next patch in the chain, so it is no longer always the original function.
+- `ctx.requestHeaders` in `onRequest` and `ctx.responseHeaders` in `onResponseHeaders` include the edits of the handlers that ran before.
+- On `rules`, the run order becomes the rules' priority.
 - **Open pages ask for the `onSite` code they lack** (Chrome 135+), instead of every save sending its new code into every open tab. Only the frames a tweak runs in get its code. A page asks again every 1.5 seconds while the code hasn't come, so a failed delivery recovers by itself.
+
+### Removed
+
+- **Breaking:** `tweak.replaceResponse`. Calling it throws an error that shows the rewrite: return `{ replaceResponse: { body } }` from `tweak.onRequest` instead, e.g. `tweak.onRequest(route, () => ({ replaceResponse: { body: { ok: true } } }))`.
 
 ### Fixed
 

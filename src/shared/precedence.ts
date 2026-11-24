@@ -32,7 +32,7 @@
  * @module
  */
 
-import { isNetKind, routeLabel, routeMatches, type Layer, type NetKind, type RouteMeta, type Strategy } from "./route";
+import { isNetKind, layerRank, routeLabel, routeMatches, routePatterns, sampleUrl, type Layer, type LayerSource, type NetKind, type RouteMeta, type Strategy } from "./route";
 
 /**
  * The layers a request passes, page side first: one per strategy, in the
@@ -94,8 +94,120 @@ export interface RouteRef {
     route: RouteMeta;
     /** The handler's layer ({@link handlerLayer}); it runs after lower layers in its stage. */
     layer?: Layer;
+    /** Where {@link RouteRef.layer} came from; absent = unknown. */
+    layerSource?: LayerSource;
     /** The strategy that runs it: its layer in {@link LAYERS}. */
     strategy: Strategy;
+}
+
+/** Run order of two handlers of one strategy: stage, then layer, then the list, then registration. */
+function runOrder(a: RouteRef, b: RouteRef): number {
+    return (
+        LAYERS.indexOf(a.strategy) - LAYERS.indexOf(b.strategy) ||
+        STAGE[a.route.kind as NetKind] - STAGE[b.route.kind as NetKind] ||
+        layerRank(a.layer) - layerRank(b.layer) ||
+        a.order - b.order ||
+        a.route.index - b.route.index
+    );
+}
+
+/** A handler that matches a request, as the Network view's stack lists it. */
+export interface StackHandler {
+    /** ID of the handler's script. */
+    scriptId: string;
+    /** Name of the handler's script. */
+    scriptName: string;
+    /** Which kind of network handler it is. */
+    kind: NetKind;
+    /** Its label, e.g. `onRequest #1` ({@link routeLabel}). */
+    label: string;
+    /** Its route's URL patterns. */
+    url: string[];
+    /** The strategy that runs it. */
+    strategy: Strategy;
+    /** Its layer; `site` when unknown. */
+    layer: Layer;
+    /** Where the layer came from; `inferred` when unknown. */
+    layerSource: LayerSource;
+}
+
+/**
+ * Lists the handlers whose route matches a request, in the order they run:
+ * by strategy ({@link LAYERS}), then stage, then layer, then the list, then
+ * registration.
+ *
+ * Page handlers count only for `"xmlhttprequest"` requests (or an unknown
+ * type), since they only see the page's own fetch/XHR.
+ *
+ * @param routes - The enabled handlers, in list order.
+ */
+export function handlerStack(routes: RouteRef[], req: SkipRequest): StackHandler[] {
+    const type = req.type || undefined;
+    return routes
+        .filter((r) => isNetKind(r.route.kind) && !(r.strategy === "page" && type && type !== "xmlhttprequest") && routeMatches(r.route, req.url, req.method, type))
+        .sort(runOrder)
+        .map((r) => ({
+            scriptId: r.scriptId,
+            scriptName: r.scriptName,
+            kind: r.route.kind as NetKind,
+            label: routeLabel(r.route),
+            url: routePatterns(r.route.url),
+            strategy: r.strategy,
+            layer: r.layer ?? "site",
+            layerSource: r.layerSource ?? "inferred",
+        }));
+}
+
+/**
+ * Marks a Problems message as a hint (info) rather than a warning. The
+ * Problems view shows it with an info icon and leaves it out of the counts.
+ */
+export const HINT_PREFIX = "hint: ";
+
+/** Whether two lists are disjoint (an absent list means "any"). */
+const disjoint = (a?: string[], b?: string[]) => !!a && !!b && !a.some((x) => b.includes(x));
+
+/**
+ * Whether two routes may match one request: a sample URL of one
+ * ({@link sampleUrl}, per pattern) matches the other. A hint, not a proof.
+ */
+export function routesOverlap(a: RouteMeta, b: RouteMeta): boolean {
+    if (disjoint(a.methods, b.methods) || disjoint(a.resourceTypes, b.resourceTypes)) return false;
+    const hits = (x: RouteMeta, y: RouteMeta) => routePatterns(x.url).some((p) => routeMatches(y, sampleUrl([{ ...x, url: [p] }])));
+    return hits(a, b) || hits(b, a);
+}
+
+/**
+ * Problems hints for handlers of different tweaks that may match the same
+ * request in the same stage of the same strategy, keyed by the script of
+ * the handler that runs later (it has the last word), e.g.
+ * `hint: onRequest #1 "*://shop.example.com/*" overlaps "api-interceptor" onRequest #1 (layer "base"); "shop" runs after it (layer "site")`.
+ *
+ * One hint per handler and earlier tweak; at most `cap` per script.
+ *
+ * @param routes - The enabled handlers, in list order.
+ */
+export function overlapHints(routes: RouteRef[], cap = 5): Map<string, string[]> {
+    const out = new Map<string, string[]>();
+    const net = routes.filter((r) => isNetKind(r.route.kind)).sort(runOrder);
+    for (let j = 0; j < net.length; j++) {
+        const b = net[j];
+        const seen = new Set<string>();
+        for (let i = 0; i < j; i++) {
+            const a = net[i];
+            if (a.scriptId === b.scriptId || seen.has(a.scriptId) || a.strategy !== b.strategy || a.route.kind !== b.route.kind) continue;
+            if (!routesOverlap(a.route, b.route)) continue;
+            seen.add(a.scriptId);
+            const list = out.get(b.scriptId) ?? [];
+            if (list.length >= cap) break;
+            const la = a.layer ?? "site";
+            const lb = b.layer ?? "site";
+            const why = la === lb ? `same layer "${lb}", later in the list` : `layer "${lb}"`;
+            list.push(`${HINT_PREFIX}${routeLabel(b.route)} "${routePatterns(b.route.url)[0] ?? ""}" overlaps "${a.scriptName}" ${routeLabel(a.route)} (layer "${la}"); "${b.scriptName}" runs after it (${why})`);
+            out.set(b.scriptId, list);
+        }
+    }
+    return out;
 }
 
 /** The request a final result ended, as {@link skippedBy} matches routes against it. */

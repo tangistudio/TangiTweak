@@ -40,9 +40,9 @@ import { autoLayerLabel, isLayer, type ScriptLayers } from "../../shared/route";
 import { effectiveStrategy, hookCanSee, indexRoutes, isNetKind, pageWorld, routeLabel, routeMatches, routeMayMatch, takesBinary, type RouteMeta, type Strategy } from "../../shared/route";
 import { analyzeScripts, runBodyOp, type Analyzed } from "../compileHost";
 import { recordNetBody } from "../network";
-import { reportSkipped, setSkipRoutes } from "./skipped";
+import { netRouteRefs, reportSkipped, setSkipRoutes, stackFor } from "./skipped";
 import { correlator } from "./requestCorrelator";
-import { winnerOf } from "../../shared/precedence";
+import { overlapHints, winnerOf } from "../../shared/precedence";
 import { targetsWebSocket, WS_BLIND, wsUnseen } from "../../shared/websocketLimits";
 import { isTabScope } from "../../shared/storeOps";
 import { TEXT_TYPES_KEY } from "../settingsFile";
@@ -358,6 +358,7 @@ export function createPipeline(
             }
             if (down.length) helperDown.push({ id: s.id, name: s.meta.name, labels: down });
         }
+        for (const [id, hints] of overlapHints(netRouteRefs(scripts))) for (const msg of hints) problems.push({ id, msg });
         routeNow = new Map();
         for (const p of problems) routeNow.set(p.id, [...(routeNow.get(p.id) || []), p.msg]);
         if (helperTimer) clearTimeout(helperTimer);
@@ -1024,6 +1025,10 @@ export function createPipeline(
                 });
             })();
             return true;
+        }
+        if (msg && msg.type === "netStack") {
+            sendResponse(typeof msg.url === "string" ? stackFor({ url: msg.url, method: msg.method, type: msg.resourceType }) : []);
+            return;
         }
         if (msg && msg.type === "getScriptLayer") {
             void (async () => {

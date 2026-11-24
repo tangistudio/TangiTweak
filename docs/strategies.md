@@ -28,7 +28,7 @@ most once.
 |---|---|---|---|---|
 | `helper` | a tiny local helper ([tangitweak-helper](local-helper.md)) is a loopback HTTPS proxy; a PAC routes only the hosts of `helper` handlers to it and it pauses requests for your handlers | **everything**: documents, script tags, images, workers, XHR — MV2 and MV3 | **never** | **Chromium-only**, needs the helper installed + the helper certificate trusted; your own proxy setting stays in effect |
 | `page` | MAIN-world content script overrides `fetch` and `XMLHttpRequest` | requests the page's own JS makes (fetch/XHR — the majority of API traffic) | **never** | misses `<script src>`, `<img>`, documents, workers and requests made before the page patch loads; no `onResponseHeaders` |
-| `extension` | the extension handles each request: blocking `webRequest` (+ `filterResponseData` on Firefox) | everything | never | **MV2 builds only** — Firefox and Chromium browsers that still run MV2 (ungoogled-chromium, Brave, Arc…). Redirect, block, request/response headers and synchronous `replaceResponse` (handler or `onRequest` result) work on both (Chromium serves replacements by redirecting, Firefox in place — see [below](#how-each-strategy-serves-a-replacement)); `onResponseBody` and awaiting async handlers are Firefox-only (Chromium has no `filterResponseData`, and its blocking webRequest can't await) |
+| `extension` | the extension handles each request: blocking `webRequest` (+ `filterResponseData` on Firefox) | everything | never | **MV2 builds only** — Firefox and Chromium browsers that still run MV2 (ungoogled-chromium, Brave, Arc…). Redirect, block, `allow`, request/response headers and synchronous mocks (`onRequest` → `replaceResponse`) work on both (Chromium serves replacements by redirecting, Firefox in place — see [below](#how-each-strategy-serves-a-replacement)); `onResponseBody` and awaiting async handlers are Firefox-only (Chromium has no `filterResponseData`, and its blocking webRequest can't await) |
 | `debugger` | `chrome.debugger` + CDP Fetch domain: pause → run handlers → continue or fulfill | **everything**: documents, script tags, images, fonts, XHR — even requests the page didn't initiate | **yes** — Chrome shows a yellow "being debugged" bar while attached | Chromium-only; attach/detach is lazy and automatic |
 | `rules` | each handler runs **once** when scripts load; its result becomes a browser-native rule (`declarativeNetRequest`) that the browser applies itself | **everything**, the first navigation included | **never** | block, redirect and request/response headers only, with a fixed result ([what `rules` can do](#what-rules-can-do)); Chrome MV3, Chromium MV2 and Firefox 113+ |
 
@@ -50,9 +50,9 @@ handler off one.
 |---|---|---|
 | `helper` | Sees everything: documents, `<script src>`, CSS, images, workers, the first navigation. No banner. Async handlers, any status code, URL unchanged. | Chromium only. One-time install of the local helper and trust in the helper certificate. Matched hosts go through a local proxy (PAC); cert-pinned / mTLS sites break. Small per-request latency; bodies are buffered for `onResponseBody`. |
 | `page` | No setup, no banner, no permissions, lightest. Works in every browser. | Only the page's own fetch/XHR. Misses documents, `<script src>`, images, workers and requests made before the page patch loads. |
-| `extension` | No banner, no setup. On Firefox it reaches everything, bodies included. | Not on Chrome (MV3). Chromium MV2: no `onResponseBody`, no async handlers, replacements are served by redirect (URL changes, status always 200) — a replaced page shows a `chrome-extension://` URL. Firefox: can't change a replaced response's status. |
+| `extension` | No banner, no setup. On Firefox it reaches everything, bodies included. | Not on Chrome (MV3). Chromium MV2: no `onResponseBody`, no async handlers, replacements are served by redirect (URL changes, status always 200) so response handlers don't run on them; a replaced page shows a `chrome-extension://` URL. Firefox: can't change a replaced response's status. |
 | `debugger` | Sees everything with nothing to install. | Chromium only. Chrome shows a "being debugged" banner while attached. May miss the first navigation in a fresh tab ([details](#first-page-load-with-debugger)). |
-| `rules` | No banner, no setup, nothing runs per request: the browser itself applies the rules to every request, the first navigation included. Works in Chrome (MV3 and MV2) and Firefox. | Fixed results only: block, redirect (captures inserted as-is), set/remove request or response headers. No replaceResponse (handler or result) or onResponseBody, no exclude. The handler runs once when scripts load and can't read the request (method, headers…). |
+| `rules` | No banner, no setup, nothing runs per request: the browser itself applies the rules to every request, the first navigation included. Works in Chrome (MV3 and MV2) and Firefox. | Fixed results only: block, redirect (captures inserted as-is), set/remove request or response headers. No mocks (`replaceResponse`) or onResponseBody, no exclude. The handler runs once when scripts load and can't read the request (method, headers…). |
 
 > **Which one?** `page` is the most lightweight (no banner, no helper, no
 > permissions prompt), but it only works on the page's own fetch/XHR
@@ -159,6 +159,7 @@ first navigation included, with no banner and no helper.
 |---|---|
 | `onRequest` → `{ block: true }` | blocks the request |
 | `onRequest` → `{ redirect: url }` | redirects it; `ctx.groups.*` and `ctx.url` may appear in the URL ([below](#captures-in-a-redirect)) |
+| `onRequest` → `{ allow: true }` | an allow rule: undoes the block or redirect of the handlers that run before it, and drops their header edits too |
 | `onRequest` → `{ headers: { set, remove } }` | sets / removes request headers |
 | `onResponseHeaders` → `{ headers: { set, remove } }` | sets / removes response headers |
 
@@ -170,9 +171,11 @@ or count requests, use a per-request strategy (`extension`, `debugger` or
 
 The route works as everywhere: the full URL pattern syntax (named groups,
 optional parts, custom regular expressions, wildcards), `methods` and
-`resourceTypes`. Scripts stack as usual: the first script's block or
-redirect wins, and when two scripts set the same header the later one
-wins. A block or redirect makes the same handler's `headers` moot, as on
+`resourceTypes`. Handlers stack as on every strategy
+([how handlers stack](scripting.md#multiple-handlers--how-they-stack)): the
+run order (layer, then list, then registration) becomes the rules'
+priority, so the last block, redirect or `allow` wins and when two
+handlers set the same header the later one wins. A block or redirect makes the same handler's `headers` moot, as on
 every strategy.
 
 ```ts
@@ -221,7 +224,7 @@ doesn't run, the rest of the script does:
   `if`, `.toUpperCase()`… ("captures can only be inserted into the redirect
   URL as-is"), or an optional capture without `?? ""`;
 - more than 9 captures in one redirect (the browser substitutes `\1`–`\9`);
-- `onResponseBody`, or `replaceResponse` (handler or `onRequest` result);
+- `onResponseBody`, or an `onRequest` `replaceResponse` result;
 - `exclude` on the route — narrow the URL pattern instead;
 - a method a rule can't match (e.g. `CONNECT`);
 - the handler returns nothing ("does nothing on `rules`" — rules can't just
@@ -278,27 +281,42 @@ error).
 
 ## How each strategy serves a replacement
 
-`replaceResponse` (handler or `onRequest` result) produces a whole new response.
-It is final: nothing runs after it — no later handler, no `onResponseHeaders`
-or `onResponseBody` (see
+An `onRequest` `replaceResponse` result (a mock) produces a whole new
+response. A later `onRequest` handler can still overrule it, and the
+matching `onResponseHeaders` and `onResponseBody` handlers run on it with
+`ctx.replacedBy` set, except where it is served by redirect (see
 [how handlers stack](scripting.md#multiple-handlers--how-they-stack)).
 Whether the page keeps its URL depends on the strategy that serves it:
 
 | strategy | how | URL | status | reaches |
 |---|---|---|---|---|
 | `page` | a `Response` / XHR result is synthesized in the page; the network is never contacted | unchanged (`response.url` / `responseURL` is the request URL) | any | page `fetch` / XHR only |
-| `extension`, **Chromium MV2** | **redirect**: page loads (main frame) go to the extension's `serve.html`, so the address bar shows a `chrome-extension://…` URL and the page loses its origin (cookies, relative URLs, same-origin calls); other requests get a `data:` URL | **changes** | 200 only | everything — but response bodies can't be read, so no `onResponseBody` |
+| `extension`, **Chromium MV2** | **redirect**: page loads (main frame) go to the extension's `serve.html`, so the address bar shows a `chrome-extension://…` URL and the page loses its origin (cookies, relative URLs, same-origin calls); other requests get a `data:` URL | **changes** | 200 only | everything — but response bodies can't be read, so no `onResponseBody`, and response handlers don't run on the mock |
 | `extension`, **Firefox** | in place: the request goes out, then `filterResponseData` discards the real body and writes the replacement (Content-Type set, Content-Length/Encoding dropped) | unchanged | the server's (Firefox can't change it; a non-200 replacement is skipped with a warning) | everything; the request still reaches the server, and a network failure means no replacement |
 | `debugger` | the debugger fulfills the request at the Request stage; the network is never contacted | unchanged | any | everything (banner shown) |
 | `helper` | the local helper answers the proxied request; upstream is never contacted | unchanged | any | everything, no banner |
 
 To keep the URL on Chromium, use `helper` or `debugger` for that handler.
 
+## How handlers stack on each strategy
+
+Handlers run in layer order (`base`, `site`, `override`), then list order,
+and the last word wins ([details](scripting.md#multiple-handlers--how-they-stack)).
+What that means differs a little per strategy:
+
+| strategy | layer order | sees earlier edits | mocks go through response handlers | `allow` |
+|---|---|---|---|---|
+| `page` | ✅ | ✅ | ✅ `onResponseBody` (there is no `onResponseHeaders` on `page`) | ✅ |
+| `debugger`, `helper` | ✅ | ✅ | ✅ | ✅ |
+| `extension`, Firefox | ✅ | ✅ | ✅ | ✅ |
+| `extension`, Chromium MV2 | ✅ | ✅ | ❌ served by redirect, bodies can't be read | ✅ |
+| `rules` | ✅ as rule priority | ❌ the handler runs once, without a request | ❌ no mocks | ✅ as an allow rule, which also drops the header edits of the handlers before it |
+
 ### Missed warning
 
 A body handler that silently does nothing is hard to spot, so after a
 request completes (~1.5 s later) TangiTweak checks every enabled script's
-`onResponseBody` and `replaceResponse` handlers whose route covers the
+`onResponseBody` handlers whose route covers the
 request (and `onRequest` handlers on `page`, for page fetch/XHR). If none of the script's body handlers ran for it, a WARN line
 attributed to the script is logged, e.g.
 
@@ -381,7 +399,7 @@ strategy picker disables the ones the current browser can't use.
 | | `helper` (local helper) | `page` (page fetch/XHR) | `extension` (blocking webRequest) | `debugger` (chrome.debugger) | `rules` (browser-native rules) | page code (`tweak.onSite`, `tweak.onPage`, `tweak.onOverlay`) |
 |---|---|---|---|---|---|---|
 | **Chrome / Edge / Brave / Vivaldi, current** — `dist-mv3/` | ✅ no banner | ✅ | ❌ | ✅ banner shown | ✅ | ✅ (`tweak.onPage` and `tweak.onSite` need [user scripts](scripting.md#user-scripts-on-chrome); `tweak.onOverlay` doesn't) |
-| **Chromium with MV2** (ungoogled-chromium, Brave, Arc… — any Chromium that still loads MV2 extensions) — `dist/` | ✅ no banner | ✅ | ✅ no banner — redirect, block, headers, sync replaceResponse; no body streaming or async (see [async](scripting.md#async-handlers)) | ✅ banner shown | ✅ | ✅ |
+| **Chromium with MV2** (ungoogled-chromium, Brave, Arc… — any Chromium that still loads MV2 extensions) — `dist/` | ✅ no banner | ✅ | ✅ no banner — redirect, block, headers, sync mocks; no body streaming or async (see [async](scripting.md#async-handlers)) | ✅ banner shown | ✅ | ✅ |
 | **Firefox** — `dist/` | ❌ (not needed: `extension` reaches everything) | ✅ | ✅ no banner | ❌ | ✅ 113+ | ✅ |
 
 What reaches what on Chrome:
@@ -395,7 +413,7 @@ What reaches what on Chrome:
 | first navigation in a fresh tab | ✅ | ❌ | ⚠ may miss it ([details](#first-page-load-with-debugger)) | ✅ |
 | sites pinning certs / mTLS | ❌ leave them out of `helper` routes | ✅ | ✅ | ✅ |
 | `onResponseHeaders` | ✅ | ❌ | ✅ | ✅ fixed headers only |
-| bodies (`onResponseBody`, `replaceResponse`) | ✅ | ✅ | ✅ | ❌ |
+| bodies (`onResponseBody`, mocks) | ✅ | ✅ | ✅ | ❌ |
 | request body (`ctx.requestBody`, [limits](scripting.md#request-body)) | ✅ up to 8 MB | ✅ not streams | ✅ not file uploads | ❌ |
 
 The local helper ships for these platforms (each release attaches the

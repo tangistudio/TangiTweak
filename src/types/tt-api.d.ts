@@ -64,7 +64,10 @@ declare namespace TangiTweak {
          * `"script"`, `"stylesheet"`, `"image"`, `"xmlhttprequest"`, …
          */
         resourceType: string;
-        /** Request headers as a plain object (`name → value`). */
+        /**
+         * Request headers as a plain object (`name → value`). In `onRequest`
+         * they include the edits of the handlers that ran before this one.
+         */
         requestHeaders: { [name: string]: string };
         /**
          * Named groups the handler's route captured from `url` (`:id`, and

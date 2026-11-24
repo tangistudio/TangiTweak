@@ -19,10 +19,11 @@ import { tweak } from "tangitweak";
 
 const API = { url: "*://app.example.com/api/*", strategy: "helper" } as const;
 
-// Redirect / block / request headers / replaceResponse:
+// Redirect / block / request headers / mock the response:
 tweak.onRequest(API, (ctx) => {
     // return { redirect: "https://myserver/user.json" };
     // return { block: true };
+    // return { replaceResponse: { body: { beta: true } } };
     return { headers: { set: { "x-debug": "1" } } };
 });
 
@@ -30,9 +31,6 @@ tweak.onRequest(API, (ctx) => {
 tweak.onResponseHeaders(API, () => ({
     headers: { set: { "access-control-allow-origin": "*" } },
 }));
-
-// Replace the whole body:
-// tweak.replaceResponse({ ...API, url: "*://app.example.com/api/flags" }, () => ({ beta: true }));
 
 // Stream-modify the body:
 tweak.onResponseBody({ url: "*://app.example.com/api/user*", strategy: "helper" }, (ctx, body) => String(body).replace('"role":"user"', '"role":"admin"'));
@@ -316,8 +314,7 @@ the strategy can't get it:
 | `extension` | webRequest's copy; a form post arrives URL-encoded, the kind is sniffed (no `Content-Type` yet) | file and very large uploads (Chromium omits them) |
 | `rules` | — the handler runs once, without a request; reading it is an error | |
 
-It is the same in `onRequest`, `replaceResponse`, `onResponseHeaders` and
-`onResponseBody`. Changing it has no effect on what is sent.
+It is the same in `onRequest`, `onResponseHeaders` and `onResponseBody`. Changing it has no effect on what is sent.
 
 ## Parameters
 
@@ -826,7 +823,7 @@ import { subscribe } from "valtio";
 
 const page = tweak.pageStore({ hits: 0 });
 
-tweak.replaceResponse({ url: "https://example.com/api/*", strategy: "page" }, () => {
+tweak.onRequest({ url: "https://example.com/api/*", strategy: "page" }, () => {
     page.hits++;
 });
 
@@ -902,7 +899,7 @@ tweak.onOverlay("https://shop.example/*", (ctx) => {
   navigation**, and disappears when the document unloads (never persisted).
 - **Handlers.** `tweak.onSite` (direct synchronous access), `tweak.onPage` (live
   mirror), and `tweak.onOverlay` (live mirror of the top frame's copy).
-  **Not available in any network handler** (`onRequest`, `replaceResponse`,
+  **Not available in any network handler** (`onRequest`,
   `onResponseHeaders`, `onResponseBody` — throws and is flagged in
   Problems) or inside imported modules.
 - **Page data.** The site can read it, change it and fake its values, like
@@ -923,9 +920,9 @@ and returns a normal `Response`.
 
 ```ts
 // the real response, even though this script mocks the same URL
-tweak.replaceResponse({ url: "*://api.example.com/user", strategy: "helper" }, async () => {
+tweak.onRequest({ url: "*://api.example.com/user", strategy: "helper" }, async () => {
     const real = await (await tweak.fetch("https://api.example.com/user", { bypass: true })).json();
-    return { ...real, role: "admin" };
+    return { replaceResponse: { body: { ...real, role: "admin" } } };
 });
 ```
 
@@ -1560,8 +1557,8 @@ import { useSnapshot } from "valtio";
 
 const mock = tweak.globalStore("mock", { enabled: false });
 
-tweak.replaceResponse({ url: "*://app.example.com/api/me", strategy: "helper" }, () =>
-    mock.enabled ? { name: "Test user", plan: "pro" } : undefined);
+tweak.onRequest({ url: "*://app.example.com/api/me", strategy: "helper" }, () =>
+    mock.enabled ? { replaceResponse: { body: { name: "Test user", plan: "pro" } } } : undefined);
 
 tweak.onOverlay("*://app.example.com/*", (ctx) => {
     function Panel() {
@@ -1815,105 +1812,242 @@ tweak.onOverlay("*://app.example.com/*", async () => {
 
 ## Multiple handlers — how they stack
 
-The same rules apply on every strategy. When several handlers match a
-request, two things decide what happens: **list order** and **stage**.
+One rule, the same on every strategy: **handlers run from general to
+specific and the last word wins.** A general tweak (an API interceptor that
+matches every host) runs first. A tweak for one site runs after it and can
+build on what it did or overrule it.
 
-**List order** — scripts top to bottom in the Editor's explorer, then
-registration order within a script. With folders, the explorer order is
-depth-first: in each folder, its subfolders first (alphabetically, each with
-its whole content), then its scripts in their own order.
+### Order
 
-**Stages** — a request goes through the stages in this order. Each stage runs
-its handlers from every script in list order before the next stage starts:
+Within a stage of a strategy, handlers run in this order:
+
+1. **Layer**: `base`, then `site`, then `override`.
+2. **List order**: scripts top to bottom in the Editor's explorer. With
+   folders the order is depth-first: in each folder, its subfolders first
+   (alphabetically, each with its whole content), then its scripts.
+3. **Registration order** within a script.
+
+A request goes through the stages in this order:
 
 ```text
-onRequest → replaceResponse → (network) → onResponseHeaders → onResponseBody
+onRequest → (network) → onResponseHeaders → onResponseBody
 ```
 
-So a `tweak.onRequest` block in the last script still wins over a
-`tweak.replaceResponse` in the first one.
+| stage | what "the last word wins" means |
+|---|---|
+| `onRequest` | Every handler runs. The last one that returns `block`, `redirect`, `replaceResponse` or `allow` decides. Returning nothing keeps what came before. Header edits stack. |
+| `onResponseHeaders` | Every handler runs. Header edits stack. |
+| `onResponseBody` | A chain: each handler gets the body the one before it returned. |
 
-### Final results end the request
+### Layers
 
-A **final result** is an `onRequest` `block`, `redirect` or
-`replaceResponse`, or a body returned by `tweak.replaceResponse`. The first
-one wins. Nothing runs on that request after it: no later handler of the
-same stage, and no later stage. A replaced response never reaches the
-network, `onResponseHeaders` or `onResponseBody`. A redirect starts a new
-request to the target, and the handlers matching the target run on it.
+Most tweaks never set a layer. It is inferred from each route's URL
+pattern:
+
+| pattern host | examples | layer |
+|---|---|---|
+| any host | `*://*/*`, `<all_urls>`, `https://:host/api/*` | `base` |
+| a named host | `shop.example.com`, `*.example.com`, `localhost:*` | `site` |
+
+`override` is never inferred. A layer set explicitly wins over inference,
+in this order:
+
+1. **You**, in the tweak's settings: the **Layer** select in the popup's
+   settings fold, or `"layer"` in its `.tweak/settings.json`. Use it to
+   demote a tweak you didn't write without editing it.
+2. **The route**: `{ url, strategy, layer: "override" }`.
+3. **The tweak's package.json**: `"tangitweak": { "layer": "base" }`.
+4. **Inferred** from the pattern's host.
+
+```ts
+// Offline mode: a broad block that must win over every site mock
+tweak.onRequest({ url: "<all_urls>", resourceTypes: ["xmlhttprequest"], strategy: "helper", layer: "override" }, () => ({ block: true }));
+```
+
+A general tweak that ships defaults for named hosts (a mock of
+`https://api.github.com/user`, say) declares `"layer": "base"` once in its
+package.json, so a user's own tweak for that host still wins.
+
+### Examples
+
+An **API interceptor** tweak matches every host, so its handlers are
+`base`. A **Shop** tweak matches `shop.example.com`, so its handlers are
+`site`. Shop runs after the interceptor whatever their list order.
+
+**Header edits stack.** For each header (case-insensitive) the later
+handler wins, whether it sets or removes it.
+
+```ts
+// API interceptor
+tweak.onRequest({ url: "*://*/*", strategy: "helper" }, () => ({ headers: { set: { "x-trace": "1", "x-env": "dev" } } }));
+// Shop
+tweak.onRequest({ url: "*://shop.example.com/*", strategy: "helper" }, () => ({ headers: { set: { "x-env": "staging" } } }));
+```
+
+`https://shop.example.com/cart` is sent with `x-trace: 1` and
+`x-env: staging`. Other hosts get `x-env: dev`. A later handler's
+`ctx.requestHeaders` (and `ctx.responseHeaders` in `onResponseHeaders`)
+already includes the earlier edits.
+
+**The last decision wins.** Returning nothing keeps it.
+
+```ts
+// API interceptor: block every user lookup
+tweak.onRequest({ url: "*://*/users/*", strategy: "helper" }, () => ({ block: true }));
+// Shop: mock only the admin user
+tweak.onRequest({ url: "https://shop.example.com/users/:id", strategy: "helper" }, (ctx) => {
+    if (ctx.groups.id === "1") return { replaceResponse: { body: { id: 1, role: "admin" } } };
+});
+```
+
+`/users/1` gets the mock and `/users/2` stays blocked. The Log notes the
+overruled decision:
+
+```text
+[API interceptor] onRequest #1 → block was overruled: [Shop] onRequest #1 → replaceResponse has the last word (layer "site" runs after "base") https://shop.example.com/users/1
+```
+
+**`allow` undoes an earlier decision.** It lets the request go to the
+network and drops an earlier `block`, `redirect` or mock.
+
+```ts
+// API interceptor
+tweak.onRequest({ url: "*://*/ads/*", strategy: "helper" }, () => ({ block: true }));
+// Shop
+tweak.onRequest({ url: "*://shop.example.com/ads/house.js", strategy: "helper" }, () => ({ allow: true }));
+```
+
+**Same layer: the list decides.** Two `site` tweaks for one host run in
+list order, so the lower one has the last word. The narrower URL doesn't
+win by itself. The Log warns about it (`same layer, it comes later in the
+list`). Drag the tweaks or set one's layer to fix it.
+
+**Body transforms chain** from general to specific:
+
+```ts
+// API interceptor: unwrap the envelope every API uses
+tweak.onResponseBody({ url: "*://*/api/*", strategy: "helper" }, (ctx, body) => JSON.parse(body).data);
+// Shop
+tweak.onResponseBody({ url: "*://shop.example.com/api/cart", strategy: "helper" }, (ctx, body) => ({ ...JSON.parse(body), discount: 0.5 }));
+```
+
+```text
+{"data":{"items":[…]}} → API interceptor → {"items":[…]} → Shop → {"items":[…],"discount":0.5} → page
+```
+
+### Mocks go through the response handlers
+
+A mock (`onRequest` returning `replaceResponse`) is a response like any
+other: the matching `onResponseHeaders` and `onResponseBody` handlers run
+on it, with `ctx.replacedBy` set to `{ tweak, handler }`. The Log notes it
+once per pair of handlers:
+
+```text
+[Shop] onResponseBody #1 ran on a mock from [API interceptor] onRequest #1 (ctx.replacedBy is set) https://shop.example.com/flags
+```
+
+A transform written for the real response can skip mocks:
+
+```ts
+tweak.onResponseBody({ url: "*://*/api/*", strategy: "helper" }, (ctx, body) => {
+    if (ctx.replacedBy) return; // leave mocks alone
+    return JSON.parse(body).data;
+});
+```
 
 ```ts
 tweak.onRequest({ url: "*://api.example.com/me", strategy: "helper" }, () => ({
     replaceResponse: {
-        body: { id: 1, name: "Mocked User" },  // object → JSON; strings/bytes pass through
-        status: 200,                            // default 200
-        mime: "application/json",               // default: guessed from the URL
+        body: { id: 1, name: "Mocked User" }, // object → JSON; strings pass through; { file: "data:…" } serves a data: URL
+        status: 200, // default 200
+        mime: "application/json", // default: from the URL's extension, then the resource type, then application/json
         headers: { set: { "x-mock": "1" } },
     },
 }));
 ```
 
-On `page`, `debugger` and `helper` a replacement is served with any status
-and headers, URL kept, and the request is never sent. `extension` serves
+`tweak.replaceResponse` was removed. Return `{ replaceResponse: { body } }`
+from `tweak.onRequest` instead. Returning nothing still leaves the request
+alone.
+
+On `page`, `debugger` and `helper` a mock is served with any status and
+headers, URL kept, and the request is never sent. `extension` serves
 status 200 only (another status isn't served, with a warning): in place on
 Firefox, where the request is sent and its body discarded, and on Chromium
 MV2 by redirect (a `data:` URL, or the extension's `serve.html` for page
-loads), so the URL changes. See
-[how each strategy serves a replacement](strategies.md#how-each-strategy-serves-a-replacement).
+loads), so the URL changes. There the response handlers don't run on it.
+See [how each strategy serves a replacement](strategies.md#how-each-strategy-serves-a-replacement).
 
-### Results that stack
-
-- **Header edits** (`onRequest` `headers`, `tweak.onResponseHeaders`): every
-  handler runs. For each header (case-insensitive) the **later handler in
-  the list wins**, whether it sets or removes it. A later `remove` deletes an
-  earlier `set`, and a later `set` undoes an earlier `remove`. Request
-  header edits still apply when a later `onRequest` handler redirects.
-- **`tweak.onResponseBody`**: transforms **compose** like a pipeline. Handler
-  A's output becomes handler B's input, in list order.
-
-```text
-body → [transform 1] → [transform 2] → … → page
-```
+A `redirect` starts a new request to the target, and the handlers matching
+the target run on it. To stop a redirect, return `allow` from a handler
+that matches the original URL.
 
 ### Across strategies
 
 A handler's `strategy` decides which mechanism runs it, and the mechanisms
-sit at different points on the request's way out. Each one is a layer:
+sit at different points on the request's way out:
 
 ```text
 page → rules → extension → debugger → helper → server
 ```
 
-Inside a layer the rules above apply. Across layers, the request reaches a
-layer only if the layers in front of it let it through:
+Layers order handlers within a strategy, never across strategies.
+Across strategies, the request reaches one only if those in front let it
+through:
 
-- A final result in one layer means the layers **behind** it never see the
-  request (a `rules` block means the `helper` gets nothing).
-- Layers **in front** see a replacement or a redirect as an ordinary
+- A decision in one strategy means the strategies **behind** it never see
+  the request (a `rules` block means the `helper` gets nothing, and a
+  `page` mock beats a `site` mock on `helper`).
+- Strategies **in front** see a mock or a redirect as an ordinary
   response, so their `onResponseHeaders` and `onResponseBody` still run on
-  it. A `helper` replacement still goes through a `page` `onResponseBody`.
-- After a block there is no response, so the response handlers of the layers
-  in front don't run either.
+  it.
+- After a block there is no response, so no response handler runs.
 
-### Warnings when a handler is skipped
+On `rules` nothing runs per request: run order becomes rule priority, and
+`allow` becomes an allow rule. See [what `rules` can do](strategies.md#what-rules-can-do).
 
-When a handler matches a request but doesn't run because of the rules above,
-the Log shows a warning naming both handlers and the reason. In the Network
-view the request is marked **missed** (filter: `is:missed`):
+### `onSite` patches
 
-```text
-[Cache buster] onResponseBody #1 → skipped: [API mocks] onRequest #1 → replaceResponse took priority (a replaced response is final) https://api.example.com/me
-[Tracker] onRequest #1 → skipped: [Ad blocker] onRequest #2 → block took priority (it comes earlier in the list) https://ads.example.com/x.js
-[Logger] onResponseBody #1 → skipped: [Blocklist] onRequest #1 → block took priority (strategy "rules" comes before "helper", so the request never got there) https://cdn.example.com/a.js
+When several tweaks patch the same function with `ctx.patch`, they share
+one chain per function and frame, ordered by layer and list:
+
+```ts
+// API interceptor (base)
+tweak.onSite("*://*/*", (ctx) => {
+    ctx.patch(window, "fetch", (orig) => async (input, init) => record(await orig(input, init)));
+});
+// Shop (site)
+tweak.onSite("*://shop.example.com/*", (ctx) => {
+    ctx.patch(window, "fetch", (orig) => (input, init) => orig(input, withAuth(init)));
+});
 ```
 
-A header edit replaced by a later handler is a warning too:
+```text
+site code → Shop's patch → API interceptor's patch → page strategy handlers → network
+```
+
+The `base` patch sits closest to the original function. A `site` patch
+sees the call first and the result last. `orig` is the next patch in the
+chain, so it is not always the original function.
+
+### Seeing the stack
+
+- **Network view**: pick a request and open its **TangiTweak** tab. The
+  **Handler stack** lists every handler that matches it in run order,
+  with its strategy, its layer (and where the layer came from) and what it
+  did: decided, overruled, skipped, ran on mock, ran or not seen.
+- **Problems**: when you save, handlers of different tweaks that may match
+  the same request in the same stage are listed as hints, with who runs
+  after whom. The check uses a sample URL of each route, so it is a hint
+  and not a proof.
+- **Log**: a warning when a decision is overruled or a handler is skipped,
+  a note when a response handler runs on a mock. Each is logged at most
+  once a minute per handler and URL.
 
 ```text
+[Logger] onResponseBody #1 → skipped: [Blocklist] onRequest #1 → block took priority (strategy "rules" comes before "helper", so the request never got there) https://cdn.example.com/a.js
 [B] onRequest #1 overrides request header "authorization" from [A] onRequest #1 (the later one in the list wins) https://api.example.com/me
 ```
-
-Each warning is logged at most once a minute per handler and URL.
 
 ## Async handlers
 
@@ -1922,10 +2056,9 @@ result depends on the handler's strategy:
 
 | handler | `page` (page fetch/XHR) | `extension`, Chromium MV2 | `extension`, Firefox | `debugger` | `helper` |
 |---|---|---|---|---|---|
-| `onRequest` redirect/block/replaceResponse | ✅ awaited | ⚠ result ignored, error logged — blocking webRequest can't await | ✅ awaited natively | ✅ awaited at the Request stage | ✅ awaited |
+| `onRequest` redirect/block/replaceResponse/allow | ✅ awaited: the page's `fetch`/XHR waits as long as the handler needs | ⚠ result ignored, error logged — blocking webRequest can't await | ✅ awaited natively, a mock written in place (URL kept) | ✅ awaited at the Request stage, a mock never contacts upstream | ✅ awaited, a mock never contacts upstream |
 | `onRequest` headers | ✅ awaited | ⚠ ignored + error | ✅ awaited | ✅ awaited, applied at the Request stage | ✅ awaited, sent upstream |
 | `onResponseHeaders` | — (not on `page`) | ⚠ ignored + error | ✅ awaited | ✅ awaited, merged into the fulfilled headers | ✅ awaited |
-| `replaceResponse` | ✅ awaited — the page's `fetch`/XHR promise simply takes as long as the handler needs | ⚠ result ignored + error (a sync redirect can't be built late) | ✅ awaited, written in place (URL kept) | ✅ awaited at the Request stage, upstream never contacted | ✅ awaited, upstream never contacted |
 | `onResponseBody` | ✅ awaited (chained between handlers) | — (can't read bodies) | ✅ awaited | ✅ awaited | ✅ awaited (served `no-store`) |
 | `onSite`, `onPage`, `onOverlay` | run in the page / overlay on every strategy; not awaited (fire-and-forget) — a save waits for the new run's promise before undoing what the old run set up ([hot reload](#hot-reload--runs-and-ctx)) | | | | |
 
@@ -1938,8 +2071,9 @@ Practical rules of thumb:
   the `extension` strategy on Chromium can't: there an async result logs an error and the
   request proceeds unmodified — set `strategy: "helper"` or `"debugger"` on the
   route.
-- **Static replacement from an async source** (file read, fetch): async
-  `replaceResponse` on `helper`, `debugger` or `page` is all you need.
+- **A mock from an async source** (file read, fetch): an async `onRequest`
+  returning `{ replaceResponse }` on `helper`, `debugger` or `page` is all
+  you need.
 - **No time limit on `page`.** A handler may wait as long as it likes — for
   the user to decide on a paused request, say — and the page's request waits
   with it. TangiTweak only lets a request through untouched when the
