@@ -278,5 +278,5 @@ export const pageCtxBase = (url: string) => ({ url, method: "GET", tabUrl: url, 
 
 /** run handler `d` as a run of `gen` (shared/runLifecycle.ts): its ctx gets signal, once, patch, style, mount, each */
 export function fireRun(life: ScriptLife, gen: Generation, d: PageDocumentHandler, base: object | ((signal: AbortSignal) => object), exposer: Exposer | undefined, report: (e: unknown) => void): void {
-    life.fire(gen, d.h, report, (ctx, quiet) => firePageHandler(d, { ...(typeof base === "function" ? base(ctx.signal) : base), ...ctx }, exposer, quiet));
+    life.fire(gen, d.h, report, (ctx, quiet) => firePageHandler(d, { ...(typeof base === "function" ? base(ctx.signal) : base), ...ctx }, exposer, quiet), d.route);
 }

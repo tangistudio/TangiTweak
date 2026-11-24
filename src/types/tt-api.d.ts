@@ -297,6 +297,23 @@ declare namespace TangiTweak {
          * @see https://github.com/tangistudio/TangiTweak/blob/master/docs/scripting.md#single-page-apps
          */
         navigation?: "load" | "match" | "every";
+        /**
+         * `tweak.onSite` only: where this handler's `ctx.patch`es sit when
+         * other tweaks patch the same function. Patches from every tweak
+         * form one chain per function: `"base"` innermost (next to the
+         * original), then `"site"`, then `"override"` outermost (it sees
+         * the call first and the result last). Within a layer, the script
+         * list order decides, then registration order: a later one sits
+         * further out.
+         *
+         * Unset: the tweak's package.json `tangitweak.layer`, else
+         * inferred from the hosts: `"base"` when a url pattern can match
+         * any host (`"<all_urls>"`), `"site"` for named hosts. The user's
+         * layer setting for the tweak overrides both this and package.json.
+         *
+         * @example { url: "<all_urls>", layer: "override" } // its patches wrap every other tweak's
+         */
+        layer?: "base" | "site" | "override";
     }
 
     /** `ctx.onNavigate`, on the `onSite`, `onPage` and `onOverlay` contexts. */
@@ -397,6 +414,11 @@ declare namespace TangiTweak {
          * replacement is installed once (the site may keep a reference to
          * it); each run sets what it does, and once no run patches it any
          * more it calls the original.
+         *
+         * When several handlers or tweaks patch the same function, each
+         * `orig` calls the patch below it: lower layers sit closer to the
+         * original (see the route's `layer`), so the order doesn't depend
+         * on which ran first. Removing one patch keeps the others.
          *
          * @example
          * tweak.onSite("*://example.com/*", (ctx) => {

@@ -230,6 +230,9 @@ describe("handler layers", () => {
     it("normalizeRoute validates the layer option", () => {
         expect(normalizeRoute("onRequest", { url: "*://a.com/*", strategy: "helper", layer: "override" }, 0).layer).toBe("override");
         expect(() => normalizeRoute("onRequest", { url: "*://a.com/*", strategy: "helper", layer: "top" } as any, 0)).toThrow(/layer/);
+        // onSite takes a layer (its ctx.patch chains); onPage doesn't
+        expect(normalizeRoute("onDocument", { url: "*://a.com/*", layer: "base" }, 0, "onSite").layer).toBe("base");
+        expect(() => normalizeRoute("onDocument", { url: "*://a.com/*", layer: "base" }, 0, "onPage")).toThrow(/doesn't apply/);
     });
 
     it("sorts stably by layer", () => {

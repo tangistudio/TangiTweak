@@ -339,7 +339,8 @@ export function normalizeRoute(kind: RouteKind, raw: unknown, index: number, api
     if (api === "onSite" || api === "onPage") route.api = api;
     if (doc) {
         const runs = kind === "onOverlay" ? "in the overlay" : api === "onSite" ? "in the site's world" : "in the page";
-        for (const k of ["methods", "resourceTypes", "strategy", "binary", "layer"]) {
+        // onSite: `layer` orders its ctx.patch chains with other tweaks' patches
+        for (const k of ["methods", "resourceTypes", "strategy", "binary", ...(api === "onSite" ? [] : ["layer"])]) {
             if (obj[k] !== undefined) throw new Error(`${where}: "${k}" doesn't apply to ${name} (it runs ${runs}, not on requests)`);
         }
         if (obj.when !== undefined) {
@@ -349,6 +350,10 @@ export function normalizeRoute(kind: RouteKind, raw: unknown, index: number, api
         if (obj.navigation !== undefined) {
             if (!NAVIGATIONS.includes(obj.navigation)) throw new Error(`${where}: navigation must be one of ${NAVIGATIONS.map((n) => JSON.stringify(n)).join(", ")}, got ${JSON.stringify(obj.navigation)}`);
             if (obj.navigation !== "load") route.navigation = obj.navigation;
+        }
+        if (obj.layer !== undefined) {
+            if (!isLayer(obj.layer)) throw new Error(`${where}: layer must be one of ${LAYER_ORDER.map((l) => JSON.stringify(l)).join(", ")}, got ${JSON.stringify(obj.layer)}`);
+            route.layer = obj.layer;
         }
         if (kind === "onDocument") route.world = api === "onSite" ? "page" : "isolated";
         return route;

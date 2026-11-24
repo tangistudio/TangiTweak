@@ -667,7 +667,8 @@ export function createPipeline(
         const t0 = performance.now();
         // onSite scripts (hook.ts; the bridge when CSP blocks eval)
         // `v`: the onSite code's version — onPage code tags its calls with it, and the hook waits for that version (hook.ts answerCall)
-        const domHandlers: { scriptId: string; name: string; src: string; params: Record<string, any>; v: string; fk?: string }[] = [];
+        // `layers`: the script's explicit layers, for the order of its ctx.patch chains (runLifecycle.ts)
+        const domHandlers: { scriptId: string; name: string; src: string; params: Record<string, any>; v: string; fk?: string; layers?: ScriptLayers }[] = [];
         // onPage scripts: never shipped to the page's own world. MV3 runs
         // them in chrome.userScripts worlds that load the code from the owner
         // (`isoRuns`): the bridge only learns which scripts, to relay the
@@ -734,6 +735,14 @@ export function createPipeline(
         // MV3: the onSite code itself comes as user scripts — the hook finds each unit by its key
         const libs = __MV3__ ? libsOf(mainDeps).map(withUnitKey) : libsOf(mainDeps);
         if (__MV3__) for (const h of domHandlers) h.fk = siteKey(h.name, h.src);
+        if (domHandlers.length) {
+            await ensureDataFiles();
+            const layers = await scriptLayersOf(pageScripts);
+            for (const h of domHandlers) {
+                const l = layers.get(h.scriptId);
+                if (l?.user || l?.pkg) h.layers = l;
+            }
+        }
         const isoLibs = isoDeps.size ? libsOf(isoDeps) : [];
         // an overlay reloads when its code, params or imports change
         for (const o of overlays) {

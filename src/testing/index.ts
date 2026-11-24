@@ -1799,6 +1799,8 @@ export async function loadTweak(source: TweakSource, options: LoadTweakOptions =
                     doc,
                     shadow: useShadow,
                     react: () => siteReact(),
+                    place: { tweak: s.name, order: entryScripts.indexOf(s), layers },
+                    log: (level, msg) => logSink(s.name, level, "onSite", msg),
                     onError: (e) => logSink(s.name, "error", "onSite teardown", formatScriptError(s.name, e, "teardown")),
                 }),
                 isoLife: new ScriptLife({

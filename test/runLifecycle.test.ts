@@ -169,6 +169,91 @@ describe("ScriptLife", () => {
         expect(() => reload((ctx) => ctx.patch({ x: 1 } as any, "x", (o) => o))).toThrow(/isn't a function/);
     });
 
+    describe("ctx.patch chains across tweaks", () => {
+        const ANY = { url: ["*://*/*"], index: 0 };
+        const SHOP = { url: ["*://shop.example.com/*"], index: 0 };
+        let lives: ScriptLife[];
+        let logs: string[];
+        beforeEach(() => {
+            lives = [];
+            logs = [];
+        });
+        afterEach(() => lives.forEach((l) => l.stop()));
+        const tweak = (name: string, order: number, layers?: { user?: "base" | "site" | "override"; pkg?: "base" | "site" | "override" }) => {
+            const l = new ScriptLife({ doc: document, place: { tweak: name, order, layers }, log: (_lvl, msg) => logs.push(msg) });
+            lives.push(l);
+            return l;
+        };
+        const run = (l: ScriptLife, route: { url: string[]; index: number } | undefined, fn: (ctx: RunCtx) => unknown) => {
+            const gen = l.begin();
+            l.fire(gen, "onSite:0", noReport, fn, route);
+            l.commit(gen);
+        };
+        const tag = (obj: { f: (s: string) => string }, t: string) => (ctx: RunCtx) => ctx.patch(obj, "f", (orig: (s: string) => string) => (s: string) => orig(s + ">" + t) + "<" + t);
+
+        it("base sits innermost whatever the install order", () => {
+            for (const shopFirst of [true, false]) {
+                const obj = { f: (s: string) => `[${s}]` };
+                const interceptor = tweak("interceptor", 1);
+                const shop = tweak("shop", 0);
+                if (shopFirst) run(shop, SHOP, tag(obj, "shop"));
+                run(interceptor, ANY, tag(obj, "base"));
+                if (!shopFirst) run(shop, SHOP, tag(obj, "shop"));
+                // site code -> shop -> interceptor -> original
+                expect(obj.f("x")).toBe("[x>shop>base]<base<shop");
+            }
+            expect(logs).toContain('f is patched by 2 tweaks: [interceptor] (layer "base", innermost) then [shop] (layer "site")');
+        });
+
+        it("removing the inner or a middle patch keeps the others", () => {
+            const obj = { f: (s: string) => `[${s}]` };
+            const a = tweak("a", 0);
+            const b = tweak("b", 1);
+            const c = tweak("c", 2, { user: "override" });
+            run(a, ANY, tag(obj, "a"));
+            run(b, SHOP, tag(obj, "b"));
+            run(c, SHOP, tag(obj, "c"));
+            const installed = obj.f;
+            expect(obj.f("x")).toBe("[x>c>b>a]<a<b<c");
+            b.stop();
+            expect(obj.f("x")).toBe("[x>c>a]<a<c");
+            a.stop();
+            expect(obj.f("x")).toBe("[x>c]<c");
+            // back in: it goes below c again
+            run(tweak("a2", 0), ANY, tag(obj, "a"));
+            expect(obj.f("x")).toBe("[x>c>a]<a<c");
+            expect(obj.f).toBe(installed);
+        });
+
+        it("same layer: later in the script list sits further out, then registration order", () => {
+            const obj = { f: (s: string) => `[${s}]` };
+            const second = tweak("second", 1);
+            const first = tweak("first", 0);
+            run(second, SHOP, tag(obj, "s"));
+            const gen = first.begin();
+            first.fire(gen, "onSite:1", noReport, tag(obj, "f1"), { ...SHOP, index: 1 });
+            first.fire(gen, "onSite:0", noReport, tag(obj, "f0"), SHOP);
+            first.commit(gen);
+            expect(obj.f("x")).toBe("[x>s>f1>f0]<f0<f1<s");
+            // moving "second" to the top of the list re-sorts
+            second.setPlace({ tweak: "second", order: -1 });
+            expect(obj.f("x")).toBe("[x>f1>f0>s]<s<f0<f1");
+        });
+
+        it("a single tweak's patch behaves as before", () => {
+            const obj = { f: (s: string) => `[${s}]` };
+            const l = tweak("only", 0);
+            run(l, SHOP, tag(obj, "t"));
+            const installed = obj.f;
+            run(l, SHOP, (ctx) => ctx.patch(obj, "f", (orig: (s: string) => string) => (s: string) => orig(s) + "!"));
+            expect(obj.f).toBe(installed);
+            expect(obj.f("x")).toBe("[x]!");
+            l.stop();
+            expect(obj.f("x")).toBe("[x]");
+            expect(logs).toEqual([]);
+        });
+    });
+
     it("ctx.mount: one root per target, re-rendered on reload, unmounted when dropped", () => {
         const first = { first: true };
         reload((ctx) => {

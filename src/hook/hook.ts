@@ -13,7 +13,7 @@ import { makeScriptConsole, formatLogArgs, scriptLogLine, type ScriptLogLevel } 
 import { scriptFunction, withTweak, type RawScriptFn, type ScriptFn } from "../shared/scriptFn";
 import { siteUnits, unitsGate, type PackageFn } from "../shared/siteCode";
 import { makeLibRequire, type ShippedLib } from "../shared/scriptImports";
-import { followsNav, indexRoutes, takesBinary, type DocumentWhen, type RouteMeta } from "../shared/route";
+import { followsNav, indexRoutes, takesBinary, type DocumentWhen, type RouteMeta, type ScriptLayers } from "../shared/route";
 import { checkUrl, NavRoutes, watchUrl } from "../shared/navRoutes";
 import { makePageShim, domHandlersFor, scheduleDocument, fireRun, type PageDocumentHandler, type PageShim } from "../shared/pageShim";
 import { ScriptLife, type Generation } from "../shared/runLifecycle";
@@ -90,7 +90,7 @@ import { watchCall, type CallWatch } from "../shared/callWatch";
     }
     /** the bridge reported the extension context dead (extension reload) */
     let dead = false;
-    let domHandlers: { scriptId: string; name: string; src: string; params?: Record<string, any>; v?: string; fk?: string }[] = [];
+    let domHandlers: { scriptId: string; name: string; src: string; params?: Record<string, any>; v?: string; fk?: string; layers?: ScriptLayers }[] = [];
     let libSources: ShippedLib[] = [];
     /** MV3: why onSite code doesn't run (user scripts are off), if it doesn't */
     let siteOff: string | null = null;
@@ -376,16 +376,25 @@ import { watchCall, type CallWatch } from "../shared/callWatch";
                     lives.delete(id);
                     navs.delete(id);
                 }
-        for (const d of domHandlers) {
+        for (const [order, d] of domHandlers.entries()) {
             let exposer = exposers.get(d.scriptId);
             if (!exposer) exposers.set(d.scriptId, (exposer = new Exposer()));
             else if (refire) exposer.reset();
             const ex = refire ? exposer : undefined;
             let life = lives.get(d.scriptId);
+            const place = { tweak: d.name, order, layers: d.layers };
             if (!life) {
                 const { scriptId, name } = d;
-                lives.set(scriptId, (life = new ScriptLife({ doc: document, onError: (e) => scriptLogUp(scriptId, "error", formatScriptError(name, e, "teardown")) })));
-            }
+                lives.set(
+                    scriptId,
+                    (life = new ScriptLife({
+                        doc: document,
+                        place,
+                        onError: (e) => scriptLogUp(scriptId, "error", formatScriptError(name, e, "teardown")),
+                        log: (level, msg) => scriptLogUp(scriptId, level, scriptLogLine(name, "onSite", msg)),
+                    }))
+                );
+            } else life.setPlace(place);
             // a repeated status recompiles but fires nothing: no new generation
             const gen = refire ? life.begin() : null;
             if (gen) gens.push([life, gen]);

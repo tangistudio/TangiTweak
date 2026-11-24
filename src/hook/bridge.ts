@@ -43,7 +43,7 @@ import { siteBuiltin } from "../shared/siteBuiltin";
 import { SITE_DOWN_KINDS, SITE_UP_KINDS, type SiteDown, type SiteUp } from "../shared/siteStoreHost";
 import { Exposer, RpcClient, isRpcCall, isRpcResult, NOT_RUNNING, RPC_QUEUE_MAX, TOP_FRAME_ONLY, type RpcCall, type RpcResult } from "../shared/rpc";
 import { inertRemote } from "../shared/remote";
-import { followsNav, type DocumentWhen, type PlaceApi, type RouteMeta } from "../shared/route";
+import { followsNav, type DocumentWhen, type PlaceApi, type RouteMeta, type ScriptLayers } from "../shared/route";
 import { checkUrl, NavRoutes, watchUrl } from "../shared/navRoutes";
 import { clipPathFor, normalizeRects } from "../shared/overlayRects";
 import { fromWireRequest, toWireResponse } from "../shared/ttFetch";
@@ -278,7 +278,7 @@ import type { RanApi } from "../shared/netTypes";
     // ---- onPage code in the isolated world: compiles the FULL script source
     // with a shim so top-level helpers/closures survive; the DOM is shared
     // with the page, window (page JS globals) is not ----
-    interface DocumentHandler { scriptId: string; name: string; src: string; params?: Record<string, any> }
+    interface DocumentHandler { scriptId: string; name: string; src: string; params?: Record<string, any>; layers?: ScriptLayers }
 
     /** page-world messages toward trusted code: dropped, logged (a few per page) */
     let droppedN = 0;
@@ -590,17 +590,21 @@ import type { RanApi } from "../shared/netTypes";
                 setParam: world === "isolated" && paramOwner ? (key, value, lib) => new Promise((r) => safeSend({ type: "scriptParamSet", scriptId: paramOwner, key, value, lib }, () => r())) : undefined,
                 fetch: world === "isolated" && scriptId ? (request, bypass) => l2call("iso.fetch", { url: location.href, request, bypass }, scriptId) : undefined,
             });
-        for (const h of handlers) {
+        for (const [order, h] of handlers.entries()) {
             let exposer = exposers.get(h.scriptId);
             if (!exposer) exposers.set(h.scriptId, (exposer = new Exposer()));
             else exposer.reset();
             let life = lives[world].get(h.scriptId);
-            if (!life) {
+            const place = { tweak: h.name, order, layers: h.layers };
+            if (life) life.setPlace(place);
+            else {
                 const id = h.scriptId;
                 life = new ScriptLife({
                     doc: document,
                     react: world === "isolated" ? () => reactDoms.get(id)!() : undefined,
+                    place,
                     onError: (e) => scriptLog(id, "error", formatScriptError(h.name, e, "teardown"), ctx),
+                    log: (level, msg) => scriptLog(id, level, scriptLogLine(h.name, what, msg), ctx),
                     // f.shortcut (MV2 onPage): keys pressed in that iframe
                     frameCtx: world === "isolated" ? (doc, signal) => ({ shortcut: (combo: string, fn: () => unknown, opts?: any) => pageKeys.add(id, combo, fn, opts, signal, doc.defaultView!) }) : undefined,
                 });

@@ -17,6 +17,7 @@
 import { AbortError } from "./rpc";
 import { hookSignature, notHot } from "./hotRefresh";
 import { HOST_ATTR, checkSelector, findElements, followIframes, type FrameEnd, type Watch, watch } from "./domElements";
+import { handlerLayer, layerRank, type Layer, type RouteMeta, type ScriptLayers } from "./route";
 
 export interface ReactDomClient {
     createRoot(el: Element): { render(node: unknown): void; unmount(): void };
@@ -42,7 +43,26 @@ export interface LifeOptions {
     frameCtx?: (doc: Document, signal: AbortSignal) => object;
     /** offer `ctx.iframes` (default true; the overlay has no page iframes to follow) */
     iframes?: boolean;
+    /** the script's place among the tweaks of this frame, for the order of `ctx.patch` chains (see {@link ScriptLife.setPlace}) */
+    place?: PatchPlace;
+    /** a line for the script's log (a patch chain shared with other tweaks) */
+    log?: (level: "info" | "debug", msg: string) => void;
+    /** the life whose `ctx.iframes` made this one: its place is this one's */
+    parent?: ScriptLife;
 }
+
+/** A script's place among the tweaks of a frame: orders its links in shared `ctx.patch` chains. */
+export interface PatchPlace {
+    /** the tweak's name, for log lines */
+    tweak: string;
+    /** its position in the script list (lower runs first, so its patches sit further in) */
+    order: number;
+    /** its explicit layers (user setting, package.json) */
+    layers?: ScriptLayers;
+}
+
+/** the parts of a handler's route that place its patches */
+export type PatchRoute = Pick<RouteMeta, "url" | "layer" | "index">;
 
 /** what a run adds to its handler's ctx */
 export interface RunCtx {
@@ -78,6 +98,8 @@ interface Gen extends Generation {
 
 interface Run {
     h: string;
+    /** the handler's route: the layer of its patches */
+    route?: PatchRoute;
     gen: Gen;
     ctl: AbortController;
     claims: Set<string>;
@@ -95,11 +117,129 @@ interface Owner {
     teardown(): void;
 }
 
-interface Trampoline {
-    fn: (...args: any[]) => any;
-    orig: (...args: any[]) => any;
-    impl: (...args: any[]) => any;
-    n: number;
+type AnyFn = (...args: any[]) => any;
+
+/**
+ * Every `ctx.patch` of one function in this frame, from every tweak: one
+ * replacement installed on the object, calling the links outermost first.
+ * Links sort by layer (base innermost, next to the original), then script
+ * list order, then registration order: a later one sits further out.
+ */
+interface Chain {
+    /** what the function was before the chain (the original, or the site's own wrapper) */
+    orig: AnyFn;
+    /** the installed replacement */
+    fn: AnyFn;
+    /** innermost first */
+    links: Link[];
+    /** the function, for log lines (`fetch`, `XMLHttpRequest.prototype.open`) */
+    label: string;
+    /** the last multi-tweak order logged */
+    logged?: string;
+}
+
+/** one handler's patch of one function: a link in its chain */
+interface Link {
+    chain: Chain;
+    life: ScriptLife;
+    /** what the handler's last run made of it */
+    impl: AnyFn;
+    /** the `orig` its wrap gets: whatever sits below it in the chain when called */
+    down: AnyFn;
+    route?: PatchRoute;
+    layer: Layer;
+    /** [layer rank, script order, route index] */
+    key: number[];
+    seq: number;
+}
+
+/** this frame's chains, by object and property (one registry for every tweak's ScriptLife) */
+const chains = new WeakMap<object, Map<PropertyKey, Chain>>();
+/** chains with links (a place change re-sorts them) */
+const liveChains = new Set<Chain>();
+let linkSeq = 0;
+let lifeSeq = 0;
+
+function cmpLinks(a: Link, b: Link): number {
+    for (let i = 0; i < a.key.length; i++) if (a.key[i] !== b.key[i]) return a.key[i] - b.key[i];
+    return a.seq - b.seq;
+}
+
+/** what a call to `l.down` reaches: the link below `l` (by sort order, also once `l` left), else the original */
+function below(l: Link): AnyFn {
+    let inner = l.chain.orig;
+    for (const x of l.chain.links) {
+        if (x === l) break;
+        if (cmpLinks(x, l) >= 0) break;
+        inner = x.impl;
+    }
+    return inner;
+}
+
+/** a forwarder over `orig`'s shape (statics, prototype, name) that calls `target()` */
+function forwarder(orig: AnyFn, target: () => AnyFn): AnyFn {
+    const f: AnyFn = new Proxy(orig, {
+        apply: (_t, thisArg, args) => Reflect.apply(target(), thisArg, args),
+        construct: (_t, args, newTarget) => {
+            const to = target();
+            return Reflect.construct(to, args, newTarget === f ? to : newTarget);
+        },
+    });
+    return f;
+}
+
+function labelOf(obj: any, name: string): string {
+    try {
+        if (obj === globalThis || obj.window === obj) return name;
+        if (typeof obj === "function" && obj.name) return `${obj.name}.${name}`;
+        const c = obj.constructor;
+        if (typeof c === "function" && c.prototype === obj && c.name) return `${c.name}.prototype.${name}`;
+    } catch {}
+    return name;
+}
+
+/** the chain installed at `obj[prop]`, or a new one over what is there (the site may have replaced an older chain) */
+function chainAt(obj: any, prop: PropertyKey, name: string): Chain {
+    let byProp = chains.get(obj);
+    const cur = byProp?.get(prop);
+    if (cur && obj[prop] === cur.fn) return cur;
+    const orig = obj[prop];
+    if (typeof orig !== "function") throw new TypeError(`ctx.patch: ${name} isn't a function`);
+    const c: Chain = { orig, fn: null as any, links: [], label: labelOf(obj, name) };
+    // a Proxy keeps static constants/methods (e.g. WebSocket.OPEN), prototype, instanceof, name and length intact
+    c.fn = forwarder(orig, () => (c.links.length ? c.links[c.links.length - 1].impl : c.orig));
+    obj[prop] = c.fn;
+    if (obj[prop] !== c.fn) throw new TypeError(`ctx.patch: ${name} can't be replaced (read-only)`);
+    if (!byProp) chains.set(obj, (byProp = new Map()));
+    byProp.set(prop, c);
+    return c;
+}
+
+/** `l`'s layer and sort key from its life's place and its route */
+function placeLink(l: Link): void {
+    const p = l.life.placeNow();
+    const layers = p?.layers;
+    l.layer = l.route ? handlerLayer(l.route, layers).layer : (layers?.user ?? layers?.pkg ?? "site");
+    l.key = [layerRank(l.layer), p ? p.order : l.life.seq, l.route?.index ?? -1];
+}
+
+/** sort `c` again; log its order when it holds patches from several tweaks and that order is new */
+function sortChain(c: Chain, log?: LifeOptions["log"]): void {
+    c.links.sort(cmpLinks);
+    const parts: { tweak: string; layer: Layer }[] = [];
+    for (const l of c.links) {
+        const tweak = l.life.placeNow()?.tweak;
+        if (!tweak) return;
+        const last = parts[parts.length - 1];
+        if (!last || last.tweak !== tweak || last.layer !== l.layer) parts.push({ tweak, layer: l.layer });
+    }
+    const n = new Set(parts.map((x) => x.tweak)).size;
+    if (n < 2) return;
+    const named = parts.map((x, i) => `[${x.tweak}] (layer "${x.layer}"${i === 0 ? ", innermost" : ""})`);
+    const msg = `${c.label} is patched by ${n} tweaks: ${named.length > 2 ? named.slice(0, -1).join(", ") + " then " + named[named.length - 1] : named.join(" then ")}`;
+    if (msg === c.logged) return;
+    c.logged = msg;
+    log?.("info", msg);
 }
 
 export type MountPosition = "inside-last" | "inside-first" | "before" | "after" | "overlay";
@@ -150,6 +290,8 @@ interface FrameSlot {
 /** a ctx.iframes key's owner: its fn in every matching same-origin iframe */
 interface IframesOwner extends Owner {
     fn: (f: IframeCtx) => unknown;
+    /** the route of the handler that called ctx.iframes: the layer of patches made in the iframes */
+    route?: PatchRoute;
     report: (e: unknown) => void;
     frames: Set<FrameSlot>;
     stop: () => void;
@@ -184,8 +326,11 @@ export class ScriptLife {
     private readonly current = new Map<string, Run>();
     private readonly gens = new Set<Gen>();
     private latest: Gen | null = null;
-    private readonly tramps = new WeakMap<object, Map<string, Trampoline>>();
-    private trampN = 0;
+    /** this script's links in the frame's patch chains, by object and (handler, property) */
+    private readonly links = new WeakMap<object, Map<string, Link>>();
+    private myPlace: PatchPlace | undefined;
+    /** orders the links of lives without a place: the one made first sits further in */
+    readonly seq = ++lifeSeq;
     /** ctx.style elements, mirrored into each mount's shadow root */
     private readonly styles = new Map<string, { css: string; els: Element[] }>();
     private readonly slots = new Set<Slot>();
@@ -196,7 +341,28 @@ export class ScriptLife {
     private nextTargetId = 0;
     private stopped = false;
 
-    constructor(private readonly o: LifeOptions) {}
+    constructor(private readonly o: LifeOptions) {
+        this.myPlace = o.place;
+    }
+
+    /** the script's place now (a `ctx.iframes` life: its parent's) */
+    placeNow(): PatchPlace | undefined {
+        return this.o.parent ? this.o.parent.placeNow() : this.myPlace;
+    }
+
+    /**
+     * The script moved in the list or its layers changed: its links move in
+     * every chain of the frame.
+     */
+    setPlace(place: PatchPlace): void {
+        const p = this.myPlace;
+        this.myPlace = place;
+        if (p && p.tweak === place.tweak && p.order === place.order && p.layers?.user === place.layers?.user && p.layers?.pkg === place.layers?.pkg) return;
+        for (const c of liveChains) {
+            for (const l of c.links) placeLink(l);
+            sortChain(c, this.o.log);
+        }
+    }
 
     /** a new compile; the previous one ends once none of its runs is alive */
     begin(): Generation {
@@ -223,7 +389,7 @@ export class ScriptLife {
      * for its async errors (aborts after the run ended are quiet). A sync
      * throw ends the new run alone and is rethrown.
      */
-    fire(gen: Generation, h: string, report: (e: unknown) => void, body: (ctx: RunCtx, report: (e: unknown) => void) => unknown): void {
+    fire(gen: Generation, h: string, report: (e: unknown) => void, body: (ctx: RunCtx, report: (e: unknown) => void) => unknown, route?: PatchRoute): void {
         const g = gen as Gen;
         // a handler scheduled by a generation that was replaced since
         if (g.ended || g !== this.latest) return;
@@ -231,7 +397,7 @@ export class ScriptLife {
         const quiet = (e: unknown) => {
             if (!(run.ctl.signal.aborted && isAbort(e))) report(e);
         };
-        const run: Run = { h, gen: g, ctl: new AbortController(), claims: new Set(), released: false, report: quiet };
+        const run: Run = { h, route, gen: g, ctl: new AbortController(), claims: new Set(), released: false, report: quiet };
         g.runs.add(run);
         let out: unknown;
         try {
@@ -388,39 +554,40 @@ export class ScriptLife {
         if (obj === null || (typeof obj !== "object" && typeof obj !== "function")) throw new TypeError("ctx.patch: the first argument must be an object");
         if (typeof wrap !== "function") throw new TypeError("ctx.patch: the third argument must be a function");
         const name = String(prop);
-        let byProp = this.tramps.get(obj);
-        if (!byProp) this.tramps.set(obj, (byProp = new Map()));
-        // one trampoline per (object, property, handler): two handlers patching the same function each get a layer
+        let byProp = this.links.get(obj);
+        if (!byProp) this.links.set(obj, (byProp = new Map()));
+        // one link per (object, property, handler): two handlers patching the same function each get one
         const tk = run.h + "\u0000" + (typeof prop === "symbol" ? prop.toString() : name);
-        let t = byProp.get(tk);
-        if (!t) {
-            const orig = obj[prop];
-            if (typeof orig !== "function") throw new TypeError(`ctx.patch: ${name} isn't a function`);
-            const tr: Trampoline = {
-                orig,
-                impl: orig,
-                n: ++this.trampN,
-                fn: null as any,
-            };
-            // Proxy keeps static constants/methods (e.g. WebSocket.OPEN), prototype, instanceof, name and length intact
-            tr.fn = new Proxy(orig, {
-                apply(_target, thisArg, args) {
-                    return Reflect.apply(tr.impl, thisArg, args);
-                },
-                construct(_target, args, newTarget) {
-                    return Reflect.construct(tr.impl, args, newTarget === tr.fn ? tr.impl : newTarget);
-                },
-            });
-            obj[prop] = tr.fn;
-            if (obj[prop] !== tr.fn) throw new TypeError(`ctx.patch: ${name} can't be replaced (read-only)`);
-            byProp.set(tk, (t = tr));
+        let l = byProp.get(tk);
+        if (!l) {
+            const chain = chainAt(obj, prop, name);
+            const link: Link = { chain, life: this, impl: chain.orig, down: null as any, layer: "site", key: [], seq: ++linkSeq };
+            link.down = forwarder(chain.orig, () => below(link));
+            byProp.set(tk, (l = link));
         }
-        const tr = t;
-        const impl = wrap(tr.orig);
+        const link = l;
+        const impl = wrap(link.down);
         if (typeof impl !== "function") throw new TypeError("ctx.patch: the wrapper must return a function");
-        // the trampoline stays installed (the site may hold it); unclaimed, it passes through
-        this.claim(run, "patch:" + tr.n, () => ({ claimers: new Set<Run>(), teardown: () => void (tr.impl = tr.orig) }));
-        tr.impl = impl;
+        // the chain stays installed (the site may hold it); with no links left, it calls the original
+        this.claim(run, "patch:" + link.seq, () => ({
+            claimers: new Set<Run>(),
+            teardown: () => {
+                const c = link.chain;
+                const i = c.links.indexOf(link);
+                if (i >= 0) c.links.splice(i, 1);
+                if (!c.links.length) liveChains.delete(c);
+            },
+        }));
+        link.impl = impl;
+        link.route = run.route;
+        const c = link.chain;
+        const key = link.key.join();
+        placeLink(link);
+        if (!c.links.includes(link)) {
+            c.links.push(link);
+            liveChains.add(c);
+        } else if (key === link.key.join()) return;
+        sortChain(c, this.o.log);
     }
 
     private style(run: Run, css: string): void {
@@ -545,6 +712,7 @@ export class ScriptLife {
             const m: IframesOwner = {
                 claimers: new Set<Run>(),
                 fn: fn as IframesOwner["fn"],
+                route: run.route,
                 report: run.report,
                 frames: new Set(),
                 stop: () => {},
@@ -554,7 +722,7 @@ export class ScriptLife {
                 this.o.doc,
                 { selector: sel, shadow },
                 ({ iframe, document: doc }) => {
-                    const s: FrameSlot = { el: iframe, doc, life: new ScriptLife({ doc, react: this.o.react, shadow: this.o.shadow, onError: this.o.onError, frameCtx: this.o.frameCtx }) };
+                    const s: FrameSlot = { el: iframe, doc, life: new ScriptLife({ doc, react: this.o.react, shadow: this.o.shadow, onError: this.o.onError, frameCtx: this.o.frameCtx, log: this.o.log, parent: this }) };
                     m.frames.add(s);
                     this.runFrame(m, s);
                     return (why: FrameEnd) => {
@@ -567,6 +735,7 @@ export class ScriptLife {
             return m;
         });
         owner.fn = fn as IframesOwner["fn"];
+        owner.route = run.route;
         owner.report = run.report;
         // a later run (a save) runs the new fn in every iframe; the iframes' mounts and claims carry over
         if (!fresh) for (const s of [...owner.frames]) this.runFrame(owner, s);
@@ -582,7 +751,7 @@ export class ScriptLife {
                 const out = m.fn({ ...this.o.frameCtx?.(doc, ctx.signal), ...ctx, iframe: s.el, document: doc, window: doc.defaultView! });
                 if (out && typeof (out as any).then === "function") (out as Promise<unknown>).then(undefined, report);
                 return out;
-            });
+            }, m.route);
         } catch (e) {
             // one iframe failing doesn't stop the others (its previous run is kept)
             m.report(e);
