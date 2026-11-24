@@ -369,7 +369,7 @@ export function createPipeline(
                 const strategy = effectiveStrategy(r);
                 if (isNetKind(r.kind) && WS_BLIND.has(strategy) && targetsWebSocket(r)) blind.push({ id: s.id, name: s.meta.name, route: r, strategy });
                 // onRequest: only "page" routes — the hook claims every request it handles, so an unclaimed one in a hook-less tab was missed
-                if (r.kind === "onResponseBody" || r.kind === "replaceResponse" || (r.kind === "onRequest" && strategy === "page")) next.push({ id: s.id, name: s.meta.name, route: r, strategy });
+                if (r.kind === "onResponseBody" || (r.kind === "onRequest" && strategy === "page")) next.push({ id: s.id, name: s.meta.name, route: r, strategy });
             }
         }
         bodyWatch = next;
@@ -1031,7 +1031,7 @@ export function createPipeline(
             const method = msg.method || "GET";
             // the bridge packs binary bodies (runtime messaging is JSON)
             const original = unpackBytes(msg.body);
-            // the response is in: its webRequest request has started (onRequest/replace ran before it, by URL)
+            // the response is in: its webRequest request has started (onRequest ran before it, by URL)
             const requestId = correlator.claim("page", method, msg.url, { tabId })?.requestId;
             pageStrategy.runTransform(msg.url, method, original || "", { status: msg.status, contentType: msg.contentType, requestId, requestBody: pageRequestBody(msg) }, tabId).then((body) => {
                 recordNetBody({ tabId, url: msg.url, method, original: original ?? "", modified: body, requestId });
@@ -1044,16 +1044,6 @@ export function createPipeline(
             noteBodySkip("page", msg.url, msg.why || "binary", msg.contentType || "", requestId);
             sendResponse({});
             return false;
-        }
-        if (msg && msg.type === "runReplace") {
-            const tabId = sender?.tab?.id ?? -1;
-            const method = msg.method || "GET";
-            pageStrategy.runReplace(msg.url, method, tabId, pageRequestBody(msg)).then((r) => {
-                reportSkipped(tabId, { url: msg.url, method, type: "xmlhttprequest" }, winnerOf(r, "page"));
-                if (r) recordNetBody({ tabId, url: msg.url, method, modified: r.content, mime: r.mime, status: 200 });
-                sendResponse(r || { content: null });
-            });
-            return true;
         }
         return false;
     });

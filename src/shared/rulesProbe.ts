@@ -107,7 +107,7 @@ function tokensToEmpty(r: ProbeResult | null | undefined, names: string[]): stri
 export async function probeHandler(fn: HandlerFn, route: RouteMeta, tab?: string): Promise<RuleProbe> {
     const kind = route.kind as RuleProbe["kind"];
     const base: RuleProbe = { kind, route, captures: [], urlRead: false };
-    if (kind === "onResponseBody" || kind === "replaceResponse") return base;
+    if (kind === "onResponseBody") return base;
     const groups = new Map<string, boolean>();
     try {
         for (const p of route.url) for (const g of patternGroups(p)) groups.set(g.name, (groups.get(g.name) ?? false) || g.optional);

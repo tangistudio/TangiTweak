@@ -82,7 +82,7 @@ export interface LintAnalysis {
 
 /** The rules over an ESTree AST and its eslint-scope ScopeManager. Self-contained: embedded in the ESLint plugin. */
 export function scriptLintCore(env: LintEnv) {
-    const NET = ["onRequest", "onResponseHeaders", "replaceResponse", "onResponseBody"];
+    const NET = ["onRequest", "onResponseHeaders", "onResponseBody"];
     const STORES = ["pageStore", "tabStore", "globalStore"];
     const HANDLES = ["onSite", "onPage", "onOverlay"];
     const CONSOLE = ["log", "info", "warn", "error", "debug", "trace", "table", "dir"];

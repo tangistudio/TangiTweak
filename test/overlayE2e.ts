@@ -160,8 +160,8 @@ const switchCode = (origin: string, label: string) => `import { tweak } from "ta
 
 const mock = tweak.globalStore("ovmock", { enabled: false });
 
-tweak.replaceResponse({ url: "${origin}/ov-me", strategy: "page" }, () =>
-    mock.enabled ? JSON.stringify({ name: "MOCKED" }) : undefined);
+tweak.onRequest({ url: "${origin}/ov-me", strategy: "page" }, () =>
+    mock.enabled ? { replaceResponse: { body: { name: "MOCKED" } } } : undefined);
 
 tweak.onOverlay("${origin}/ov-*", (ctx) => {
     const secret = "OV-SECRET-MARKER";
@@ -739,12 +739,12 @@ export async function checkOverlayPreview(ctx: any, mgr: any, origin: string, ch
 
 const twoTabCode = (origin: string) => `import { tweak } from "tangitweak"; const ps = tweak.pageStore({ n: 0 });
 
-tweak.replaceResponse({ url: "${origin}/ov-ps", strategy: "page" }, () => {
+tweak.onRequest({ url: "${origin}/ov-ps", strategy: "page" }, () => {
     try {
         ps.n++;
-        return String(ps.n);
+        return { replaceResponse: { body: String(ps.n) } };
     } catch (e) {
-        return "ERR: " + (e as Error).message;
+        return { replaceResponse: { body: "ERR: " + (e as Error).message } };
     }
 });
 
@@ -933,7 +933,7 @@ import { useSnapshot } from "valtio";
 const g = tweak.globalStore("isog", { n: 0 }, { persist: false });
 const ps = tweak.pageStore({ hits: 0 });
 
-tweak.replaceResponse({ url: "${origin}/ov-isops", strategy: "page" }, () => String(++ps.hits));
+tweak.onRequest({ url: "${origin}/ov-isops", strategy: "page" }, () => ({ replaceResponse: { body: String(++ps.hits) } }));
 
 tweak.onOverlay("${origin}/ov-isost*", () => {
     const out = document.body.appendChild(document.createElement("output"));
@@ -1372,7 +1372,7 @@ export async function checkHotReload(ctx: any, mgr: any, origin: string, check: 
 export async function checkEarlyRequests(ctx: any, mgr: any, origin: string, check: Check, opts: { label?: string } = {}): Promise<void> {
     const t = (s: string) => `early requests${opts.label ?? ""}: ${s}`;
     const send = (msg: any): Promise<any> => mgr.evaluate((m: any) => new Promise((r) => chrome.runtime.sendMessage(m, (x: any) => r(x ?? null))), msg);
-    const code = `import { tweak } from "tangitweak"; tweak.replaceResponse({ url: "${origin}/early-data*", strategy: "page" }, (ctx) => "MOD:" + new URL(ctx.url).searchParams.get("via"));\n`;
+    const code = `import { tweak } from "tangitweak"; tweak.onRequest({ url: "${origin}/early-data*", strategy: "page" }, (ctx) => ({ replaceResponse: { body: "MOD:" + new URL(ctx.url).searchParams.get("via") } }));\n`;
     const saved = await saveTweak(send, "s_early", "early", code);
     check(t("the script saves"), !saved?.error, saved?.error);
     await mgr.waitForTimeout(800);

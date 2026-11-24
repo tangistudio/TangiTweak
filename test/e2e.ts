@@ -150,8 +150,8 @@ const SCRIPTS: Record<string, SampleScript> = {
     cancel: { id: "s_cancel", name: "cancel blocked.js", code: `import { tweak } from "tangitweak"; tweak.onRequest({ url: "${ORIGIN}/blocked.js", strategy: "extension" }, () => ({ block: true }));` },
     reqHeaders: { id: "s_reqheaders", name: "request header", code: `import { tweak } from "tangitweak"; tweak.onRequest({ url: "${ORIGIN}/echo-headers", strategy: "extension" }, () => ({ headers: { set: { "x-resso": "injected" } } }));` },
     resHeaders: { id: "s_resheaders", name: "response header", code: `import { tweak } from "tangitweak"; tweak.onResponseHeaders({ url: "${ORIGIN}/api", strategy: "extension" }, () => ({ headers: { set: { "x-mock-header": "hello" } } }));` },
-    replaceMain: { id: "s_replacemain", name: "replace main frame", code: `import { tweak } from "tangitweak"; tweak.replaceResponse({ url: "${ORIGIN}/serve-me", strategy: "debugger" }, () => "<html><body><h1>SERVE-PAGE-WORKS</h1></body></html>");` },
-    replaceFetch: { id: "s_replacefetch", name: "replace fetch body", code: `import { tweak } from "tangitweak"; tweak.replaceResponse({ url: "${ORIGIN}/api-replace", strategy: "page" }, () => JSON.stringify({ value: "REPLACED-BY-HOOK" }));` },
+    replaceMain: { id: "s_replacemain", name: "replace main frame", code: `import { tweak } from "tangitweak"; tweak.onRequest({ url: "${ORIGIN}/serve-me", strategy: "debugger" }, () => ({ replaceResponse: { body: "<html><body><h1>SERVE-PAGE-WORKS</h1></body></html>" } }));` },
+    replaceFetch: { id: "s_replacefetch", name: "replace fetch body", code: `import { tweak } from "tangitweak"; tweak.onRequest({ url: "${ORIGIN}/api-replace", strategy: "page" }, () => ({ replaceResponse: { body: { value: "REPLACED-BY-HOOK" } } }));` },
     modifyTierA: { id: "s_modifya", name: "modify response (hook tier)", code: `import { tweak } from "tangitweak"; tweak.onResponseBody({ url: "${ORIGIN}/api", strategy: "page" }, (ctx, body) => body.replace("original-value", "TIERA-VALUE"));` },
     modifyCdp: { id: "s_modifycdp", name: "modify response (cdp tier)", code: `import { tweak } from "tangitweak"; tweak.onResponseBody({ url: "${ORIGIN}/app.js", strategy: "debugger" }, (ctx, body) => body.replace("ORIGINAL-MARKER", "CDP-MARKER"));` },
     badgeProbe: { id: "s_badge", name: "badge probe", code: `import { tweak } from "tangitweak"; tweak.onRequest({ url: "${ORIGIN}/page-fetch*", strategy: "page" }, () => {});` },
@@ -199,7 +199,7 @@ const p1b = await newPage("/html");
 check("matcher: negative (no redirect on /html)", (await p1b.content()).includes("ORIGINAL TITLE"));
 await p1b.close();
 
-// ---------- 2. replaceResponse on main frame ----------
+// ---------- 2. an onRequest mock on the main frame ----------
 // strategy "debugger": the debugger tier fulfills it in place — no
 // redirect, the address bar keeps the page URL
 const p2 = await ctx.newPage();
@@ -210,7 +210,7 @@ await p2.waitForTimeout(300);
 check("replaceResponse: main frame in place (cdp → debugger tier, URL kept)", (await p2.content()).includes("SERVE-PAGE-WORKS") && p2.url() === `${ORIGIN}/serve-me`, `url=${p2.url()}`);
 await p2.close();
 // "extension" listed first: Chromium's webRequest can only redirect — page loads go to serve.html
-await saveScript("s_replaceserve", `import { tweak } from "tangitweak"; tweak.replaceResponse({ url: "${ORIGIN}/serve-wr", strategy: "extension" }, () => "<html><body><h1>SERVE-PAGE-WORKS</h1></body></html>");`, "replace via serve page");
+await saveScript("s_replaceserve", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "${ORIGIN}/serve-wr", strategy: "extension" }, () => ({ replaceResponse: { body: "<html><body><h1>SERVE-PAGE-WORKS</h1></body></html>" } }));`, "replace via serve page");
 await new Promise((r) => setTimeout(r, 600));
 const p2b = await newPage("/serve-wr");
 check("replaceResponse: webrequest-first main frame via serve page (redirect)", (await p2b.content()).includes("SERVE-PAGE-WORKS") && p2b.url().includes("/serve.html"), `url=${p2b.url()}`);
@@ -361,7 +361,7 @@ const r4 = await p4.evaluate(() => document.body.innerText.trim());
 check("onResponseBody: XHR (tier A hook)", r4.includes("TIERA-VALUE"), r4);
 await p4.close();
 
-// ---------- 5. replaceResponse via hook short-circuit (fetch) ----------
+// ---------- 5. an onRequest mock via hook short-circuit (fetch) ----------
 const p5 = await ctx.newPage();
 await p5.goto(`${ORIGIN}/html`, { waitUntil: "domcontentloaded" });
 await p5.reload({ waitUntil: "domcontentloaded" }); // warm → hook patched before fetching
@@ -378,10 +378,10 @@ await saveScript(
     "s_storefetch",
     `import { tweak } from "tangitweak"; const st = tweak.globalStore("st", { n: 0 }, { persist: false });
 tweak.onRequest({ url: "${ORIGIN}/byp", strategy: "extension" }, () => { st.n++; return { redirect: "${ORIGIN}/redirected" }; });
-tweak.replaceResponse({ url: "${ORIGIN}/byp-data", strategy: "page" }, async () => {
+tweak.onRequest({ url: "${ORIGIN}/byp-data", strategy: "page" }, async () => {
     const real = await (await tweak.fetch("${ORIGIN}/byp", { bypass: true })).text();
     const mocked = await (await tweak.fetch("${ORIGIN}/byp")).text();
-    return JSON.stringify({ real, mocked: mocked.includes("REDIRECTED-OK"), n: st.n });
+    return { replaceResponse: { body: { real, mocked: mocked.includes("REDIRECTED-OK"), n: st.n } } };
 });`,
     "store + fetch"
 );
@@ -405,9 +405,9 @@ await setEnabled("s_storefetch", false);
 // the hook asks the bridge whether the call still runs instead of giving up after 15 s
 await saveScript(
     "s_slow",
-    `import { tweak } from "tangitweak"; tweak.replaceResponse({ url: "${ORIGIN}/slow-data", strategy: "page" }, async () => {
+    `import { tweak } from "tangitweak"; tweak.onRequest({ url: "${ORIGIN}/slow-data", strategy: "page" }, async () => {
     await new Promise((r) => setTimeout(r, 22000));
-    return "SLOW-REPLACED";
+    return { replaceResponse: { body: "SLOW-REPLACED" } };
 });`,
     "slow handler"
 );
@@ -565,7 +565,7 @@ check("logs: no [Untitled script] anywhere", !logText10b.includes("[Untitled scr
 await p10b.close();
 
 // ---------- 10c. strategy ["debugger"] replaceResponse on a page load: in place, URL kept ----------
-await saveScript("s_cdpreplace", `import { tweak } from "tangitweak"; tweak.replaceResponse({ url: "${ORIGIN}/cdp-replace", strategy: "debugger" }, () => "<html><body><h1>CDP-REPLACED</h1></body></html>");`, "cdp replace page");
+await saveScript("s_cdpreplace", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "${ORIGIN}/cdp-replace", strategy: "debugger" }, () => ({ replaceResponse: { body: "<html><body><h1>CDP-REPLACED</h1></body></html>" } }));`, "cdp replace page");
 await new Promise((r) => setTimeout(r, 600));
 const p10c = await ctx.newPage();
 await p10c.goto(`${ORIGIN}/cdp-replace`, { waitUntil: "domcontentloaded", timeout: 15000 }).catch(() => {}); // warm-up: attaches the debugger
@@ -578,7 +578,7 @@ check("replaceResponse [\"cdp\"]: page body replaced in place", body10c.includes
 await p10c.close();
 await new Promise((r) => setTimeout(r, 400));
 const log10c: string[] = await mgr.evaluate(() => [...document.querySelectorAll("#log-entries .log-line")].map((l) => (l as HTMLElement).dataset.text || l.textContent || ""));
-const replLines10c = log10c.filter((l) => l.includes("[cdp replace page/index] replaceResponse →") && l.includes("/cdp-replace"));
+const replLines10c = log10c.filter((l) => l.includes("[cdp replace page/index] onRequest → replaceResponse") && l.includes("/cdp-replace"));
 check("replaceResponse [\"cdp\"]: handler ran once per load (one log line per load, no serve.html)", replLines10c.length >= 1 && replLines10c.length <= 2 && !log10c.some((l) => l.includes("/cdp-replace") && l.includes("serve.html")), JSON.stringify(replLines10c));
 
 // ---------- 10d. "never ran" warnings: a hook route hit by a page load (per request), and a webrequest onResponseBody on Chromium (up front) ----------

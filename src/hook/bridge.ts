@@ -223,7 +223,7 @@ import type { RanApi } from "../shared/netTypes";
             return;
         }
         if (data.kind === "call") {
-            const bgType = data.op === "replace" ? "runReplace" : data.op === "respond" ? "runRequestDecision" : "runTransform";
+            const bgType = data.op === "respond" ? "runRequestDecision" : "runTransform";
             // runtime messaging is JSON: binary bodies travel as base64 both ways
             hookCalls.add(data.reqId);
             safeSend(

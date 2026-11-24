@@ -41,6 +41,11 @@ export function tweakRequire(host: TweakHost | undefined, file: string, require:
     };
 }
 
+/** `tweak.replaceResponse`, which is gone: calling it throws with the rewrite. */
+export function removedReplaceResponse(): never {
+    throw new Error("tweak.replaceResponse was removed: use tweak.onRequest(route, () => ({ replaceResponse: { body } }))");
+}
+
 export const STORE_ID = /^[a-z0-9_-][a-z0-9._-]*$/;
 
 /** `tweak.globalStore`'s id: it becomes a file name */

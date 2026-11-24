@@ -33,13 +33,13 @@ export type Strategy = "page" | "extension" | "debugger" | "helper" | "rules";
 export const STRATEGIES: Strategy[] = ["helper", "page", "extension", "debugger", "rules"];
 
 /** Kind of a network handler: the tweak API that registered it. A strategy runs it. */
-export type NetKind = "onRequest" | "onResponseHeaders" | "replaceResponse" | "onResponseBody";
+export type NetKind = "onRequest" | "onResponseHeaders" | "onResponseBody";
 /** Kind of a page handler (`"onDocument"`: tweak.onSite, tweak.onPage) or an overlay handler (`"onOverlay"`: tweak.onOverlay). */
 export type DocKind = "onDocument" | "onOverlay";
 /** Kind of any handler a route belongs to: network ({@link NetKind}) or page/overlay ({@link DocKind}). */
 export type RouteKind = NetKind | DocKind;
 /** Every {@link NetKind}. */
-export const NET_KINDS: NetKind[] = ["onRequest", "onResponseHeaders", "replaceResponse", "onResponseBody"];
+export const NET_KINDS: NetKind[] = ["onRequest", "onResponseHeaders", "onResponseBody"];
 
 /** Whether `kind` is a network handler's kind (one that a strategy runs), not a page/overlay one. */
 export const isNetKind = (kind: RouteKind): kind is NetKind => kind !== "onDocument" && kind !== "onOverlay";

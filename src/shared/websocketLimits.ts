@@ -33,9 +33,9 @@ export function wsUnseen(scriptName: string, label: string, strategy: Strategy, 
     return `[${scriptName}] ${label} didn't run for WebSocket ${url}: the "${strategy}" strategy never sees WebSocket handshakes. Use the "rules", "extension" or "helper" strategy on the route to block it or change its request headers (no strategy can redirect a WebSocket).`;
 }
 
-/** replaceResponse / onResponseBody limited to WebSockets: there's never a body (Problems view) */
+/** onResponseBody limited to WebSockets: there's never a body (Problems view) */
 export function wsRouteProblem(r: Pick<RouteMeta, "kind" | "resourceTypes">): string | null {
-    if (r.kind !== "replaceResponse" && r.kind !== "onResponseBody") return null;
+    if (r.kind !== "onResponseBody") return null;
     if (!r.resourceTypes?.length || !r.resourceTypes.every((t) => t === "websocket")) return null;
     return `${r.kind} never runs on a WebSocket — its handshake has no body to read or replace, and the messages after it aren't HTTP. ${WORKS}`;
 }

@@ -96,7 +96,7 @@ describe("route binary option", () => {
         expect(normalizeRoute("onResponseBody", { url: "*", binary: "both", strategy: "helper" }, 0).binary).toBe("both");
         expect(normalizeRoute("onResponseBody", { url: "*", strategy: "helper" }, 0).binary).toBeUndefined();
         expect(() => normalizeRoute("onResponseBody", { url: "*", binary: "yes", strategy: "helper" }, 0)).toThrow(/binary must be true, false or "both", got "yes"/);
-        for (const k of ["onRequest", "onResponseHeaders", "replaceResponse"] as const) {
+        for (const k of ["onRequest", "onResponseHeaders"] as const) {
             expect(() => normalizeRoute(k, { url: "*", binary: true, strategy: "helper" }, 0)).toThrow(/onResponseBody only/);
         }
         expect(() => normalizeRoute("onDocument", { url: "*", binary: true }, 0)).toThrow();

@@ -1,18 +1,21 @@
 /**
  * Blocking-webRequest strategy: Firefox and MV2-capable Chromium browsers
  * (ungoogled-chromium, Brave, Opera…). Redirect/block, request/response
- * headers and synchronous replaceResponse (handler or onRequest result) work everywhere with no
- * debugger involvement.
+ * headers and a synchronous onRequest `replaceResponse` result work
+ * everywhere with no debugger involvement.
  *
  * Runs only handler routes whose strategy is "extension".
  *
- * How a replacement (a replaceResponse handler, or the onRequest `replaceResponse` result) is served:
+ * How a replacement (the onRequest `replaceResponse` result) is served:
  * - Firefox: in place — the request proceeds and filterResponseData swaps
- *   the body, so the URL is kept (the upstream status code is, too).
+ *   the body, so the URL is kept (the upstream status code is, too). The
+ *   mock goes through onResponseHeaders and onResponseBody first, with
+ *   `ctx.replacedBy` set.
  * - Chromium: webRequest can't touch bodies, so the only way is a redirect —
  *   to a data: URL, or for page loads to the extension's serve.html (the
  *   address bar shows the extension URL and the page loses its origin).
- *   Neither can carry a status: non-200 replacements aren't served here.
+ *   Neither can carry a status: non-200 replacements aren't served here,
+ *   and this layer's response handlers never see the mock.
  *
  * Response-body streaming (onResponseBody via filterResponseData) and
  * awaiting async handlers are Firefox-only. MV3 has no blocking webRequest
@@ -34,7 +37,8 @@ import { dlogLevel } from "../../../shared/debugLog";
 import { IS_FIREFOX } from "./helperState";
 import { wsNotApplied } from "../../../shared/websocketLimits";
 import { compileMv2, ownsAny } from "./strategyScripts";
-import { HeaderStack, mergeHeaderEdits, mixedResultLine, overrideLine, singleRequestResult, type Who, type Winner } from "../../../shared/precedence";
+import { HeaderStack, mergeHeaderEdits, mixedResultLine, mockFlowLine, overrideLine, overruledLine, singleRequestResult, type ReplacedBy, type RequestDecision, type Who, type Winner } from "../../../shared/precedence";
+import { editPairs, editRecord, replacementBody } from "../../../shared/bodyOps";
 import { makeMissedThrottle } from "../../../shared/missedTap";
 import { reportSkipped } from "../skipped";
 import { requestBodyCtx, requestBodyFromWebRequest, type RequestBody } from "../../../shared/requestBody";
@@ -43,7 +47,7 @@ import { requestBodyCtx, requestBodyFromWebRequest, type RequestBody } from "../
 const pageOf = (d: { tabId: number; type?: string; requestId: string; frameId?: number }) => pages.forRequest({ tabId: d.tabId, type: d.type, requestId: d.requestId, frameId: d.frameId, documentId: (d as any).documentId, documentLifecycle: (d as any).documentLifecycle });
 const tabOf = (d: { tabId: number }) => (typeof d.tabId === "number" && d.tabId >= 0 ? tabScope(d.tabId) : null);
 
-type Kind = "onRequest" | "onResponseHeaders" | "replaceResponse" | "onResponseBody";
+type Kind = "onRequest" | "onResponseHeaders" | "onResponseBody";
 
 /** a script's webrequest-owned handlers (each with its route) */
 interface Entry {
@@ -52,7 +56,15 @@ interface Entry {
     handlers: Record<Kind, Routed[]>;
 }
 
-const KINDS: Kind[] = ["onRequest", "onResponseHeaders", "replaceResponse", "onResponseBody"];
+const KINDS: Kind[] = ["onRequest", "onResponseHeaders", "onResponseBody"];
+
+/** what the onRequest handlers so far made of a request */
+interface RequestState {
+    /** the request headers with the earlier handlers' edits */
+    headers: Record<string, string>;
+    /** the last decision, or null (none, or an `allow` undid it) */
+    decision: { who: Who & { outcome: RequestDecision }; entry: Entry; h: Routed; result: any } | null;
+}
 
 export class ExtensionStrategy implements InterceptionStrategy {
     readonly name = "extension";
@@ -97,43 +109,26 @@ export class ExtensionStrategy implements InterceptionStrategy {
     }
 
     /**
-     * Same order as every strategy (precedence.ts): every script's onRequest,
-     * then every replaceResponse; the first final result ends it. Firefox
-     * awaits async handlers in place and carries on with the rest.
+     * Same order as every strategy (precedence.ts): every script's onRequest
+     * runs and the last decision wins. Firefox awaits async handlers in
+     * place and carries on with the rest.
      */
     handleBeforeRequest(details: WebRequestDetailsLike, tabUrl: string | null): MaybePromise<HookDisposition> {
         const matched = this.entries.filter((e) => KINDS.some((k) => this.hits(e, k, details).length));
         if (!matched.length) return { kind: "allow" };
         rememberRequestBody(details);
         trace(details, `onBeforeRequest ${details.type} ${details.method} ${details.url} (tab url: ${tabUrl ?? "unknown"}) → scripts: ${matched.map((m) => `"${m.name}"`).join(", ")}`);
-        const steps: { entry: Entry; h: Routed; kind: "onRequest" | "replaceResponse" }[] = [];
-        for (const kind of ["onRequest", "replaceResponse"] as const) {
-            for (const entry of matched) for (const h of this.hits(entry, kind, details)) steps.push({ entry, h, kind });
-        }
-        const finish = (): HookDisposition => {
-            // Firefox: stream via filterResponseData at onHeadersReceived time;
-            // here we only mark the request so the header-phase hook wires the filter.
-            // (Chromium can't read bodies here — the pipeline warns at load.)
-            if (IS_FIREFOX) {
-                for (const entry of matched) {
-                    const transforms = this.hits(entry, "onResponseBody", details);
-                    if (!transforms.length) continue;
-                    const list = pendingFirefoxStreams.get(details.requestId)?.list ?? [];
-                    list.push({ id: entry.id, name: entry.name, handlers: transforms });
-                    pendingFirefoxStreams.set(details.requestId, { list, tabUrl });
-                }
-            }
-            trace(details, `onBeforeRequest ${details.url} → allow (no final decision)`);
-            return { kind: "allow" };
-        };
+        const steps: { entry: Entry; h: Routed }[] = [];
+        for (const entry of matched) for (const h of this.hits(entry, "onRequest", details)) steps.push({ entry, h });
+        const state: RequestState = { headers: makeCtx(details, tabUrl).requestHeaders, decision: null };
         const run = (i: number): MaybePromise<HookDisposition> => {
             for (; i < steps.length; i++) {
                 const step = steps[i];
                 let result: any;
                 try {
-                    result = withPage(pageOf(details), () => step.h.fn(ctxFor(details, tabUrl, step.h.route)), tabOf(details));
+                    result = withPage(pageOf(details), () => step.h.fn({ ...ctxFor(details, tabUrl, step.h.route), requestHeaders: { ...state.headers } }), tabOf(details));
                 } catch (e: any) {
-                    scriptError(step.entry.id, formatScriptError(step.entry.name, e, step.kind));
+                    scriptError(step.entry.id, formatScriptError(step.entry.name, e, "onRequest"));
                     continue;
                 }
                 if (isThenable(result)) {
@@ -145,70 +140,115 @@ export class ExtensionStrategy implements InterceptionStrategy {
                     // Firefox blocking listeners accept promises natively
                     const next = i + 1;
                     return Promise.resolve(result).then(
-                        (r) => this.decide(details, step, r) ?? run(next),
+                        (r) => (this.decide(details, step, r, state), run(next)),
                         (e: any) => {
-                            scriptError(step.entry.id, formatScriptError(step.entry.name, e, step.kind));
+                            scriptError(step.entry.id, formatScriptError(step.entry.name, e, "onRequest"));
                             return run(next);
                         }
                     );
                 }
-                const d = this.decide(details, step, result);
-                if (d) return d;
+                this.decide(details, step, result, state);
             }
-            return finish();
+            return this.finish(details, tabUrl, matched, state);
         };
         return run(0);
     }
 
-    /** one handler's result: a final disposition, or null to carry on */
-    private decide(details: WebRequestDetailsLike, step: { entry: Entry; h: Routed; kind: "onRequest" | "replaceResponse" }, result: any): HookDisposition | null {
-        const { entry, h } = step;
-        const who: Who = { scriptId: entry.id, scriptName: entry.name, kind: step.kind, index: h.route.index };
-        const final = (d: HookDisposition, outcome: Winner["outcome"], target?: string): HookDisposition => {
-            // not served (e.g. a non-200 replacement on webRequest): nothing took priority
-            if (d.kind !== "allow" || pendingFirefoxReplace.has(details.requestId)) {
-                reportSkipped(details.tabId, { url: details.url, method: details.method, type: details.type }, { ...who, strategy: "extension", outcome, target }, details.requestId);
-            }
-            return d;
-        };
-        if (step.kind === "replaceResponse") {
-            if (result === undefined || result === null) {
-                logObserved(details.tabId, entry.name, "replaceResponse", details.url, entry.id, details.requestId);
-                return null;
-            }
-            const d = this.replace(details, result, entry.id, entry.name);
-            return d.kind === "allow" && !pendingFirefoxReplace.has(details.requestId) ? null : final(d, "replace");
+    /** Firefox: mark the request so the header-phase hook wires the onResponseBody stream filter */
+    private queueStreams(details: WebRequestDetailsLike, tabUrl: string | null, matched: Entry[]): void {
+        // (Chromium can't read bodies here — the pipeline warns at load.)
+        if (!IS_FIREFOX) return;
+        for (const entry of matched) {
+            const transforms = this.hits(entry, "onResponseBody", details);
+            if (!transforms.length) continue;
+            const list = pendingFirefoxStreams.get(details.requestId)?.list ?? [];
+            list.push({ id: entry.id, name: entry.name, handlers: transforms });
+            pendingFirefoxStreams.set(details.requestId, { list, tabUrl });
         }
+    }
+
+    /** the last decision, served */
+    private finish(details: WebRequestDetailsLike, tabUrl: string | null, matched: Entry[], state: RequestState): HookDisposition {
+        const d = state.decision;
+        const req = { url: details.url, method: details.method, type: details.type };
+        if (!d) {
+            this.queueStreams(details, tabUrl, matched);
+            trace(details, `onBeforeRequest ${details.url} → allow (no final decision)`);
+            return { kind: "allow" };
+        }
+        const w: Winner = { ...d.who, strategy: "extension", outcome: d.who.outcome as Winner["outcome"], target: d.who.outcome === "redirect" ? d.result.redirect : undefined };
+        if (d.who.outcome !== "replace") {
+            reportSkipped(details.tabId, req, w, details.requestId);
+            return normalize(d.result);
+        }
+        const rep = d.result.replaceResponse;
+        const status = rep.status ?? 200;
+        if (status !== 200) {
+            log(details.tabId, `[${d.entry.name}] onRequest → replaceResponse ${status} not served: webRequest can't set a response status (only 200). Set strategy: "debugger" or "helper" on this route ${details.url}`, "warn", d.entry.id, undefined, undefined, details.requestId);
+            this.queueStreams(details, tabUrl, matched);
+            return { kind: "allow" };
+        }
+        const { mime, content } = replacementContent(details, rep);
+        const by: ReplacedBy = { tweak: d.entry.name, handler: routeLabel(d.h.route) };
+        if (IS_FIREFOX) {
+            this.queueStreams(details, tabUrl, matched);
+            pendingFirefoxReplace.set(details.requestId, { content, mime, headers: rep.headers?.set, scriptId: d.entry.id, scriptName: d.entry.name, by });
+            reportSkipped(details.tabId, req, w, details.requestId);
+            return { kind: "allow" };
+        }
+        if (details.type === "websocket") {
+            log(details.tabId, `[${d.entry.name}] onRequest → ${wsNotApplied("replaceResponse", "extension", details.url)}`, "warn", d.entry.id, undefined, undefined, details.requestId);
+            return { kind: "allow" };
+        }
+        reportSkipped(details.tabId, req, w, details.requestId, { mockFlows: false });
+        return this.redirectServe(details, content, mime);
+    }
+
+    /** one handler's result: updates the decision and the request header edits */
+    private decide(details: WebRequestDetailsLike, step: { entry: Entry; h: Routed }, result: any, state: RequestState): void {
+        const { entry, h } = step;
+        const who: Who = { scriptId: entry.id, scriptName: entry.name, kind: "onRequest", index: h.route.index };
         const single = singleRequestResult(result);
         if (single.dropped.length && overrideThrottle(`mixed|${entry.id}|${h.route.index}`)) {
             log(details.tabId, mixedResultLine(entry.name, routeLabel(h.route), single.kept!, single.dropped, details.url), "warn", entry.id, undefined, undefined, details.requestId);
         }
         result = single.result;
-        const hasHeaders = !!(result && result.headers && (result.headers.set || result.headers.remove));
-        if (hasHeaders) {
-            log(details.tabId, `[${entry.name}] onRequest → request headers (${describeHeaderMods(result.headers)}) ${details.url}`, "info", entry.id, undefined, undefined, details.requestId);
+        const say = (msg: string) => log(details.tabId, `[${entry.name}] onRequest → ${msg}`, "info", entry.id, undefined, undefined, details.requestId);
+        if (result && result.redirect && !result.block && details.type === "websocket" && !IS_FIREFOX) {
+            log(details.tabId, `[${entry.name}] onRequest → ${wsNotApplied("redirect", "extension", details.url, result.redirect)}`, "warn", entry.id, undefined, undefined, details.requestId);
+            return;
+        }
+        const outcome: RequestDecision | null = !result ? null : result.replaceResponse ? "replace" : result.redirect ? "redirect" : result.block === true ? "block" : result.allow === true ? "allow" : null;
+        if (outcome) {
+            if (outcome === "replace") {
+                const rep = result.replaceResponse;
+                const { mime, content } = replacementContent(details, rep);
+                say(`replaceResponse ${rep.status ?? 200} ${mime} (${content.length}b) ${details.url}`);
+            } else if (outcome === "redirect") say(`redirect ${details.url} → ${result.redirect}`);
+            else if (outcome === "block") say(`block ${details.url}`);
+            else if (state.decision) say(`allow ${details.url}`);
+            else logObserved(details.tabId, entry.name, "onRequest", details.url, entry.id, details.requestId);
+            const next = { who: { ...who, outcome }, entry, h, result };
+            const o = state.decision?.who;
+            if (o && overrideThrottle(`over|${o.scriptId}|${o.index}|${entry.id}|${h.route.index}`)) {
+                log(details.tabId, overruledLine(o, next.who, details.url), "warn", o.scriptId, undefined, undefined, details.requestId);
+            }
+            state.decision = outcome === "allow" ? null : next;
+            return;
+        }
+        if (result && result.headers && (result.headers.set || result.headers.remove)) {
+            say(`request headers (${describeHeaderMods(result.headers)}) ${details.url}`);
             // cached so onBeforeSendHeaders doesn't re-run the handler; the later handler wins per header
             const stack = pendingRequestHeaderMods.get(details.requestId) ?? new HeaderStack();
             for (const o of stack.add(result.headers, who)) {
                 if (overrideThrottle(`${o.header}|${o.by.scriptId}|${o.by.index}|${o.over.scriptId}|${o.over.index}`)) log(details.tabId, overrideLine(o, "request", details.url), "warn", entry.id, undefined, undefined, details.requestId);
             }
             pendingRequestHeaderMods.set(details.requestId, stack);
-        }
-        if (result && result.replaceResponse) {
-            const d = this.replaceFromRequest(details, result.replaceResponse, entry);
-            return d.kind === "allow" && !pendingFirefoxReplace.has(details.requestId) ? null : final(d, "replace");
-        }
-        if (result && result.redirect && !result.block && details.type === "websocket" && !IS_FIREFOX) {
-            log(details.tabId, `[${entry.name}] onRequest → ${wsNotApplied("redirect", "extension", details.url, result.redirect)}`, "warn", entry.id, undefined, undefined, details.requestId);
-            return null;
-        }
-        if (result && (result.redirect || result.block)) {
-            log(details.tabId, `[${entry.name}] onRequest → ${result.block ? `block ${details.url}` : `redirect ${details.url} → ${result.redirect}`}`, "info", entry.id, undefined, undefined, details.requestId);
-            return final(normalize(result), result.block ? "block" : "redirect", result.block ? undefined : result.redirect);
+            state.headers = editRecord(state.headers, result.headers);
+            return;
         }
         trace(details, `[${entry.name}] onRequest returned ${describeResult(result)} (no redirect/block/replaceResponse) for ${details.url}`);
-        if (!hasHeaders) logObserved(details.tabId, entry.name, "onRequest", details.url, entry.id, details.requestId);
-        return null;
+        logObserved(details.tabId, entry.name, "onRequest", details.url, entry.id, details.requestId);
     }
 
     handleBeforeSendHeaders(details: WebRequestDetailsLike, _tabUrl: string | null): MaybePromise<HeaderChanges | null> {
@@ -218,18 +258,27 @@ export class ExtensionStrategy implements InterceptionStrategy {
     }
 
     handleHeadersReceived(details: WebRequestDetailsLike, tabUrl: string | null): MaybePromise<HeaderChanges | null> {
-        // Firefox in-place replacement: swap the body, fix the headers to match
+        const pending = pendingFirefoxStreams.get(details.requestId);
+        // Firefox in-place replacement: the mock goes through the response handlers, then replaces the body
         const rep = pendingFirefoxReplace.get(details.requestId);
         if (rep && IS_FIREFOX && !isRedirectStatus(details.statusCode)) {
-            // a replacement is final: no onResponseHeaders/onResponseBody on it
             pendingFirefoxReplace.delete(details.requestId);
             pendingFirefoxStreams.delete(details.requestId);
-            this.wireFirefoxReplace(details, rep);
-            return mergeReplacementHeaders(null, replacementHeaders(rep.mime, rep.content));
+            const own = rep.headers ? { set: rep.headers } : undefined;
+            const mockHeaders = editPairs([{ name: "Content-Type", value: rep.mime }], own || {});
+            const mock = { ...details, statusCode: 200, statusLine: "HTTP/1.1 200 OK", responseHeaders: mockHeaders };
+            const serve = (changes: HeaderChanges | null): HeaderChanges => {
+                const all = own ? mergeHeaderEdits(own, changes || {}) : changes;
+                const ct = Object.entries(all?.set || {}).find(([n]) => n.toLowerCase() === "content-type")?.[1];
+                const mime = ct ?? rep.mime;
+                this.wireFirefoxReplace(mock, { ...rep, mime }, pending?.list ?? [], pending?.tabUrl ?? tabUrl);
+                return mergeReplacementHeaders(all, replacementHeaders(mime, rep.content));
+            };
+            const changes = this.responseHeaderChanges(mock, tabUrl, rep.by);
+            return isThenable(changes) ? Promise.resolve(changes).then(serve) : serve(changes);
         }
         const changes = this.responseHeaderChanges(details, tabUrl);
         // Firefox streaming: wire the filter when response headers arrive.
-        const pending = pendingFirefoxStreams.get(details.requestId);
         if (pending && IS_FIREFOX && !isRedirectStatus(details.statusCode)) {
             pendingFirefoxStreams.delete(details.requestId);
             // a binary Content-Type with no `binary: true` route: don't buffer it at all
@@ -247,36 +296,6 @@ export class ExtensionStrategy implements InterceptionStrategy {
         this.entries = [];
     }
 
-    /** onRequest `replaceResponse` result: 200 only (neither a redirect nor a stream filter carries a status) */
-    private replaceFromRequest(details: WebRequestDetailsLike, rep: any, entry: { id: string; name: string }): HookDisposition {
-        const body = serializeRespondBody(rep.body);
-        const mime = rep.mime || guessMime(null, details.url, "application/json");
-        const status = rep.status ?? 200;
-        if (status !== 200) {
-            log(details.tabId, `[${entry.name}] onRequest → replaceResponse ${status} not served: webRequest can't set a response status (only 200) — set strategy: "debugger" or "helper" on this route ${details.url}`, "warn", entry.id, undefined, undefined, details.requestId);
-            return { kind: "allow" };
-        }
-        if (IS_FIREFOX) return this.firefoxReplaceLater(details, body, mime, entry.id, entry.name, "onRequest");
-        if (details.type === "websocket") return this.wsNoReplace(details, entry.id, entry.name, "onRequest → ");
-        log(details.tabId, `[${entry.name}] onRequest → replaceResponse 200 ${mime} (${body.length}b) ${details.url}`, "info", entry.id, undefined, undefined, details.requestId);
-        return this.redirectServe(details, body, mime);
-    }
-
-    /** A replaceResponse result: in place on Firefox, by redirect on Chromium. */
-    private replace(details: WebRequestDetailsLike, replacement: any, scriptId: string, scriptName: string): HookDisposition {
-        const r = replacementContent(details, replacement);
-        if (!r) return { kind: "allow" };
-        if (IS_FIREFOX) return this.firefoxReplaceLater(details, r.content, r.mime, scriptId, scriptName, "replaceResponse");
-        if (details.type === "websocket") return this.wsNoReplace(details, scriptId, scriptName, "");
-        log(details.tabId, `[${scriptName}] replaceResponse → ${r.mime} (${r.content.length} bytes) ${details.url}`, "info", scriptId, undefined, undefined, details.requestId);
-        return this.redirectServe(details, r.content, r.mime);
-    }
-
-    private wsNoReplace(details: WebRequestDetailsLike, scriptId: string, scriptName: string, via: string): HookDisposition {
-        log(details.tabId, `[${scriptName}] ${via}${wsNotApplied("replaceResponse", "extension", details.url)}`, "warn", scriptId, undefined, undefined, details.requestId);
-        return { kind: "allow" };
-    }
-
     /**
      * Chromium only: webRequest can't write a body, so the replacement is
      * served by redirecting — the URL changes (see the header comment).
@@ -292,39 +311,31 @@ export class ExtensionStrategy implements InterceptionStrategy {
         return { kind: "redirect", url: toDataUrl(mime, content) };
     }
 
-    /**
-     * Firefox: no redirect — let the request proceed and swap its body at
-     * onHeadersReceived (wireFirefoxReplace), so the URL and origin stay.
-     */
-    private firefoxReplaceLater(details: WebRequestDetailsLike, content: string | Uint8Array, mime: string, scriptId: string, scriptName: string, via: "replaceResponse" | "onRequest"): HookDisposition {
-        pendingFirefoxReplace.set(details.requestId, { content, mime, scriptId, scriptName, via });
-        return { kind: "allow" };
-    }
-
-    private wireFirefoxReplace(details: WebRequestDetailsLike, rep: FirefoxReplacement): void {
-        const what = rep.via === "onRequest" ? `onRequest → replaceResponse 200 ${rep.mime} (${rep.content.length}b)` : `replaceResponse → ${rep.mime} (${rep.content.length} bytes)`;
+    /** Firefox: the upstream body is never read; the mock, after the onResponseBody handlers, is written once */
+    private wireFirefoxReplace(details: WebRequestDetailsLike, rep: FirefoxReplacement, list: StreamEntry[], tabUrl: string | null): void {
         try {
             const filter = ((globalThis as any).browser?.webRequest ?? chrome.webRequest).filterResponseData(details.requestId);
-            const bytes = typeof rep.content === "string" ? new TextEncoder().encode(rep.content) : rep.content;
-            // the upstream body is never read: write the replacement once and close
             filter.ondata = () => {};
-            filter.onstart = () => {
-                filter.write(bytes);
+            filter.onstart = async () => {
+                const binary = rep.content instanceof Uint8Array;
+                const { body, modified } = list.length ? await this.runBodyHandlers(details, list, tabUrl, rep.content, rep.mime, binary, rep.by) : { body: rep.content, modified: false };
+                filter.write(typeof body === "string" ? new TextEncoder().encode(body) : body);
                 filter.close();
+                recordNetBody({ tabId: details.tabId, url: details.url, method: details.method, modified: body, mime: rep.mime, status: 200, requestId: details.requestId });
+                if (modified) trace(details, `mock from [${rep.scriptName}] changed by onResponseBody ${details.url}`);
             };
-            log(details.tabId, `[${rep.scriptName}] ${what} ${details.url}`, "info", rep.scriptId, undefined, undefined, details.requestId);
-            recordNetBody({ tabId: details.tabId, url: details.url, method: details.method, modified: rep.content, mime: rep.mime, status: 200, requestId: details.requestId });
         } catch (e: any) {
             scriptError(rep.scriptId, formatScriptError(rep.scriptName, e, "filterResponseData"));
         }
     }
 
-    /** onResponseHeaders in list order; the later handler wins per header. Firefox awaits async ones in place. */
-    private responseHeaderChanges(details: WebRequestDetailsLike, tabUrl: string | null): MaybePromise<HeaderChanges | null> {
+    /** onResponseHeaders in list order; the later handler wins per header and sees the earlier edits. Firefox awaits async ones in place. */
+    private responseHeaderChanges(details: WebRequestDetailsLike, tabUrl: string | null, replacedBy?: ReplacedBy): MaybePromise<HeaderChanges | null> {
         const steps: { entry: Entry; h: Routed }[] = [];
         for (const entry of this.entries) for (const h of this.hits(entry, "onResponseHeaders", details)) steps.push({ entry, h });
         if (!steps.length) return null;
         const stack = new HeaderStack();
+        let seen: { name: string; value?: string }[] = details.responseHeaders || [];
         const apply = ({ entry, h }: { entry: Entry; h: Routed }, result: any) => {
             const mods = result?.headers;
             if (!(mods && (mods.set || mods.remove))) return logObserved(details.tabId, entry.name, "onResponseHeaders", details.url, entry.id, details.requestId);
@@ -332,6 +343,7 @@ export class ExtensionStrategy implements InterceptionStrategy {
             for (const o of stack.add(mods, { scriptId: entry.id, scriptName: entry.name, kind: "onResponseHeaders", index: h.route.index })) {
                 if (overrideThrottle(`r|${o.header}|${o.by.scriptId}|${o.by.index}|${o.over.scriptId}|${o.over.index}`)) log(details.tabId, overrideLine(o, "response", details.url), "warn", entry.id, undefined, undefined, details.requestId);
             }
+            seen = editPairs(seen, mods);
         };
         const done = (): HeaderChanges | null => (stack.empty ? null : stack.result());
         const run = (i: number): MaybePromise<HeaderChanges | null> => {
@@ -341,7 +353,11 @@ export class ExtensionStrategy implements InterceptionStrategy {
                 try {
                     const ctx = ctxFor(details, tabUrl, step.h.route);
                     (ctx as any).statusLine = details.statusLine || "";
-                    (ctx as any).responseHeaders = details.responseHeaders || [];
+                    (ctx as any).responseHeaders = seen.map((p) => ({ ...p }));
+                    if (replacedBy) {
+                        ctx.replacedBy = replacedBy;
+                        ranOnMock(details, step.entry, step.h, replacedBy);
+                    }
                     result = withPage(pageOf(details), () => step.h.fn(ctx), tabOf(details));
                 } catch (e: any) {
                     scriptError(step.entry.id, formatScriptError(step.entry.name, e, "onResponseHeaders"));
@@ -369,8 +385,6 @@ export class ExtensionStrategy implements InterceptionStrategy {
         const first = list[0];
         // onstop may come after onCompleted pruned the cache
         const requestBody = pendingRequestBodies.get(details.requestId);
-        const page = pageOf(details);
-        const tab = tabOf(details);
         try {
             const filter = ((globalThis as any).browser?.webRequest ?? chrome.webRequest).filterResponseData(details.requestId);
             const decoder = new TextDecoder("utf-8");
@@ -390,32 +404,8 @@ export class ExtensionStrategy implements InterceptionStrategy {
                 // text → string; binary → bytes, to `binary: true` routes only
                 const contentType = contentTypeOf(details.responseHeaders);
                 const binary = bodyKind(contentType, bytes) === "binary";
-                let body: string | Uint8Array = binary ? bytes : decoder.decode(bytes);
-                const original = body;
-                /** a handler returned something (void / null: no change) */
-                let modified = false;
-                if (binary && !list.some((e) => e.handlers.some((h) => takesBinary(h.route)))) noteBodySkip("extension", details.url, "binary", contentType || "", details.requestId);
-                for (const { id: scriptId, name: scriptName, handlers } of list) {
-                    const runs = handlers.filter((h) => (binary ? takesBinary(h.route) : takesText(h.route)));
-                    // every route opted out of this kind of body: say so (no "never ran" warning)
-                    if (!runs.length && handlers.every((h) => h.route.binary !== undefined)) log(details.tabId, kindSkipLine(scriptName, details.url, binary), "debug", scriptId, "observed", undefined, details.requestId);
-                    for (const h of runs) {
-                        const ctx = { ...ctxFor(details, tabUrl, h.route, requestBody), contentType };
-                        // a text body an earlier binary route returned as bytes is still text here
-                        if (typeof body !== "string" && !takesBinary(h.route)) body = decoder.decode(body);
-                        try {
-                            const out = await withPage(page, () => h.fn(ctx, body), tab);
-                            if (out !== undefined && out !== null) {
-                                const size = (b: any) => (typeof b === "string" ? b.length : (b?.byteLength ?? 0));
-                                log(details.tabId, `[${scriptName}] onResponseBody applied (${size(body)}b → ${size(out)}b) ${details.url}`, "info", scriptId, undefined, undefined, details.requestId);
-                                body = out;
-                                modified = true;
-                            } else logObserved(details.tabId, scriptName, "onResponseBody", details.url, scriptId, details.requestId);
-                        } catch (e: any) {
-                            scriptError(scriptId, formatScriptError(scriptName, e, "onResponseBody"));
-                        }
-                    }
-                }
+                const original: string | Uint8Array = binary ? bytes : decoder.decode(bytes);
+                const { body, modified } = await this.runBodyHandlers(details, list, tabUrl, original, contentType, binary, undefined, requestBody);
                 // no change: the original bytes (a decode/encode round trip drops a BOM)
                 const outBytes = !modified ? bytes : typeof body === "string" ? encoder.encode(body) : body;
                 recordNetBody({ tabId: details.tabId, url: details.url, method: details.method, original, modified: modified ? body : null, requestId: details.requestId });
@@ -426,6 +416,49 @@ export class ExtensionStrategy implements InterceptionStrategy {
             scriptError(first.id, formatScriptError(first.name, e, "filterResponseData"));
         }
     }
+
+    /** onResponseBody handlers in list order, each on the previous one's output (a void / null result: no change) */
+    private async runBodyHandlers(details: WebRequestDetailsLike, list: StreamEntry[], tabUrl: string | null, body: string | Uint8Array, contentType: string | undefined, binary: boolean, replacedBy?: ReplacedBy, requestBody = pendingRequestBodies.get(details.requestId)): Promise<{ body: string | Uint8Array; modified: boolean }> {
+        const decoder = new TextDecoder("utf-8");
+        const page = pageOf(details);
+        const tab = tabOf(details);
+        let modified = false;
+        if (binary && !list.some((e) => e.handlers.some((h) => takesBinary(h.route)))) noteBodySkip("extension", details.url, "binary", contentType || "", details.requestId);
+        for (const entry of list) {
+            const { id: scriptId, name: scriptName, handlers } = entry;
+            const runs = handlers.filter((h) => (binary ? takesBinary(h.route) : takesText(h.route)));
+            // every route opted out of this kind of body: say so (no "never ran" warning)
+            if (!runs.length && handlers.every((h) => h.route.binary !== undefined)) log(details.tabId, kindSkipLine(scriptName, details.url, binary), "debug", scriptId, "observed", undefined, details.requestId);
+            for (const h of runs) {
+                const ctx: any = { ...ctxFor(details, tabUrl, h.route, requestBody), contentType };
+                if (replacedBy) {
+                    ctx.replacedBy = replacedBy;
+                    ranOnMock(details, entry, h, replacedBy);
+                }
+                // a text body an earlier binary route returned as bytes is still text here
+                if (typeof body !== "string" && !takesBinary(h.route)) body = decoder.decode(body);
+                try {
+                    const out = await withPage(page, () => h.fn(ctx, body), tab);
+                    if (out !== undefined && out !== null) {
+                        const size = (b: any) => (typeof b === "string" ? b.length : (b?.byteLength ?? 0));
+                        log(details.tabId, `[${scriptName}] onResponseBody applied (${size(body)}b → ${size(out)}b) ${details.url}`, "info", scriptId, undefined, undefined, details.requestId);
+                        body = out;
+                        modified = true;
+                    } else logObserved(details.tabId, scriptName, "onResponseBody", details.url, scriptId, details.requestId);
+                } catch (e: any) {
+                    scriptError(scriptId, formatScriptError(scriptName, e, "onResponseBody"));
+                }
+            }
+        }
+        return { body, modified };
+    }
+}
+
+const mockFlowThrottle = makeMissedThrottle();
+
+/** INFO once per mock and response handler pair: the handler ran on a mock */
+function ranOnMock(details: WebRequestDetailsLike, entry: { id: string; name: string }, h: Routed, by: ReplacedBy): void {
+    if (mockFlowThrottle(`${by.tweak}|${by.handler}|${entry.id}|${h.route.kind}|${h.route.index}`)) log(details.tabId, mockFlowLine(entry.name, routeLabel(h.route), by, details.url), "info", entry.id, undefined, undefined, details.requestId);
 }
 
 // ---- shared helpers ----
@@ -497,33 +530,6 @@ export function toDataUrl(mime: string, content: string | Uint8Array): string {
     return "data:" + mime + ";base64," + btoa(bin);
 }
 
-export function guessMime(filePath: string | null, requestUrl: string, fallback = "application/octet-stream"): string {
-    const ext = (filePath || requestUrl).split("?")[0].split(".").pop()?.toLowerCase() || "";
-    const table: { [e: string]: string } = {
-        js: "application/javascript", mjs: "application/javascript", json: "application/json",
-        css: "text/css", html: "text/html", htm: "text/html", xml: "application/xml",
-        txt: "text/plain", png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg",
-        gif: "image/gif", svg: "image/svg+xml", webp: "image/webp", ico: "image/x-icon",
-        woff: "font/woff", woff2: "font/woff2", ttf: "font/ttf", otf: "font/otf",
-        mp4: "video/mp4", webm: "video/webm", mp3: "audio/mpeg", wasm: "application/wasm",
-    };
-    if (filePath && filePath.startsWith("data:")) {
-        return filePath.slice(5).split(";")[0] || "text/plain";
-    }
-    return table[ext] || fallback;
-}
-
-function readFileSyncValue(fileRef: string): string {
-    if (fileRef.startsWith("data:")) {
-        const commaIdx = fileRef.indexOf(",");
-        if (fileRef.slice(5, commaIdx).includes("base64")) {
-            return atob(fileRef.slice(commaIdx + 1));
-        }
-        return decodeURIComponent(fileRef.slice(commaIdx + 1));
-    }
-    return fileRef;
-}
-
 function contentTypeOf(headers: { name: string; value?: string }[] | undefined): string | undefined {
     const h = headers?.find((x) => x.name.toLowerCase() === "content-type");
     return h?.value;
@@ -531,12 +537,6 @@ function contentTypeOf(headers: { name: string; value?: string }[] | undefined):
 
 /** in-memory store for main-frame served replacements */
 export const serveStore = new Map<string, { content: string; mime: string }>();
-
-function serializeRespondBody(body: any): string | Uint8Array {
-    if (typeof body === "string") return body;
-    if (body instanceof Uint8Array) return body;
-    return JSON.stringify(body);
-}
 
 /** Merge stacked header mods: the later edit wins per header (set or remove). */
 export function mergeHeaderMods(base: HeaderChanges | undefined, add: HeaderChanges): HeaderChanges {
@@ -548,34 +548,20 @@ const overrideThrottle = makeMissedThrottle();
 interface FirefoxReplacement {
     content: string | Uint8Array;
     mime: string;
+    /** the result's `headers.set` */
+    headers?: Record<string, string>;
     scriptId: string;
     scriptName: string;
-    via: "replaceResponse" | "onRequest";
+    by: ReplacedBy;
 }
 
 /** requestId → a replacement body Firefox writes in place at onHeadersReceived */
 const pendingFirefoxReplace = new Map<string, FirefoxReplacement>();
 
-/** a replacement's mime when the URL has no telling extension */
-const TYPE_MIME: Record<string, string> = { xmlhttprequest: "application/json", main_frame: "text/html", sub_frame: "text/html", stylesheet: "text/css", script: "application/javascript" };
-
-/** the mime + bytes a replaceResponse result stands for (null: not a body) */
-export function replacementContent(details: { url: string; type?: string }, replacement: any): { mime: string; content: string | Uint8Array } | null {
-    const mimeFor = (fileRef: string | null) =>
-        fileRef
-            ? guessMime(fileRef, details.url)
-            : guessMime(null, details.url, TYPE_MIME[details.type || ""]);
-    if (replacement && typeof replacement === "object" && !ArrayBuffer.isView(replacement) && replacement.file) {
-        return { mime: mimeFor(replacement.file), content: readFileSyncValue(replacement.file) };
-    }
-    if (typeof replacement === "string" || replacement instanceof Uint8Array) {
-        return { mime: mimeFor(null), content: replacement };
-    }
-    // any other object is a JSON body (as on the other strategies)
-    if (replacement && typeof replacement === "object" && !ArrayBuffer.isView(replacement)) {
-        return { mime: guessMime(null, details.url, "application/json"), content: JSON.stringify(replacement) };
-    }
-    return null;
+/** the mime + body an onRequest `replaceResponse` result serves (bytes stay bytes) */
+export function replacementContent(details: { url: string; type?: string }, rep: any): { mime: string; content: string | Uint8Array } {
+    if (rep?.body instanceof Uint8Array) return { mime: replacementBody({ ...rep, body: "" }, details.url, details.type || "").mime, content: rep.body };
+    return replacementBody(rep ?? {}, details.url, details.type || "");
 }
 
 function isRedirectStatus(status: number | undefined): boolean {

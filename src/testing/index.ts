@@ -1597,11 +1597,6 @@ export async function loadTweak(source: TweakSource, options: LoadTweakOptions =
             return makeResult("replaced", decision.status ?? 200, respHeaders, decision.content ?? "", effectiveReqHeaders);
         }
 
-        const replaced = await runOp(opScripts, "replace", { ...baseArgs, requestHeaders: effectiveReqHeaders }, opEnv);
-        if (replaced) {
-            return makeResult("replaced", 200, { "content-type": replaced.mime }, replaced.content, effectiveReqHeaders);
-        }
-
         const up = await upstream(effectiveReqHeaders);
         const upStatus = up.status;
         const upHeaders = up.headers;

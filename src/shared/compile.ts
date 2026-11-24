@@ -32,7 +32,7 @@ import { formatLogArgs, makeScriptConsole, type ScriptLogLevel } from "./scriptL
 import { scriptFunction } from "./scriptFn";
 import { callerLine } from "./scriptError";
 import { isNetKind, normalizeRoute, placeKeyer, placeKind, placeOf, routeLabel, type PlaceApi, type RouteKind, type RouteMeta } from "./route";
-import { storeRun, tweakHost, tweakStores, type NamedStores, type StoreRun, type TweakHost } from "./tweakApi";
+import { removedReplaceResponse, storeRun, tweakHost, tweakStores, type NamedStores, type StoreRun, type TweakHost } from "./tweakApi";
 import { inertRemote, NO_SITE_STORE, REMOTE_FROM_BACKGROUND, SITE_NO_HANDLES, SITE_NO_STORES, unusableStore } from "./remote";
 import { scriptEnv } from "./scriptEnv";
 import { dataFileValue, importLine, importPath, importResolver, isDataSpec } from "./scriptImports";
@@ -75,8 +75,6 @@ export interface ScriptHandlers {
     onRequest: Routed[];
     /** `tweak.onResponseHeaders` handlers. */
     onResponseHeaders: Routed[];
-    /** `tweak.replaceResponse` handlers. */
-    replaceResponse: Routed[];
     /** `tweak.onResponseBody` handlers. */
     onResponseBody: Routed[];
     /**
@@ -863,7 +861,6 @@ function createCollector(): ScriptHandlers {
     return {
         onRequest: [],
         onResponseHeaders: [],
-        replaceResponse: [],
         onResponseBody: [],
         onDocument: [],
         onOverlay: [],
@@ -899,7 +896,7 @@ function withCollector<T>(c: ScriptHandlers, owner: CollectorOwner, run: () => T
 
 /** Every handler's route, by kind. */
 function routesOf(h: ScriptHandlers): RouteMeta[] {
-    return [...h.onRequest, ...h.onResponseHeaders, ...h.replaceResponse, ...h.onResponseBody, ...h.onDocument, ...h.onOverlay].map((x) => x.route);
+    return [...h.onRequest, ...h.onResponseHeaders, ...h.onResponseBody, ...h.onDocument, ...h.onOverlay].map((x) => x.route);
 }
 
 /** The per-script state behind `tweak.params`: the definitions declared so far, checked as they come. */
@@ -1095,7 +1092,7 @@ function makeShim(owner: ReturnType<typeof createOwner>, overrides: ResApiOverri
     const host = tweakHost((file) => ({
         onRequest: register("onRequest", undefined, file),
         onResponseHeaders: register("onResponseHeaders", undefined, file),
-        replaceResponse: register("replaceResponse", undefined, file),
+        replaceResponse: removedReplaceResponse,
         onResponseBody: register("onResponseBody", undefined, file),
         onSite: register(placeKind("onSite"), "onSite", file),
         onPage: register(placeKind("onPage"), "onPage", file),

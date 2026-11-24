@@ -54,7 +54,7 @@ describe("onRequest respond", () => {
         expect(d.url).toContain("text/html");
     });
 
-    it("respond is terminal: later scripts don't run", () => {
+    it("every onRequest runs: a later decision overrules an earlier mock", () => {
         const s = new ExtensionStrategy();
         s.reload([
             makeScript("a", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*", strategy: "extension" }, () => ({ replaceResponse: { body: "first" } }));`),
@@ -62,7 +62,7 @@ describe("onRequest respond", () => {
         ]);
         const d = s.handleBeforeRequest(details(), null) as any;
         expect(d.kind).toBe("redirect");
-        expect(d.url).toContain("first");
+        expect(d.url).toBe("https://second.com");
     });
 
     it("hook tier: runRequestDecision returns the respond decision (async handler)", async () => {
@@ -102,11 +102,12 @@ describe("onRequest respond", () => {
 });
 
 describe("replacementContent (webrequest)", () => {
-    it("serves a plain object as JSON, like the other tiers", async () => {
+    it("serves a plain object as JSON; the type falls back on the URL then the resource type", async () => {
         const { replacementContent } = await import("../src/background/engine/strategies/extensionStrategy");
-        expect(replacementContent({ url: "https://dummyjson.com/users/1", type: "main_frame" }, { mocked: true })).toEqual({ mime: "application/json", content: '{"mocked":true}' });
-        expect(replacementContent({ url: "https://x.test/a", type: "xmlhttprequest" }, [1, 2])).toEqual({ mime: "application/json", content: "[1,2]" });
-        expect(replacementContent({ url: "https://x.test/a.html", type: "main_frame" }, "<p>hi</p>")).toEqual({ mime: "text/html", content: "<p>hi</p>" });
-        expect(replacementContent({ url: "https://x.test/a", type: "main_frame" }, null)).toBeNull();
+        expect(replacementContent({ url: "https://x.test/a", type: "xmlhttprequest" }, { body: { mocked: true } })).toEqual({ mime: "application/json", content: '{"mocked":true}' });
+        expect(replacementContent({ url: "https://x.test/a", type: "xmlhttprequest" }, { body: [1, 2] })).toEqual({ mime: "application/json", content: "[1,2]" });
+        expect(replacementContent({ url: "https://x.test/a.css", type: "xmlhttprequest" }, { body: "a{}" })).toEqual({ mime: "text/css", content: "a{}" });
+        expect(replacementContent({ url: "https://x.test/a", type: "main_frame" }, { body: "<p>hi</p>" })).toEqual({ mime: "text/html", content: "<p>hi</p>" });
+        expect(replacementContent({ url: "https://x.test/a", type: "main_frame" }, { body: "x", mime: "text/plain" }).mime).toBe("text/plain");
     });
 });

@@ -308,6 +308,8 @@ const dec = new TextDecoder();
 export async function requestThroughLayers(env: LayerEnv, req: LayerRequest): Promise<LayerResult> {
     const { url, method, resourceType: type } = req;
     const mv3 = env.browser === "chrome";
+    // Chromium serves an extension or rules mock by redirect: the layer's response handlers never see it
+    const mockFlows = (layer: Strategy) => layer !== "rules" && (layer !== "extension" || env.browser === "firefox");
     const skipped: SkippedHandler[] = [];
     const seen = new Set<string>();
     const skip = (r: RouteRef, why: string) => {
@@ -374,7 +376,7 @@ export async function requestThroughLayers(env: LayerEnv, req: LayerRequest): Pr
         }
         reached.push(layer);
         const args = { ...base, requestHeaders: { ...requestHeaders }, tier: layer };
-        const d = await runOp(env.scripts, "requestDecision", args, env.opEnv);
+        const d = await runOp(env.scripts, "requestDecision", { ...args, mockFlows: mockFlows(layer) }, env.opEnv);
         if (d?.kind === "headers") {
             if (applyEdits(requestHeaders, d.changes)) reqModified = true;
         } else if (d) {
@@ -387,18 +389,13 @@ export async function requestThroughLayers(env: LayerEnv, req: LayerRequest): Pr
             }
             break;
         }
-        const r = await runOp(env.scripts, "replace", { ...args, requestHeaders: { ...requestHeaders } }, env.opEnv);
-        if (r) {
-            winner = winnerOf(r, layer);
-            replaced = { status: 200, headers: { "content-type": r.mime }, body: r.content };
-            break;
-        }
     }
 
     if (winner) {
         const w: Winner = winner;
         route ??= env.refs.find((r) => r.scriptId === w.scriptId && r.route.kind === w.kind && r.route.index === w.index)?.route;
-        for (const r of skippedBy(env.refs, { url, method, type }, w)) skip(r, skipReason(r, w));
+        const opts = { mockFlows: mockFlows(w.strategy) };
+        for (const r of skippedBy(env.refs, { url, method, type }, w, opts)) skip(r, skipReason(r, w, opts));
     }
     const decidedBy: DecidedBy | null = winner
         ? { strategy: winner.strategy, handler: route ? routeLabel(route) : `${winner.kind} #${winner.index + 1}`, script: winner.scriptName, outcome: winner.outcome }

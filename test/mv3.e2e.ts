@@ -385,10 +385,10 @@ try {
         const send = (msg: any): Promise<any> => mgr.evaluate((m: any) => new Promise((r) => chrome.runtime.sendMessage(m, (x: any) => r(x ?? null))), msg);
         await send({ type: "setEnabled", id: "s_pg", enabled: false });
         await saveTweak(send, "s_sf", "Store fetch", `import { tweak } from "tangitweak"; const st = tweak.globalStore("st", { n: 0 });
-tweak.replaceResponse({ url: "${ORIGIN}/sf-data", strategy: "page" }, async () => {
+tweak.onRequest({ url: "${ORIGIN}/sf-data", strategy: "page" }, async () => {
     st.n++;
     const real = await (await tweak.fetch("${ORIGIN}/data", { bypass: true })).json();
-    return JSON.stringify({ n: st.n, real: real.value });
+    return { replaceResponse: { body: { n: st.n, real: real.value } } };
 });`);
         await mgr.waitForTimeout(1500);
         const sfPage = await ctx.newPage();
@@ -413,9 +413,9 @@ tweak.replaceResponse({ url: "${ORIGIN}/sf-data", strategy: "page" }, async () =
         const slowMs = Number(process.env.TT_SLOW_MS) || 30000; // TT_SLOW_MS=330000 probes Chrome's 5-minute limit
         const send = (msg: any): Promise<any> => mgr.evaluate((m: any) => new Promise((r) => chrome.runtime.sendMessage(m, (x: any) => r(x ?? null))), msg);
         await send({ type: "setEnabled", id: "s_pg", enabled: false });
-        await saveTweak(send, "s_slow", "Slow handler", `import { tweak } from "tangitweak"; tweak.replaceResponse({ url: "${ORIGIN}/slow-data", strategy: "page" }, async () => {
+        await saveTweak(send, "s_slow", "Slow handler", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "${ORIGIN}/slow-data", strategy: "page" }, async () => {
     await new Promise((r) => setTimeout(r, ${slowMs}));
-    return "SLOW-REPLACED";
+    return { replaceResponse: { body: "SLOW-REPLACED" } };
 });`);
         await mgr.waitForTimeout(1500);
         const slowPage = await ctx.newPage();

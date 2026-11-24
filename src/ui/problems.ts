@@ -140,7 +140,7 @@ export function errorPosition(msg: string, name?: string): Position | undefined 
     return syntax ? { line: Number(syntax[1]) } : undefined;
 }
 
-const HANDLER = /\b(onRequest|onResponseHeaders|replaceResponse|onResponseBody|onSite|onPage|onOverlay) #(\d+)\b(?: \(([^)]+)\))?/;
+const HANDLER = /\b(onRequest|onResponseHeaders|onResponseBody|onSite|onPage|onOverlay) #(\d+)\b(?: \(([^)]+)\))?/;
 
 interface Range {
     line: number;

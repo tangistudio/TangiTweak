@@ -137,7 +137,6 @@ describe("helpers", () => {
     it("helperRouteOf: pause flags follow the handler kind; exclude/methods go to the helper", () => {
         const r = (kind: any, raw: unknown) => helperRouteOf(normalizeRoute(kind, typeof raw === "object" && !Array.isArray(raw) ? { strategy: "helper", ...raw } : { url: raw, strategy: "helper" }, 0));
         expect(r("onRequest", "*")).toMatchObject({ match: ["*"], req: true, resHeaders: false, body: false });
-        expect(r("replaceResponse", "*")).toMatchObject({ req: true, body: false });
         expect(r("onResponseHeaders", "*")).toMatchObject({ req: false, resHeaders: true });
         expect(r("onResponseBody", "*")).toMatchObject({ req: false, body: true, binary: false });
         expect(r("onResponseBody", { url: "*", binary: true })).toMatchObject({ body: true, binary: true });
@@ -232,7 +231,7 @@ describe("HelperStrategy ⇄ helper protocol", () => {
         expect(fake.sent.find((m) => m.t === "config").routes).toEqual([]);
     });
 
-    it("request stage: redirect / respond / cancel / headers / replaceResponse", async () => {
+    it("request stage: redirect / respond / cancel / headers / a later mock", async () => {
         const p = new HelperStrategy();
         await ready(p, [
             makeScript(
@@ -243,7 +242,7 @@ describe("HelperStrategy ⇄ helper protocol", () => {
     if (c.url.endsWith("/c")) return { block: true };
     if (c.url.endsWith("/h")) return { headers: { set: { "X-Added": "1" }, remove: ["cookie"] } };
 });
-tweak.replaceResponse({ url: "https://x.com/*", strategy: "helper" }, (c) => (c.url.endsWith("/rep") ? "replaced" : undefined));`
+tweak.onRequest({ url: "https://x.com/*", strategy: "helper" }, (c) => (c.url.endsWith("/rep") ? { replaceResponse: { body: "replaced" } } : undefined));`
             ),
         ]);
         const H: [string, string][] = [

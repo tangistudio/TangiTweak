@@ -244,12 +244,16 @@ const cfg = tweak.params({
     },
 });
 
-tweak.replaceResponse({ url: "*://acme-cloud.io/api/v1/users/:id", strategy: "page" }, (ctx) => ({
-    id: Number(ctx.groups.id),
-    name: "Alex Rivera",
-    role: cfg.environment.role,
-    environment: cfg.environment.target,
-    rateLimitRpm: limits.rpm,
+tweak.onRequest({ url: "*://acme-cloud.io/api/v1/users/:id", strategy: "page" }, (ctx) => ({
+    replaceResponse: {
+        body: {
+            id: Number(ctx.groups.id),
+            name: "Alex Rivera",
+            role: cfg.environment.role,
+            environment: cfg.environment.target,
+            rateLimitRpm: limits.rpm,
+        },
+    },
 }));
 
 tweak.onRequest(
@@ -600,11 +604,13 @@ try {
   },
 });
 
-tweak.<span class="fn">replaceResponse</span>(<span class="str">"*://acme-cloud.io/api/v1/users/:id"</span>, (ctx) =&gt; ({
-  <span class="prop">id</span>: <span class="fn">Number</span>(ctx.groups.id),
-  <span class="prop">name</span>: <span class="str">"Alex Rivera"</span>,
-  <span class="prop">role</span>: <span class="str">"admin"</span>,
-  <span class="prop">environment</span>: cfg.env,
+tweak.<span class="fn">onRequest</span>(<span class="str">"*://acme-cloud.io/api/v1/users/:id"</span>, (ctx) =&gt; ({
+  <span class="prop">replaceResponse</span>: { <span class="prop">body</span>: {
+    <span class="prop">id</span>: <span class="fn">Number</span>(ctx.groups.id),
+    <span class="prop">name</span>: <span class="str">"Alex Rivera"</span>,
+    <span class="prop">role</span>: <span class="str">"admin"</span>,
+    <span class="prop">environment</span>: cfg.env,
+  } },
 }));</pre>
       <div class="cw-foot">
         <span><span class="ok">200 OK</span> &nbsp;GET acme-cloud.io/api/v1/users/42</span>

@@ -123,12 +123,12 @@ describe("extension strategy: log lines use the stored script name", () => {
         expect(line!.message).toContain("[API mocker]");
     });
 
-    it("replaceResponse log uses the stored name", () => {
+    it("a mock's log uses the stored name", () => {
         const s = new ExtensionStrategy();
-        s.reload([storedScript("a", "API mocker", `import { tweak } from "tangitweak"; tweak.replaceResponse({ url: "*", strategy: "extension" }, () => '{"mocked":true}');`)]);
+        s.reload([storedScript("a", "API mocker", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*", strategy: "extension" }, () => ({ replaceResponse: { body: { mocked: true } } }));`)]);
         const d = s.handleBeforeRequest(details(), null) as any;
         expect(d.kind).toBe("redirect");
-        const line = entries.find((e) => e.message.includes("replaceResponse →"));
+        const line = entries.find((e) => e.message.includes("onRequest → replaceResponse"));
         expect(line, "a replaceResponse log line must exist").toBeTruthy();
         expect(line!.message).toContain("[API mocker]");
     });
@@ -144,17 +144,17 @@ describe("extension strategy: log lines use the stored script name", () => {
         expect(lines[0].message).toMatch(/^\[API mocker\] onRequest → observed \(no change\) https:\/\//);
     });
 
-    it("replaceResponse → null and no-op onResponseHeaders are observed; header changes stay INFO", () => {
+    it("onRequest → null and no-op onResponseHeaders are observed; header changes stay INFO", () => {
         const s = new ExtensionStrategy();
         s.reload([
-            storedScript("a", "Looker", `import { tweak } from "tangitweak"; tweak.replaceResponse({ url: "*", strategy: "extension" }, () => null);
+            storedScript("a", "Looker", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*", strategy: "extension" }, () => null);
 tweak.onResponseHeaders({ url: "*", strategy: "extension" }, () => undefined);`),
             storedScript("b", "Hdr", `import { tweak } from "tangitweak"; tweak.onResponseHeaders({ url: "*", strategy: "extension" }, () => ({ headers: { set: { "x-a": "1" } } }));`),
         ]);
         s.handleBeforeRequest(details(), null);
         s.handleHeadersReceived(details(), null);
         expect(entries.filter((e) => e.scriptId).map((e) => [e.level, e.message.replace(/ https:.*/, "")])).toEqual([
-            ["debug", "[Looker] replaceResponse → observed (no change)"],
+            ["debug", "[Looker] onRequest → observed (no change)"],
             ["debug", "[Looker] onResponseHeaders → observed (no change)"],
             ["info", "[Hdr] onResponseHeaders → set x-a"],
         ]);
@@ -205,8 +205,8 @@ describe("CDP tier: request-stage respond fulfillment", () => {
         ]);
     });
 
-    it("sync replaceResponse runs once, in the debugger tier, at the request stage (no network)", async () => {
-        const code = `import { tweak } from "tangitweak"; tweak.replaceResponse({ url: "*", strategy: "debugger" }, () => "<h1>replaced</h1>");`;
+    it("a sync mock runs once, in the debugger tier, at the request stage (no network)", async () => {
+        const code = `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*", strategy: "debugger" }, () => ({ replaceResponse: { body: "<h1>replaced</h1>" } }));`;
         const w = new ExtensionStrategy();
         const c = new DebuggerStrategy();
         w.reload([storedScript("a", "Page mock", code)]);
@@ -295,7 +295,7 @@ describe("per-script TypeScript error tracking", () => {
 });
 
 describe("Chromium extension strategy: how it serves replacements (redirect)", () => {
-    const REPLACE = `import { tweak } from "tangitweak"; tweak.replaceResponse({ url: "*", strategy: "extension" }, () => "<h1>x</h1>");`;
+    const REPLACE = `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*", strategy: "extension" }, () => ({ replaceResponse: { body: "<h1>x</h1>" } }));`;
     it("a page load is served via serve.html", () => {
         const s = new ExtensionStrategy();
         s.reload([storedScript("a", "Wr page", REPLACE)]);
@@ -312,7 +312,7 @@ describe("Chromium extension strategy: how it serves replacements (redirect)", (
     });
     it("a route on another strategy is left alone", () => {
         const s = new ExtensionStrategy();
-        s.reload([storedScript("a", "Cdp api", `import { tweak } from "tangitweak"; tweak.replaceResponse({ url: "*", strategy: "debugger" }, () => "<h1>x</h1>");`)]);
+        s.reload([storedScript("a", "Cdp api", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*", strategy: "debugger" }, () => ({ replaceResponse: { body: "<h1>x</h1>" } }));`)]);
         expect((s.handleBeforeRequest(details(), null) as any).kind).toBe("allow");
         expect(entries.filter((e) => e.scriptId === "a")).toEqual([]);
     });

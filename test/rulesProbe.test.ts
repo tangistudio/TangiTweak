@@ -76,7 +76,6 @@ describe("rules probe (tripwire ctx)", () => {
             tweak.onRequest({ url: "*://h.com/*", strategy: "rules" }, ({ requestHeaders }) => ({ block: !!requestHeaders.cookie }));
             tweak.onRequest({ url: "*://i.com/x{/:v}?", strategy: "rules" }, (ctx) => ({ redirect: "https://x.com/" + (ctx.groups.v || "none") }));
             tweak.onResponseBody({ url: "*://j.com/*", strategy: "rules" }, (ctx, body) => body);
-            tweak.replaceResponse({ url: "*://k.com/*", strategy: "rules" }, () => "x");
         `);
         expect(r.rules.map((x) => x.route.url[0])).toEqual(["*://a.com/*"]);
         const e = r.errors.join("\n");
@@ -88,7 +87,6 @@ describe("rules probe (tripwire ctx)", () => {
         expect(r.errors[5]).toMatch(/^onRequest #7: does nothing on `rules`/);
         expect(r.errors[6]).toMatch(/^onRequest #8: rules are fixed: .*ctx\.requestHeaders/);
         expect(r.errors[7]).toMatch(/^onRequest #9: ctx\.groups\.v can be missing/);
-        expect(e).toMatch(/replaceResponse #1: replaceResponse is not supported on rules/);
         expect(e).toMatch(/onResponseBody #1: onResponseBody is not supported on rules/);
     });
 

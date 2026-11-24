@@ -115,9 +115,8 @@ describe("tangitweak/test harness", () => {
                     };
                 });
 
-                tweak.replaceResponse({ url: "*://api.example.com/mock", strategy: "helper" }, () => ({
-                    mocked: true,
-                    env: p.env,
+                tweak.onRequest({ url: "*://api.example.com/mock", strategy: "helper" }, () => ({
+                    replaceResponse: { body: { mocked: true, env: p.env } },
                 }));
 
                 tweak.onResponseHeaders({ url: "*://api.example.com/*", strategy: "helper" }, () => ({
@@ -175,7 +174,7 @@ describe("tangitweak/test harness", () => {
         expect(short.headers["x-short"]).toBe("yes");
         expect(short.json()).toEqual({ shortcut: true });
 
-        // replaceResponse handler
+        // another onRequest mock
         const rep = await t.simulate("https://api.example.com/mock");
         expect(rep.replaced).toBe(true);
         expect(rep.json()).toEqual({ mocked: true, env: "prod" });
@@ -265,8 +264,8 @@ describe("tangitweak/test harness", () => {
                     ctx.mount(".pr-toolbar", <ApproveWidget />);
                 });
 
-                tweak.replaceResponse({ url: "*://github.com/api/approve", strategy: "page" }, () => ({
-                    nextCount: appStore.approvals + 1,
+                tweak.onRequest({ url: "*://github.com/api/approve", strategy: "page" }, () => ({
+                    replaceResponse: { body: { nextCount: appStore.approvals + 1 } },
                 }));
 
                 tweak.onOverlay("*://github.com/*", (ctx) => {
@@ -378,7 +377,7 @@ describe("tangitweak/test harness", () => {
                 out.textContent = [await site.token(), page.hits, tab.visits, app.n].join("/");
                 document.body.appendChild(out);
             });
-            tweak.replaceResponse({ url: "*://api.example.com/*", strategy: "helper" }, () => ({ n: app.n }));
+            tweak.onRequest({ url: "*://api.example.com/*", strategy: "helper" }, () => ({ replaceResponse: { body: { n: app.n } } }));
             `,
         });
         expect(t.errors).toEqual([]);

@@ -94,14 +94,14 @@ describe("ExtensionStrategy", () => {
         const s = new ExtensionStrategy();
         s.reload([
             named("Socky", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "wss://ws.example.com/*", strategy: "extension" }, () => ({ redirect: "wss://other.example.com/ws" }));
-tweak.replaceResponse({ url: "wss://ws.example.com/*", strategy: "extension" }, () => "nope");`),
+tweak.onRequest({ url: "wss://ws.example.com/*", strategy: "extension" }, () => ({ replaceResponse: { body: "nope" } }));`),
             named("Hdr", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "wss://ws.example.com/*", strategy: "extension" }, () => ({ headers: { set: { "x-a": "1" } } }));`),
         ]);
         const ws = details({ url: "wss://ws.example.com/ws", type: "websocket", requestId: "ws1" });
         expect((s.handleBeforeRequest(ws, null) as any).kind).toBe("allow");
         const warns = allLogs().filter((e) => e.level === "warn" && e.message.includes("wss://ws.example.com/ws") && e.message.includes("NOT applied")).map((e) => e.message);
         expect(warns.some((m) => m.startsWith("[Socky] onRequest → redirect wss://ws.example.com/ws → wss://other.example.com/ws NOT applied") && m.includes("Chrome ignores redirects on WebSocket handshakes"))).toBe(true);
-        expect(warns.some((m) => m.startsWith("[Socky] replaceResponse wss://ws.example.com/ws NOT applied"))).toBe(true);
+        expect(warns.some((m) => m.startsWith("[Socky] onRequest → replaceResponse wss://ws.example.com/ws NOT applied"))).toBe(true);
         // request headers still apply
         expect(JSON.stringify(s.handleBeforeSendHeaders(ws, null))).toContain('"x-a"');
     });
@@ -122,10 +122,10 @@ tweak.replaceResponse({ url: "wss://ws.example.com/*", strategy: "extension" }, 
         expect((s.handleBeforeRequest(details(), null) as any).kind).toBe("allow");
     });
 
-    it("static replaceResponse → data url redirect", () => {
+    it("static onRequest replaceResponse → data url redirect", () => {
         const s = new ExtensionStrategy();
         s.reload([
-            makeScript("a", `import { tweak } from "tangitweak"; tweak.replaceResponse({ url: "*://api.example.com/v1/data", strategy: "extension" }, () => JSON.stringify({ mocked: true }));`),
+            makeScript("a", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*://api.example.com/v1/data", strategy: "extension" }, () => ({ replaceResponse: { body: { mocked: true } } }));`),
         ]);
         const d = s.handleBeforeRequest(details(), null) as any;
         expect(d.kind).toBe("redirect");
@@ -158,10 +158,10 @@ tweak.replaceResponse({ url: "wss://ws.example.com/*", strategy: "extension" }, 
         expect(changes!.set).toEqual({ authorization: "Bearer x" });
     });
 
-    it("same order as every strategy: every onRequest before any replaceResponse", () => {
+    it("every onRequest runs: a later block overrules an earlier mock", () => {
         const s = new ExtensionStrategy();
         s.reload([
-            makeScript("a", `import { tweak } from "tangitweak"; tweak.replaceResponse({ url: "*://api.example.com/*", strategy: "extension" }, () => "mocked");`),
+            makeScript("a", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*://api.example.com/*", strategy: "extension" }, () => ({ replaceResponse: { body: "mocked" } }));`),
             makeScript("b", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*://api.example.com/*", strategy: "extension" }, () => ({ block: true }));`),
         ]);
         expect((s.handleBeforeRequest(details(), null) as any).kind).toBe("cancel");
@@ -180,7 +180,7 @@ tweak.replaceResponse({ url: "wss://ws.example.com/*", strategy: "extension" }, 
         expect(warns.map((e) => e.message.split(" from ")[0])).toEqual(expect.arrayContaining([`[b] onRequest #1 overrides request header "x-mode"`, `[b] onRequest #1 overrides request header "cookie"`]));
     });
 
-    it("a final result warns for each handler it kept from running", () => {
+    it("a final result warns for each handler it kept from running (every onRequest still runs)", () => {
         const scripts = [
             named("a", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*://api.example.com/*", strategy: "extension" }, () => ({ block: true }));`),
             named("b", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*://api.example.com/*", strategy: "extension" }, () => ({ headers: { set: { x: "1" } } })); tweak.onResponseHeaders({ url: "*://api.example.com/*", strategy: "extension" }, () => null);`),
@@ -190,9 +190,8 @@ tweak.replaceResponse({ url: "wss://ws.example.com/*", strategy: "extension" }, 
         s.reload(scripts);
         expect((s.handleBeforeRequest(details({ url: "https://api.example.com/skip" }), null) as any).kind).toBe("cancel");
         const lines = allLogs().filter((e) => e.message.includes("→ skipped: ") && e.message.endsWith("https://api.example.com/skip")).map((e) => e.message);
-        expect(lines).toHaveLength(2);
-        expect(lines[0]).toMatch(/^\[b\] onRequest #1 → skipped: \[a\] onRequest #1 → block took priority \(it comes earlier in the list\)/);
-        expect(lines[1]).toMatch(/^\[b\] onResponseHeaders #1 → skipped: \[a\] onRequest #1 → block took priority \(the request ended there\)/);
+        expect(lines).toHaveLength(1);
+        expect(lines[0]).toMatch(/^\[b\] onResponseHeaders #1 → skipped: \[a\] onRequest #1 → block took priority \(the request ended there\)/);
         setSkipRoutes([]);
     });
 

@@ -20,7 +20,7 @@
  *   pac     — evaluate the user's proxy decision (helper strategy upstream)
  *   rules   — run each `rules`-strategy handler once with a tripwire ctx
  *             and translate it to declarativeNetRequest rule specs
- *   run     — execute the body ops (requestDecision / transform / replace /
+ *   run     — execute the body ops (requestDecision / transform /
  *             responseHeaders) with the same semantics as PageStrategy's
  *             MV2 in-SW execution, mirroring its log lines
  *

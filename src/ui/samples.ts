@@ -116,10 +116,8 @@ tweak.onPage("*://example.org/*", () => {
 import { tweak } from "tangitweak";
 
 // "page" sees the page's own fetch/XHR calls (not the URL typed in the address bar)
-tweak.replaceResponse({ url: "*://dummyjson.com/users/:id", strategy: "page" }, (ctx) => ({
-    id: Number(ctx.groups.id),
-    name: "Mocked User",
-    role: "admin",
+tweak.onRequest({ url: "*://dummyjson.com/users/:id", strategy: "page" }, (ctx) => ({
+    replaceResponse: { body: { id: Number(ctx.groups.id), name: "Mocked User", role: "admin" } },
 }));
 
 // the demo: a fetch made from dummyjson.com's own JavaScript world (tweak.onSite, so the "page" strategy sees it),
@@ -189,8 +187,8 @@ tweak.onPage("*://en.wikipedia.org/wiki/*", () => {
 import { tweak } from "tangitweak";
 
 // Chrome shows its "being debugged" bar while the debugger strategy is attached
-tweak.replaceResponse({ url: "*://en.wikipedia.org/robots.txt", strategy: tweak.isFirefox ? "extension" : "debugger" }, () => ({
-    file: "data:text/plain;base64," + btoa("Served by TangiTweak instead of the real robots.txt"),
+tweak.onRequest({ url: "*://en.wikipedia.org/robots.txt", strategy: tweak.isFirefox ? "extension" : "debugger" }, () => ({
+    replaceResponse: { body: { file: "data:text/plain;base64," + btoa("Served by TangiTweak instead of the real robots.txt") } },
 }));`,
     },
     {
@@ -205,8 +203,8 @@ import { tweak } from "tangitweak";
 // one live object for the handler and the panel; it survives restarts
 const mock = tweak.globalStore("mock", { enabled: true });
 
-tweak.replaceResponse({ url: "*://dummyjson.com/users/:id", strategy: "page" }, (ctx) =>
-    mock.enabled ? { id: Number(ctx.groups.id), firstName: "Mocked", lastName: "User" } : undefined
+tweak.onRequest({ url: "*://dummyjson.com/users/:id", strategy: "page" }, (ctx) =>
+    mock.enabled ? { replaceResponse: { body: { id: Number(ctx.groups.id), firstName: "Mocked", lastName: "User" } } } : undefined
 );
 
 // functions the panel calls in the site's own world (the "page" strategy sees only the site's own fetches)

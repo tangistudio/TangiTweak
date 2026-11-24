@@ -142,7 +142,7 @@ describe("routeProblem (up-front warning, no fallback)", () => {
 
     it("Chromium webrequest can't read bodies; Firefox can", () => {
         expect(p("onResponseBody", "extension")).toMatch(/can't read response bodies/);
-        expect(p("replaceResponse", "extension")).toBeNull();
+        expect(p("onRequest", "extension")).toBeNull();
         expect(p("onResponseBody", "extension", { firefox: true, mv3: false })).toBeNull();
     });
 

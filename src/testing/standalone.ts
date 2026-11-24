@@ -15,7 +15,7 @@ import * as nodeUrl from "node:url";
 import { proxy } from "valtio/vanilla";
 import { resolveParamValues, type ParamTree } from "../shared/scriptDef";
 import { scriptEnv } from "../shared/scriptEnv";
-import { checkStoreId } from "../shared/tweakApi";
+import { checkStoreId, removedReplaceResponse } from "../shared/tweakApi";
 import type { StoreIdentity } from "./index";
 
 export interface StoreRecord {
@@ -158,7 +158,7 @@ const storage = new Map<string, unknown>();
 export const tweak: any = {
     onRequest: record("onRequest"),
     onResponseHeaders: record("onResponseHeaders"),
-    replaceResponse: record("replaceResponse"),
+    replaceResponse: removedReplaceResponse,
     onResponseBody: record("onResponseBody"),
     onSite: record("onSite"),
     onPage: record("onPage"),

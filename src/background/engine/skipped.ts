@@ -6,7 +6,7 @@
  * Network view shows as "missed" (`is:missed`).
  */
 import { effectiveStrategy, isNetKind } from "../../shared/route";
-import { skippedBy, skippedLine, type RouteRef, type SkipRequest, type Winner } from "../../shared/precedence";
+import { skippedBy, skippedLine, type RouteRef, type SkipOptions, type SkipRequest, type Winner } from "../../shared/precedence";
 import { log } from "./logs";
 import type { Script } from "./scriptStore";
 
@@ -25,9 +25,9 @@ export function setSkipRoutes(scripts: Script[]): void {
 }
 
 /** warn for every handler `w` kept from running on this request */
-export function reportSkipped(tabId: number, req: SkipRequest, w: Winner | null | undefined, requestId?: string): void {
+export function reportSkipped(tabId: number, req: SkipRequest, w: Winner | null | undefined, requestId?: string, opts?: SkipOptions): void {
     if (!w || !routes.length) return;
-    for (const r of skippedBy(routes, req, w)) log(tabId, skippedLine(r, w, req.url), "warn", r.scriptId, "missed", req.url, requestId);
+    for (const r of skippedBy(routes, req, w, opts)) log(tabId, skippedLine(r, w, req.url, opts), "warn", r.scriptId, "missed", req.url, requestId);
 }
 
 /** test seam */

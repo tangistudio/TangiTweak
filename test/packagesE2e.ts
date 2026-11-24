@@ -21,8 +21,8 @@ let version = 1;
 
 const entry = (origin: string) => `import { tweak } from "tangitweak"; import { shout } from "./lib";
 import cfg from "./cfg.json";
-tweak.replaceResponse({ url: "${origin}/pkg-api", strategy: "page" }, () => shout(cfg.word));
-${version > 1 ? `tweak.replaceResponse({ url: "${origin}/pkg-other", strategy: "page" }, () => "OTHER");\n` : ""}`;
+tweak.onRequest({ url: "${origin}/pkg-api", strategy: "page" }, () => ({ replaceResponse: { body: shout(cfg.word) } }));
+${version > 1 ? `tweak.onRequest({ url: "${origin}/pkg-other", strategy: "page" }, () => ({ replaceResponse: { body: "OTHER" } }));\n` : ""}`;
 
 export function packagesServerRoute(req: http.IncomingMessage, res: http.ServerResponse, origin: string): boolean {
     const url = new URL(req.url || "/", origin);
@@ -36,8 +36,8 @@ export function packagesServerRoute(req: http.IncomingMessage, res: http.ServerR
     if (url.pathname === "/pkg/cfg.json") return send("application/json", '{ "word": "pkg-ok" }'), true;
     if (url.pathname === "/kit/package.json") return send("application/json", JSON.stringify({ name: "kit", version: "3.0.0", description: "Two modules", tangitweak: { displayName: "Kit" } })), true;
     if (url.pathname === "/kit/index.ts") return send("text/plain", 'import "./a";\nimport "./tools/b";\n'), true;
-    if (url.pathname === "/kit/a.ts") return send("text/plain", `import { tweak } from "tangitweak"; import { tag } from "./shared";\ntweak.replaceResponse({ url: "${origin}/kit-a", strategy: "page" }, () => tag("A"));\n`), true;
-    if (url.pathname === "/kit/tools/b.ts") return send("text/plain", `import { tweak } from "tangitweak"; import { tag } from "../shared";\ntweak.replaceResponse({ url: "${origin}/kit-b", strategy: "page" }, () => tag("B"));\n`), true;
+    if (url.pathname === "/kit/a.ts") return send("text/plain", `import { tweak } from "tangitweak"; import { tag } from "./shared";\ntweak.onRequest({ url: "${origin}/kit-a", strategy: "page" }, () => ({ replaceResponse: { body: tag("A") } }));\n`), true;
+    if (url.pathname === "/kit/tools/b.ts") return send("text/plain", `import { tweak } from "tangitweak"; import { tag } from "../shared";\ntweak.onRequest({ url: "${origin}/kit-b", strategy: "page" }, () => ({ replaceResponse: { body: tag("B") } }));\n`), true;
     if (url.pathname === "/kit/shared.ts") return send("text/plain", 'export const tag = (s: string) => "KIT-" + s;\n'), true;
     if (url.pathname === "/pkg-page") return send("text/html", "<html><body>PKG</body></html>"), true;
     if (url.pathname === "/pkg-api") return send("text/plain", "REAL"), true;

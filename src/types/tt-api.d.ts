@@ -107,9 +107,9 @@ declare namespace TangiTweak {
          * its second argument.
          *
          * @example
-         * tweak.replaceResponse({ url: "https://api.example.com/graphql", strategy: "helper" }, (ctx) => {
+         * tweak.onRequest({ url: "https://api.example.com/graphql", strategy: "helper" }, (ctx) => {
          *     const q = ctx.json<{ operationName?: string }>();
-         *     if (q?.operationName === "GetFlags") return { flags: { beta: true } };
+         *     if (q?.operationName === "GetFlags") return { replaceResponse: { body: { flags: { beta: true } } } };
          * });
          */
         json<T = any>(): T | undefined;
@@ -142,7 +142,7 @@ declare namespace TangiTweak {
      *   **once** when scripts load and must return the same result for every
      *   request: it may use `ctx.groups.*` and `ctx.url` only as-is inside a
      *   redirect URL, and may not read anything else from `ctx`. No
-     *   `replaceResponse` (handler or result), `onResponseBody` or `exclude`. A handler
+     *   `replaceResponse` result, `onResponseBody` or `exclude`. A handler
      *   that can't become a rule doesn't run, and its script shows an error.
      *   Chrome (MV3 and MV2) and Firefox.
      *
@@ -180,7 +180,7 @@ declare namespace TangiTweak {
     type UrlPatterns = string | string[];
 
     /**
-     * Where a network handler (`onRequest`, `onResponseHeaders`, `replaceResponse`, `onResponseBody`)
+     * Where a network handler (`onRequest`, `onResponseHeaders`, `onResponseBody`)
      * applies and which {@link Strategy} runs it. A bare URL pattern isn't accepted: it names no strategy.
      */
     interface RouteOptions {
@@ -716,9 +716,14 @@ declare namespace TangiTweak {
      * A synthesized response: the `onRequest` → `{ replaceResponse }`
      * result (a replacement). The request never reaches the server.
      *
+     * The mock then goes through the matching `onResponseHeaders` and
+     * `onResponseBody` handlers like a network response, with
+     * `ctx.replacedBy` set. Chromium's `extension` strategy serves it by
+     * redirect instead: its response handlers don't run on it.
+     *
      * The `extension` strategy serves only status 200 (any other status
      * isn't served: the request goes through unchanged, with a Log warning)
-     * and ignores `headers`.
+     * and ignores `headers` on Chromium.
      *
      * @example
      * tweak.onRequest({ url: "*://api.example.com/flags", strategy: "helper" }, () => ({
@@ -730,9 +735,18 @@ declare namespace TangiTweak {
          * Response body. A string is sent as-is; any other object is
          * JSON-serialized. A `Uint8Array` is sent as-is by the `extension`
          * strategy but decoded as UTF-8 text by the others, so it suits text
-         * only there.
+         * only there. `{ file }` serves a file reference.
          */
-        body: string | Uint8Array | object;
+        body: string | Uint8Array | object | {
+            /**
+             * A `data:` URL (base64 or percent-encoded), decoded and served
+             * with its media type (`text/plain` when it has none). Any
+             * other string is served as the body itself: no file is read.
+             *
+             * @example { file: "data:text/html;base64,PGgxPkhpPC9oMT4=" }
+             */
+            file: string;
+        };
         /**
          * HTTP status.
          *
@@ -740,12 +754,14 @@ declare namespace TangiTweak {
          */
         status?: number;
         /**
-         * Content-Type. Default: guessed from the request URL's extension
-         * (`.js`, `.json`, `.css`, `.html`, `.xml`), else `application/json`
-         * (whatever the body is).
+         * Content-Type. Default: a `data:` file's own media type, else
+         * guessed from the request URL's extension (`.js`, `.json`, `.css`,
+         * `.html`, `.xml`), else from the resource type (HTML for documents
+         * and frames, CSS, JavaScript), else `application/json` (whatever
+         * the body is).
          */
         mime?: string;
-        /** Extra response headers (not on the `extension` strategy). */
+        /** Extra response headers (not on Chromium's `extension` strategy). */
         headers?: {
             /** Headers to send with the replacement (`name → value`). */
             set?: { [name: string]: string };
@@ -754,24 +770,36 @@ declare namespace TangiTweak {
 
     /**
      * What `onRequest` may return: **exactly one** of `replaceResponse`,
-     * `redirect`, `block` or `headers` (or nothing, to leave the request alone).
-     * The first three are **final** (the first handler to return one wins);
-     * `headers` is not. To change a redirected request's headers, add an
+     * `redirect`, `block`, `allow` or `headers` (or nothing, to keep what
+     * the earlier handlers decided). The first four are **decisions**: every
+     * matching handler runs and the last decision wins. `headers` is not a
+     * decision and stacks. To change a redirected request's headers, add an
      * `onRequest` handler for the redirect target: on most strategies the
      * redirected request runs through `onRequest` again.
      */
     type RequestResult =
         | OnlyOne<"replaceResponse", {
-              /** Serve this replacement without contacting the network (final). */
+              /** Serve this replacement without contacting the network (a decision). */
               replaceResponse: ReplacementOptions;
           }>
         | OnlyOne<"redirect", {
-              /** Redirect the request to this URL (final). */
+              /** Redirect the request to this URL (a decision). */
               redirect: string;
           }>
         | OnlyOne<"block", {
-              /** Block the request entirely (final). `false` leaves it alone. */
+              /** Block the request entirely (a decision). `false` leaves it alone. */
               block: boolean;
+          }>
+        | OnlyOne<"allow", {
+              /**
+               * Send the request to the network: undoes an earlier
+               * handler's `block`, `redirect` or `replaceResponse` (a
+               * decision; a later handler can still decide otherwise).
+               *
+               * @example
+               * tweak.onRequest({ url: "*://ads.example.com/*", strategy: "helper" }, (ctx) => (ctx.url.includes("keep") ? { allow: true } : undefined));
+               */
+              allow: true;
           }>
         | OnlyOne<"headers", {
               /** Modify request headers on the way out (not final). */
@@ -785,14 +813,33 @@ declare namespace TangiTweak {
      * kept to the first in this order (a throttled Log warning names the
      * dropped ones).
      */
-    type RequestResultKey = "replaceResponse" | "redirect" | "block" | "headers";
+    type RequestResultKey = "replaceResponse" | "redirect" | "block" | "allow" | "headers";
 
     /** `onResponseHeaders` context: the request plus the response head. */
     interface ResponseHeaderCtx extends RequestCtx {
         /** HTTP status line, e.g. `"HTTP/1.1 200 OK"`. */
         statusLine: string;
-        /** Response headers as they came from the network. */
+        /** Response headers as they came from the network (or the mock), with the earlier handlers' edits. */
         responseHeaders: HeaderPair[];
+        /**
+         * Set when the response is a mock (an `onRequest` `replaceResponse`
+         * result) rather than the network's: who made it. `undefined` for a
+         * real response.
+         *
+         * @example
+         * tweak.onResponseHeaders({ url: "*://api.example.com/*", strategy: "helper" }, (ctx) => {
+         *     if (ctx.replacedBy) return { headers: { set: { "x-mocked-by": ctx.replacedBy.tweak } } };
+         * });
+         */
+        replacedBy?: ReplacedBy;
+    }
+
+    /** The mock a response handler runs on: see `ctx.replacedBy`. */
+    interface ReplacedBy {
+        /** The name of the tweak whose `onRequest` made the mock. */
+        tweak: string;
+        /** Which of its handlers made it, e.g. `"onRequest #1"`. */
+        handler: string;
     }
 
     /** What `onResponseHeaders` may return. */
@@ -801,16 +848,23 @@ declare namespace TangiTweak {
         headers?: HeaderMod;
     }
 
-    /** `replaceResponse` context. */
-    interface ReplaceCtx extends RequestCtx {
+    /** `onResponseBody` context. */
+    interface BodyCtx extends RequestCtx {
         /** Content-Type reported by the server, if known. */
         mime?: string;
-    }
-
-    /** `onResponseBody` context. */
-    interface BodyCtx extends ReplaceCtx {
         /** Response status code, when available. */
         status?: number;
+        /**
+         * Set when the body is a mock (an `onRequest` `replaceResponse`
+         * result) rather than the network's: who made it. `undefined` for a
+         * real response.
+         *
+         * @example
+         * tweak.onResponseBody({ url: "*://api.example.com/*", strategy: "helper" }, (ctx, body) => {
+         *     if (ctx.replacedBy) return body.replace("Mock", `Mock from ${ctx.replacedBy.tweak}`);
+         * });
+         */
+        replacedBy?: ReplacedBy;
     }
 
     /**
@@ -1254,13 +1308,16 @@ declare namespace TangiTweak {
      *
      * **Stacking.** When several handlers match one request they run in list
      * order (scripts top to bottom in the Editor, then registration order):
-     * - `onRequest`: the first *final* result (`replaceResponse`/`redirect`/
-     *   `block`) wins and stops the chain; headers-only or `void` results
-     *   don't stop it.
+     * - `onRequest`: **all** matching handlers run; the last decision
+     *   (`replaceResponse`/`redirect`/`block`/`allow`) wins. Headers-only or
+     *   `void` results keep the earlier decision; header edits stack (later
+     *   wins per header) and a later handler's `ctx.requestHeaders` shows them.
      * - `onResponseHeaders`: **all** matching handlers run; `set` is applied in
      *   order (later overwrites), `remove` accumulates.
      * - `onResponseBody`: transforms **compose**: each output is the next input.
-     * - `replaceResponse`: the first handler returning a body wins.
+     *
+     * A mock (`replaceResponse`) goes through the response handlers too,
+     * with `ctx.replacedBy` set.
      *
      * Handlers on different strategies run independently, each on its own
      * strategy (see {@link TangiTweak.Strategy}).
@@ -1275,18 +1332,21 @@ declare namespace TangiTweak {
     interface Tweak {
         /**
          * Intercept a request before it is sent. Return **one** of
-         * `{ replaceResponse }`, `{ redirect }`, `{ block }` or `{ headers }`
-         * (a combination is a type error; at runtime only the first, in that
-         * order, applies and a warning is logged).
+         * `{ replaceResponse }`, `{ redirect }`, `{ block }`, `{ allow }` or
+         * `{ headers }` (a combination is a type error; at runtime only the
+         * first, in that order, applies and a warning is logged).
          *
-         * **Final** results (the first one wins and stops the chain):
-         * - `replaceResponse`: synthesize the response; the network is never contacted.
-         *   On Chromium's `"extension"` strategy it is served as a data-URL
-         *   redirect, so only status 200 is possible there.
+         * **Decisions** (every matching handler runs; the last decision wins):
+         * - `replaceResponse`: synthesize the response (a mock); the network is
+         *   never contacted. The mock still goes through `onResponseHeaders`
+         *   and `onResponseBody`. On Chromium's `"extension"` strategy it is
+         *   served as a data-URL redirect, so only status 200 is possible there.
          * - `redirect`: continue at another URL.
          * - `block`: fail the request.
+         * - `allow`: undo an earlier decision: the request goes to the network.
          *
-         * **Not final:** `{ headers }` is applied and later handlers still run.
+         * **Not a decision:** `{ headers }` stacks; returning nothing keeps the
+         * earlier decision.
          *
          * A handler that throws is logged and skipped: the next one runs.
          *
@@ -1326,46 +1386,6 @@ declare namespace TangiTweak {
         onResponseHeaders(
             route: TangiTweak.RouteOptions,
             handler: (ctx: TangiTweak.ResponseHeaderCtx) => TangiTweak.Awaitable<TangiTweak.ResponseHeaderResult | void>
-        ): void;
-
-        /**
-         * Replace the response body completely. Return a string (sent as-is),
-         * an object (sent as JSON) or `{ file }`; return nothing (`undefined`
-         * or `null`) to leave the response alone. The first handler to return
-         * a body wins; one that throws is logged and the next one runs.
-         *
-         * - A `Uint8Array` is sent as bytes on the `extension` strategy only;
-         *   the others JSON-serialize it like any other object.
-         * - The Content-Type comes from the request URL's extension (`.js`,
-         *   `.json`, `.css`, `.html`, `.xml`), else the resource type (HTML
-         *   for documents and frames, CSS, JavaScript), else
-         *   `application/json`.
-         *
-         * @param route Where it applies: see {@link TangiTweak.RouteOptions}.
-         * @param handler Called per matching response; its result becomes the body.
-         *
-         * @example
-         * tweak.replaceResponse({ url: "*://api.example.com/flags", strategy: "helper" }, () => ({ beta: true }));
-         *
-         * @example
-         * // serve a fixture fetched elsewhere
-         * tweak.replaceResponse({ url: "*://api.example.com/user", strategy: "helper" }, async () => {
-         *     const res = await fetch("https://fixtures.local/user.json");
-         *     return await res.text();
-         * });
-         */
-        replaceResponse(
-            route: TangiTweak.RouteOptions,
-            handler: (ctx: TangiTweak.ReplaceCtx) => TangiTweak.Awaitable<string | Uint8Array | object | {
-                /**
-                 * A `data:` URL (base64 or percent-encoded), decoded and served
-                 * with its media type (`text/plain` when it has none). Any
-                 * other string is served as the body itself: no file is read.
-                 *
-                 * @example { file: "data:text/html;base64,PGgxPkhpPC9oMT4=" }
-                 */
-                file: string;
-            } | null | void>
         ): void;
 
         /**
@@ -1670,7 +1690,7 @@ declare namespace TangiTweak {
          *   disappears when the document unloads (never persisted).
          * - **Handlers:** `tweak.onSite` (direct synchronous access), `tweak.onPage` (live
          *   mirror), and `tweak.onOverlay` (live mirror of the top frame's copy).
-         *   **Throws in all network handlers** (`onRequest`, `replaceResponse`,
+         *   **Throws in all network handlers** (`onRequest`,
          *   `onResponseHeaders`, `onResponseBody` on every strategy) and inside
          *   imported libraries.
          * - **Trust:** Untrusted page data: the site's own scripts can read, mutate,

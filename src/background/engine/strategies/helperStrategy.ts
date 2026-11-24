@@ -57,7 +57,7 @@ export function helperRouteOf(route: RouteMeta): HelperRoute {
         match: route.url,
         exclude: route.exclude,
         methods: route.methods ?? [],
-        req: route.kind === "onRequest" || route.kind === "replaceResponse",
+        req: route.kind === "onRequest",
         resHeaders: route.kind === "onResponseHeaders",
         body: route.kind === "onResponseBody",
         binary: route.kind === "onResponseBody" && takesBinary(route),
@@ -516,7 +516,7 @@ export class HelperStrategy {
         let dec = await this.run("requestDecision", args);
         const req = { url: m.url, method: m.method, type: c.type };
         const ws = c.type === "websocket" || /websocket/i.test(headerValue(m.headers, "upgrade") || "");
-        const wsWarn = (d: any, what: "redirect" | "replaceResponse") => log(c.tabId, `[helper] [${d.who?.scriptName ?? d.scriptName}] ${what === "redirect" ? "onRequest" : d.who?.kind ?? "replaceResponse"} → ${wsNotApplied(what, "helper", m.url, d.url)}`, "warn", d.who?.scriptId ?? d.scriptId, undefined, undefined, c.requestId);
+        const wsWarn = (d: any, what: "redirect" | "replaceResponse") => log(c.tabId, `[helper] [${d.who?.scriptName ?? d.scriptName}] onRequest → ${wsNotApplied(what, "helper", m.url, d.url)}`, "warn", d.who?.scriptId ?? d.scriptId, undefined, undefined, c.requestId);
         if (ws && (dec?.kind === "redirect" || dec?.kind === "respond")) {
             wsWarn(dec, dec.kind === "redirect" ? "redirect" : "replaceResponse");
             dec = null;
@@ -537,16 +537,6 @@ export class HelperStrategy {
         }
         if (dec?.kind === "cancel") {
             this.send({ t: "fail", id: m.id });
-            return;
-        }
-        // replaceResponse runs here: no upstream round-trip for a replaced body
-        const rep = await this.run("replace", { ...args });
-        if (rep && ws) wsWarn(rep, "replaceResponse");
-        else if (rep) {
-            if (c.requestId) correlator.mark(c.requestId, "helper:res");
-            reportSkipped(c.tabId, req, winnerOf(rep, "helper"), c.requestId);
-            recordNetBody({ tabId: c.tabId, url: m.url, method: m.method, modified: rep.content, mime: rep.mime, status: 200, requestId: c.requestId });
-            this.send({ t: "fulfill", id: m.id, status: 200, headers: withNoStore([["content-type", rep.mime]]), body: bytesToBase64(new TextEncoder().encode(rep.content)) });
             return;
         }
         if (dec?.kind === "headers") {

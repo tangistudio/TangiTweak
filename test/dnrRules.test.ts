@@ -181,7 +181,6 @@ describe("rulesForProbe", () => {
         expect(err(probe("onRequest", "*://e.com/*", { block: true }, { forbidden: ["method"] }))).toContain("it reads ctx.method");
         expect(err(probe("onRequest", "*://e.com/*", { block: true }, { error: "boom" }))).toBe("boom");
         expect(err(probe("onResponseBody", "*://e.com/*", null))).toContain("not supported on rules");
-        expect(err(probe("replaceResponse", "*://e.com/*", null))).toContain("not supported on rules");
         expect(err(probe("onRequest", "*://e.com/*", { replaceResponse: true }))).toContain("a `replaceResponse` result is not supported on rules");
         expect(err(probe("onRequest", { url: "*://e.com/*", exclude: "*://e.com/x" }, { block: true }))).toContain("`exclude`");
         expect(err(probe("onRequest", "*://e.com/*", null))).toContain("does nothing");

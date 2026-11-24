@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { HeaderStack, mergeHeaderEdits, skippedBy, skippedLine, winnerOf, type RouteRef, type Winner } from "../src/shared/precedence";
+import { HeaderStack, mergeHeaderEdits, overruledLine, skippedBy, skippedLine, winnerOf, type RouteRef, type Winner } from "../src/shared/precedence";
 import type { NetKind, RouteMeta, Strategy } from "../src/shared/route";
 
 const URL = "https://api.test/v1/data";
@@ -13,37 +13,34 @@ const names = (rs: RouteRef[]) => rs.map((r) => `${r.scriptId}:${r.route.kind}#$
 describe("skippedBy — same layer", () => {
     const routes = [
         ref("a", 0, "onRequest", "debugger"),
-        ref("a", 0, "replaceResponse", "debugger"),
         ref("b", 1, "onRequest", "debugger"),
         ref("b", 1, "onRequest", "debugger", 1),
-        ref("b", 1, "replaceResponse", "debugger"),
         ref("b", 1, "onResponseHeaders", "debugger"),
         ref("b", 1, "onResponseBody", "debugger"),
     ];
-    it("an onRequest block skips later onRequest, every replaceResponse and every response handler", () => {
-        expect(names(skippedBy(routes, { url: URL, type: "xmlhttprequest" }, win("a", "onRequest", "debugger", "block")))).toEqual([
-            "a:replaceResponse#0@debugger",
-            "b:onRequest#0@debugger",
-            "b:onRequest#1@debugger",
-            "b:onResponseBody#0@debugger",
-            "b:onResponseHeaders#0@debugger",
-            "b:replaceResponse#0@debugger",
-        ]);
+    it("an onRequest block skips every response handler, never another onRequest (they all run)", () => {
+        expect(names(skippedBy(routes, { url: URL, type: "xmlhttprequest" }, win("a", "onRequest", "debugger", "block")))).toEqual(["b:onResponseBody#0@debugger", "b:onResponseHeaders#0@debugger"]);
     });
-    it("a replaceResponse skips later replaceResponse and the response stage, not onRequest (it ran first)", () => {
-        expect(names(skippedBy(routes, { url: URL, type: "xmlhttprequest" }, win("a", "replaceResponse", "debugger", "replace")))).toEqual([
-            "b:onResponseBody#0@debugger",
-            "b:onResponseHeaders#0@debugger",
-            "b:replaceResponse#0@debugger",
-        ]);
+    it("a mock skips nothing in its layer: it flows through the response handlers", () => {
+        expect(skippedBy(routes, { url: URL, type: "xmlhttprequest" }, win("a", "onRequest", "debugger", "replace"))).toEqual([]);
     });
-    it("a later script's handler doesn't skip an earlier script's handler of the same kind", () => {
-        expect(names(skippedBy(routes, { url: URL, type: "xmlhttprequest" }, win("b", "onRequest", "debugger", "block", 0)))).toContain("b:onRequest#1@debugger");
-        expect(names(skippedBy(routes, { url: URL, type: "xmlhttprequest" }, win("b", "onRequest", "debugger", "block", 0)))).not.toContain("a:onRequest#0@debugger");
+    it("a mock served by redirect skips its layer's response handlers", () => {
+        const w = win("a", "onRequest", "debugger", "replace");
+        expect(names(skippedBy(routes, { url: URL, type: "xmlhttprequest" }, w, { mockFlows: false }))).toEqual(["b:onResponseBody#0@debugger", "b:onResponseHeaders#0@debugger"]);
+        expect(skippedLine(routes[4], w, URL, { mockFlows: false })).toContain(`strategy "debugger" serves a mock by redirect here, so response handlers can't run on it`);
     });
     it("handlers whose route doesn't match aren't skipped", () => {
         const rs = [ref("a", 0, "onRequest", "helper"), ref("b", 1, "onResponseBody", "helper", 0, ["*://other.test/*"])];
         expect(skippedBy(rs, { url: URL }, win("a", "onRequest", "helper", "block"))).toEqual([]);
+    });
+});
+
+describe("overruledLine", () => {
+    it("names the overruled decision, the one with the last word and why", () => {
+        const a = { scriptId: "a", scriptName: "A", kind: "onRequest" as const, index: 0, outcome: "block" as const };
+        const b = { scriptId: "b", scriptName: "B", kind: "onRequest" as const, index: 1, outcome: "allow" as const };
+        expect(overruledLine(a, b, URL)).toBe(`[A] onRequest #1 → block was overruled: [B] onRequest #2 → allow has the last word (same layer, it comes later in the list) ${URL}`);
+        expect(overruledLine(a, b, URL, "B is an override")).toContain("(B is an override)");
     });
 });
 
@@ -90,7 +87,6 @@ describe("winnerOf", () => {
         expect(winnerOf({ kind: "cancel", who }, "helper")?.outcome).toBe("block");
         expect(winnerOf({ kind: "redirect", url: "https://t/", who }, "helper")).toMatchObject({ outcome: "redirect", target: "https://t/" });
         expect(winnerOf({ kind: "respond", who }, "page")?.outcome).toBe("replace");
-        expect(winnerOf({ mime: "x", content: "", who: { ...who, kind: "replaceResponse" } }, "page")?.outcome).toBe("replace");
         expect(winnerOf({ kind: "headers", changes: {} }, "page")).toBeNull();
         expect(winnerOf(null, "page")).toBeNull();
     });

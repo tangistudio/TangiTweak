@@ -48,7 +48,7 @@ export function webRequestTypeOf(cdpType: string | undefined): string {
 type FetchPattern = { urlPattern: string; resourceType?: string; requestStage: "Request" | "Response" };
 
 /** request stage: the request can end here (a replacement is served without the network) */
-const REQUEST_KINDS: RouteKind[] = ["onRequest", "replaceResponse"];
+const REQUEST_KINDS: RouteKind[] = ["onRequest"];
 
 /** Fetch.enable patterns for the owned routes (a coarse glob; handlers re-filter exactly) */
 export function fetchPatternsOf(owned: OwnedRoute[]): FetchPattern[] {
@@ -412,12 +412,10 @@ export class DebuggerStrategy {
         const answered = () => void (wrId && correlator.mark(wrId, "debugger:res"));
         try {
             if (isRequestStage) {
-                const wantsDecision = this.wants(url, method, resourceType, ["onRequest"]);
-                const wantsReplace = this.wants(url, method, resourceType, ["replaceResponse"]);
-                if (!wantsDecision && !wantsReplace) return void (await cont());
+                if (!this.wants(url, method, resourceType, ["onRequest"])) return void (await cont());
                 base.requestBody = await this.requestBodyOf(d, params);
                 const req = { url, method, type: resourceType };
-                const decision = wantsDecision ? await this.run("requestDecision", base, tabId) : null;
+                const decision = await this.run("requestDecision", base, tabId);
                 dlogLevel("debugger", "debug", "request decision", { url, resourceType, kind: decision?.kind ?? "none" });
                 if (decision?.kind === "respond" || decision?.kind === "cancel" || decision?.kind === "redirect") answered();
                 if (decision?.kind === "respond") {
@@ -433,13 +431,6 @@ export class DebuggerStrategy {
                     reportSkipped(tabId, req, winnerOf(decision, "debugger"), wrId);
                     await debuggerSend(d, "Fetch.continueRequest", { requestId, url: decision.url });
                     return;
-                }
-                // replaceResponse: after onRequest, before the network — the request is never sent
-                const replaced = wantsReplace ? await this.run("replace", base, tabId) : null;
-                if (replaced) {
-                    answered();
-                    reportSkipped(tabId, req, winnerOf(replaced, "debugger"), wrId);
-                    return void (await this.fulfill(d, requestId, tabId, url, method, 200, replaced.mime, replaced.content, undefined, cont, `[${replaced.who?.scriptName ?? "?"}] replaceResponse`, replaced.who?.scriptId ?? null, wrId));
                 }
                 if (decision?.kind === "headers") {
                     const set: Record<string, string> = decision.changes?.set || {};

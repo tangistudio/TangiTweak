@@ -27,7 +27,7 @@ import { libBodyRunning } from "./scriptImports";
 import { paramsProxy, PARAM_AT_TOP, PARAM_NOT_HERE, PARAM_ON_SITE } from "./paramsProxy";
 import { scriptEnv } from "./scriptEnv";
 import { claimStoreName, storePersist } from "./storeOps";
-import { storeRun, tweakHost, tweakStores, type NamedStores, type StoreRun, type TweakHost } from "./tweakApi";
+import { removedReplaceResponse, storeRun, tweakHost, tweakStores, type NamedStores, type StoreRun, type TweakHost } from "./tweakApi";
 
 export interface PageDocumentHandler {
     /** its RPC handle id: the route's key (`"onPage:0"`) */
@@ -174,7 +174,7 @@ export function makePageShim(o: PageShimOptions): PageShim {
     const host = tweakHost((file) => ({
         onRequest: inert,
         onResponseHeaders: inert,
-        replaceResponse: inert,
+        replaceResponse: removedReplaceResponse,
         onResponseBody: inert,
         fetch: o.fetch ? pageTweakFetch(o.fetch) : () => Promise.reject(new Error(NO_FETCH)),
         onSite: register("onSite"),

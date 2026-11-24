@@ -44,14 +44,14 @@ const details = () => ({
 // ---------- stacking: multiple scripts, same hook ----------
 
 describe("handler stacking", () => {
-    it("onRequest: first matching script's redirect wins (later scripts skipped)", () => {
+    it("onRequest: every script runs and the last redirect wins", () => {
         const s = new ExtensionStrategy();
         s.reload([
             makeScript("first", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*", strategy: "extension" }, () => ({ redirect: "https://first.com" }));`),
             makeScript("second", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*", strategy: "extension" }, () => ({ redirect: "https://second.com" }));`),
         ]);
         const d = s.handleBeforeRequest(details(), null) as any;
-        expect(d).toEqual({ kind: "redirect", url: "https://first.com" });
+        expect(d).toEqual({ kind: "redirect", url: "https://second.com" });
     });
 
     it("onRequest: non-terminal results don't stop later scripts", () => {
@@ -144,16 +144,16 @@ describe("async handlers (Chrome extension strategy)", () => {
         expect(d.kind).toBe("allow");
     });
 
-    it("async replaceResponse → not served (no fallback; the error says to pick cdp/process)", () => {
+    it("async onRequest replaceResponse → not served (no fallback; the error says to pick cdp/process)", () => {
         const s = new ExtensionStrategy();
-        s.reload([makeScript("a", `import { tweak } from "tangitweak"; tweak.replaceResponse({ url: "*", strategy: "extension" }, async () => JSON.stringify({ async: true }));`)]);
+        s.reload([makeScript("a", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*", strategy: "extension" }, async () => ({ replaceResponse: { body: { async: true } } }));`)]);
         const d = s.handleBeforeRequest(details(), null) as any;
         expect(d.kind).toBe("allow");
     });
 
-    it("sync replaceResponse still redirects synchronously", () => {
+    it("sync onRequest replaceResponse still redirects synchronously", () => {
         const s = new ExtensionStrategy();
-        s.reload([makeScript("a", `import { tweak } from "tangitweak"; tweak.replaceResponse({ url: "*", strategy: "extension" }, () => "static body");`)]);
+        s.reload([makeScript("a", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*", strategy: "extension" }, () => ({ replaceResponse: { body: "static body" } }));`)]);
         const d = s.handleBeforeRequest(details(), null) as any;
         expect(d.kind).toBe("redirect");
         expect(d.url).toContain("data:");
@@ -163,20 +163,20 @@ describe("async handlers (Chrome extension strategy)", () => {
 describe("async handlers (CDP tier loading)", () => {
     it("routes on other strategies are not loaded", () => {
         const c = new DebuggerStrategy();
-        c.reload([makeScript("a", `import { tweak } from "tangitweak"; tweak.replaceResponse({ url: "*", strategy: "extension" }, async () => "x");`)]);
+        c.reload([makeScript("a", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*", strategy: "extension" }, async () => ({ replaceResponse: { body: "x" } }));`)]);
         expect(c.hasOwners()).toBe(false);
         expect(c.needs({ url: "https://x.com/", method: "GET", type: "main_frame" })).toBe(false);
     });
 
-    it("async replaceResponse script is loaded into DebuggerStrategy", () => {
+    it("async onRequest replaceResponse script is loaded into DebuggerStrategy", () => {
         const c = new DebuggerStrategy();
-        c.reload([makeScript("a", `import { tweak } from "tangitweak"; tweak.replaceResponse({ url: "*", strategy: "debugger" }, async () => "x");`)]);
+        c.reload([makeScript("a", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*", strategy: "debugger" }, async () => ({ replaceResponse: { body: "x" } }));`)]);
         expect(c.needs({ url: "https://x.com/", method: "GET", type: "main_frame" })).toBe(true);
     });
 
-    it("SYNC replaceResponse script IS loaded", () => {
+    it("SYNC onRequest replaceResponse script IS loaded", () => {
         const c = new DebuggerStrategy();
-        c.reload([makeScript("a", `import { tweak } from "tangitweak"; tweak.replaceResponse({ url: "*", strategy: "debugger" }, () => "x");`)]);
+        c.reload([makeScript("a", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*", strategy: "debugger" }, () => ({ replaceResponse: { body: "x" } }));`)]);
         expect(c.needs({ url: "https://x.com/", method: "GET", type: "main_frame" })).toBe(true);
     });
 

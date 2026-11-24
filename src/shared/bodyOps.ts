@@ -8,11 +8,13 @@
  * caller passes the compiled scripts ({@link OpScript}) and the request to
  * {@link runOp}, which runs one {@link BodyOp}:
  *
- * - `requestDecision`: `tweak.onRequest` handlers in order. The first
- *   terminal result (`replaceResponse`, `redirect` or `block`) wins and ends
- *   the chain; header edits stack (the later handler wins per header).
- * - `replace`: `tweak.replaceResponse` handlers; the first non-null result
- *   wins.
+ * - `requestDecision`: every matching `tweak.onRequest` handler, in order.
+ *   The last decision (`replaceResponse`, `redirect`, `block` or `allow`)
+ *   wins; `allow` drops an earlier one. Header edits stack (the later
+ *   handler wins per header) and each handler sees the earlier ones' in
+ *   `ctx.requestHeaders`. A replacement (a mock) then goes through the
+ *   matching `onResponseHeaders` and `onResponseBody` handlers, which get
+ *   `ctx.replacedBy`.
  * - `transform`: `tweak.onResponseBody` handlers compose in order, each
  *   getting the previous one's output.
  * - `responseHeaders`: `tweak.onResponseHeaders` handlers; header edits
@@ -32,16 +34,15 @@ import { formatScriptError } from "./scriptError";
 import { effectiveStrategy, routeGroups, routeLabel, routeMatches, takesBinary, takesText, type Strategy } from "./route";
 import type { Routed, ScriptHandlers } from "./compile";
 import { kindSkipLine, observedLine, type NetKind } from "./netTypes";
-import { HeaderStack, mixedResultLine, overrideLine, singleRequestResult, type Who } from "./precedence";
+import { HeaderStack, mockFlowLine, mixedResultLine, overrideLine, overruledLine, singleRequestResult, type RequestDecision, type Who } from "./precedence";
 import { makeMissedThrottle } from "./missedTap";
 import { requestBodyCtx } from "./requestBody";
 
 /**
  * Which handler chain {@link runOp} runs: `requestDecision` (`onRequest`),
- * `replace` (`replaceResponse`), `transform` (`onResponseBody`) or
- * `responseHeaders` (`onResponseHeaders`).
+ * `transform` (`onResponseBody`) or `responseHeaders` (`onResponseHeaders`).
  */
-export type BodyOp = "requestDecision" | "transform" | "replace" | "responseHeaders";
+export type BodyOp = "requestDecision" | "transform" | "responseHeaders";
 
 /** A compiled script whose handlers {@link runOp} may run. */
 export interface OpScript {
@@ -167,11 +168,14 @@ export function serializeRespondBody(body: any): string {
 const HANDLER_OF: Record<BodyOp, keyof ScriptHandlers> = {
     requestDecision: "onRequest",
     transform: "onResponseBody",
-    replace: "replaceResponse",
     responseHeaders: "onResponseHeaders",
 };
 
-/** The handlers matching `f` for `op`, grouped per script, in script list order then registration order. */
+/**
+ * The handlers matching `f` for `op`, grouped per script, in script list
+ * order then registration order. Every op runs them in this order, so this
+ * is the one place that orders them.
+ */
 function matching(scripts: OpScript[], op: BodyOp, f: OpFilter, env: OpEnv): { s: OpScript; handlers: Routed[] }[] {
     const kind = HANDLER_OF[op];
     const out: { s: OpScript; handlers: Routed[] }[] = [];
@@ -201,6 +205,59 @@ function hasHeaderMods(h: any): boolean {
     return !!h && ((h.set && Object.keys(h.set).length > 0) || (h.remove && h.remove.length > 0));
 }
 
+/** Throttles the "overruled" warning: at most one per handler pair per minute. */
+const overruledThrottle = makeMissedThrottle();
+/** Throttles the "ran on a mock" line: at most one per mock and response handler pair per minute. */
+const mockFlowThrottle = makeMissedThrottle();
+
+/** `headers` with `edits` applied: a removed or set name (case-insensitive) goes, then each set one is written lowercased. */
+export function editRecord(headers: Record<string, string>, edits: any): Record<string, string> {
+    const drop = new Set([...(edits.remove || []), ...Object.keys(edits.set || {})].map((n) => String(n).toLowerCase()));
+    const out: Record<string, string> = {};
+    for (const [k, v] of Object.entries(headers)) if (!drop.has(k.toLowerCase())) out[k] = v;
+    for (const [k, v] of Object.entries(edits.set || {})) out[k.toLowerCase()] = String(v);
+    return out;
+}
+
+/** One header, as webRequest lists them. */
+export interface HeaderPair {
+    /** The header's name, in any case. */
+    name: string;
+    /** Its value; webRequest leaves it out for a binary value. */
+    value?: string;
+}
+
+/** What an onRequest `replaceResponse` serves. */
+export interface Replacement {
+    /** Its Content-Type. */
+    mime: string;
+    /** Its body. */
+    content: string;
+}
+
+/** `pairs` with `edits` applied: a removed or set name (case-insensitive) goes, then each set one is appended. */
+export function editPairs(pairs: HeaderPair[], edits: any): HeaderPair[] {
+    const drop = new Set([...(edits.remove || []), ...Object.keys(edits.set || {})].map((n) => String(n).toLowerCase()));
+    return [...pairs.filter((p) => !drop.has(p.name.toLowerCase())), ...Object.entries(edits.set || {}).map(([name, v]) => ({ name, value: String(v) }))];
+}
+
+/**
+ * Turns an onRequest `replaceResponse` into the body and Content-Type it
+ * serves. A `{ file }` body is read with {@link resolveFileRef}. The
+ * Content-Type is `r.mime`, else a `data:` file's own, else the URL's
+ * extension, else the resource type's ({@link TYPE_MIME}), else
+ * `application/json`.
+ */
+export function replacementBody(r: any, url: string, resourceType: string): Replacement {
+    const body = r.body;
+    const fallback = () => guessMimeFromUrl(url, TYPE_MIME[resourceType] ?? "application/json");
+    if (body && typeof body === "object" && !(body instanceof Uint8Array) && typeof body.file === "string") {
+        const f = resolveFileRef(body.file, url);
+        return { mime: r.mime || (body.file.startsWith("data:") ? f.mime : fallback()), content: f.content };
+    }
+    return { mime: r.mime || fallback(), content: serializeRespondBody(body) };
+}
+
 /**
  * Runs one op's handler chain from `scripts` for one request (see the
  * module overview for each op's semantics).
@@ -217,14 +274,19 @@ function hasHeaderMods(h: any): boolean {
  * `resourceTypes` aren't checked), `requestHeaders`, `requestBody`, `page`,
  * `tier` and `onlyIds` (see {@link OpFilter}); for `responseHeaders` also
  * `status`, `statusLine` and `responseHeaders`; for `transform` also `body`
- * (a string or `Uint8Array`), `contentType`, `status` and `raw`.
+ * (a string or `Uint8Array`), `contentType`, `status` and `raw`. For
+ * both, `replacedBy` (`{ tweak, handler }`) when the response is a mock:
+ * handlers get it as `ctx.replacedBy`. For `requestDecision`, `mockFlows`
+ * `false` returns a mock without running the response handlers on it (a
+ * strategy that serves it by redirect).
  *
  * @returns `null` when no handler changed anything. Otherwise, by op:
- * - `requestDecision`: `{ kind: "respond", mime, content, status, headers,
- *   scriptId, scriptName, who }`, `{ kind: "redirect", url, who }`,
- *   `{ kind: "cancel", who }` or `{ kind: "headers", changes }` with the
- *   stacked request header edits.
- * - `replace`: `{ mime, content, who }`.
+ * - `requestDecision`: the last decision: `{ kind: "respond", mime, content,
+ *   status, headers, scriptId, scriptName, who, replacedBy }` (a mock, after
+ *   the response handlers ran on it; `headers` without Content-Type, which
+ *   is `mime`), `{ kind: "redirect", url, who }` or `{ kind: "cancel", who }`.
+ *   Without one, `{ kind: "headers", changes }` with the stacked request
+ *   header edits.
  * - `transform`: the new body. It stays a `Uint8Array` when the input was
  *   binary or `args.raw` is set; otherwise it is decoded to text.
  * - `responseHeaders`: the stacked edits, `{ set, remove }`.
@@ -237,15 +299,21 @@ export async function runOp(scripts: OpScript[], op: BodyOp, args: any, env: OpE
     const known: string | undefined = args.resourceType === undefined ? "xmlhttprequest" : args.resourceType || undefined;
     const resourceType: string = known ?? "other";
     const reqBody = requestBodyCtx(args.requestBody);
+    // onRequest: what the earlier handlers' header edits made of the request headers
+    let requestHeaders: Record<string, string> = args.requestHeaders || {};
+    const replacedBy: { tweak: string; handler: string } | undefined = args.replacedBy;
     const base = (h: Routed) => ({
         url,
         method,
         tabUrl: args.tabUrl || url,
         resourceType,
-        requestHeaders: args.requestHeaders || {},
+        requestHeaders,
         groups: routeGroups(h.route, url),
         ...reqBody,
     });
+    const ranOnMock = (s: OpScript, h: Routed) => {
+        if (replacedBy && mockFlowThrottle(`${replacedBy.tweak}|${replacedBy.handler}|${s.id}|${h.route.kind}|${h.route.index}`)) env.log(s.id, "info", mockFlowLine(s.name, routeLabel(h.route), replacedBy, url));
+    };
     const binaryBody = op === "transform" && args.body instanceof Uint8Array;
     const filter: OpFilter = { url, method, resourceType: known, tier: args.tier, onlyIds: args.onlyIds };
     const list = matching(scripts, op, op === "transform" ? { ...filter, binary: binaryBody } : filter, env);
@@ -258,8 +326,35 @@ export async function runOp(scripts: OpScript[], op: BodyOp, args: any, env: OpE
     }
     const observed = (s: OpScript, handler: string, why?: string) => env.log(s.id, "debug", observedLine(s.name, handler, url, why), "observed");
 
+    // A mock goes through the response handlers like a network response would, with ctx.replacedBy set.
+    const flowMock = async (d: any, handler: string) => {
+        const status: number = d.status || 200;
+        const by = { tweak: d.scriptName as string, handler };
+        const set: Record<string, string> = d.headers || {};
+        let pairs: { name: string; value?: string }[] = [
+            ...(Object.keys(set).some((k) => k.toLowerCase() === "content-type") ? [] : [{ name: "content-type", value: d.mime }]),
+            ...Object.entries(set).map(([name, v]) => ({ name, value: String(v) })),
+        ];
+        const next = { ...args, requestHeaders, status, statusLine: `HTTP/1.1 ${status}`, replacedBy: by };
+        const edits = await runOp(scripts, "responseHeaders", { ...next, responseHeaders: pairs }, env);
+        if (edits) pairs = editPairs(pairs, edits);
+        const ct = pairs.find((p) => p.name.toLowerCase() === "content-type")?.value;
+        const body = await runOp(scripts, "transform", { ...next, responseHeaders: undefined, body: d.content, contentType: ct ?? d.mime }, env);
+        const headers: Record<string, string> = {};
+        for (const p of pairs) if (p.name.toLowerCase() !== "content-type") headers[p.name] = p.value ?? "";
+        return {
+            ...d,
+            mime: ct ?? d.mime,
+            content: body === null || body === undefined ? d.content : typeof body === "string" ? body : new TextDecoder().decode(body),
+            headers: Object.keys(headers).length ? headers : undefined,
+            replacedBy: by,
+        };
+    };
+
     if (op === "requestDecision") {
         const stack = new HeaderStack();
+        type Decision = { who: Who & { outcome: RequestDecision }; h: Routed; result: any };
+        let decision: Decision | null = null;
         for (const { s, handlers } of list) {
             for (const h of handlers) {
                 const who: Who = { scriptId: s.id, scriptName: s.name, kind: "onRequest", index: h.route.index };
@@ -273,20 +368,28 @@ export async function runOp(scripts: OpScript[], op: BodyOp, args: any, env: OpE
                     if (single.dropped.length && mixedThrottle(`${s.id}|${h.route.index}`)) {
                         env.log(s.id, "warn", mixedResultLine(s.name, routeLabel(h.route), single.kept!, single.dropped, url));
                     }
-                    if (result.replaceResponse) {
-                        const r = result.replaceResponse;
-                        const mime = r.mime || guessMimeFromUrl(url);
-                        const content = serializeRespondBody(r.body);
-                        env.log(s.id, "info", `[${s.name}] onRequest → replaceResponse ${r.status || 200} ${mime} (${content.length}b) ${url}`);
-                        return { kind: "respond", mime, content, status: r.status, headers: r.headers?.set, scriptId: s.id, scriptName: s.name, who };
-                    }
-                    if (result.redirect) {
-                        env.log(s.id, "info", `[${s.name}] onRequest → redirect ${url} → ${result.redirect}`);
-                        return { kind: "redirect", url: result.redirect, who };
-                    }
-                    if (result.block) {
-                        env.log(s.id, "info", `[${s.name}] onRequest → block ${url}`);
-                        return { kind: "cancel", who };
+                    const outcome: RequestDecision | null = result.replaceResponse ? "replace" : result.redirect ? "redirect" : result.block === true ? "block" : result.allow === true ? "allow" : null;
+                    if (outcome) {
+                        const next: Decision = { who: { ...who, outcome }, h, result };
+                        if (outcome === "replace") {
+                            const r = result.replaceResponse;
+                            const { mime, content } = replacementBody(r, url, resourceType);
+                            next.result = { kind: "respond", mime, content, status: r.status, headers: r.headers?.set, scriptId: s.id, scriptName: s.name, who };
+                            env.log(s.id, "info", `[${s.name}] onRequest → replaceResponse ${r.status || 200} ${mime} (${content.length}b) ${url}`);
+                        } else if (outcome === "redirect") {
+                            next.result = { kind: "redirect", url: result.redirect, who };
+                            env.log(s.id, "info", `[${s.name}] onRequest → redirect ${url} → ${result.redirect}`);
+                        } else if (outcome === "block") {
+                            next.result = { kind: "cancel", who };
+                            env.log(s.id, "info", `[${s.name}] onRequest → block ${url}`);
+                        } else if (decision) env.log(s.id, "info", `[${s.name}] onRequest → allow ${url}`);
+                        else observed(s, "onRequest", "allow, and nothing to undo");
+                        if (decision) {
+                            const o = decision.who;
+                            if (overruledThrottle(`${o.scriptId}|${o.index}|${s.id}|${h.route.index}`)) env.log(o.scriptId, "warn", overruledLine(o, next.who, url));
+                        }
+                        decision = outcome === "allow" ? null : next;
+                        continue;
                     }
                     if (hasHeaderMods(result.headers)) {
                         const parts: string[] = [];
@@ -294,25 +397,32 @@ export async function runOp(scripts: OpScript[], op: BodyOp, args: any, env: OpE
                         if (result.headers.remove && result.headers.remove.length) parts.push(`remove ${result.headers.remove.join(", ")}`);
                         env.log(s.id, "info", `[${s.name}] onRequest → request headers (${parts.join("; ")}) ${url}`);
                         stackHeaders(stack, result.headers, who, "request", url, env);
+                        requestHeaders = editRecord(requestHeaders, result.headers);
                     } else observed(s, "onRequest");
                 } catch (e: any) {
                     env.log(s.id, "error", formatScriptError(s.name, e, "onRequest"));
                 }
             }
         }
+        if (decision?.result.kind === "respond" && args.mockFlows !== false) return flowMock(decision.result, routeLabel(decision.h.route));
+        if (decision) return decision.result;
         return stack.empty ? null : { kind: "headers", changes: stack.result() };
     }
 
     if (op === "responseHeaders") {
         const stack = new HeaderStack();
+        // each handler sees the earlier ones' edits
+        let responseHeaders: { name: string; value?: string }[] = args.responseHeaders || [];
         for (const { s, handlers } of list) {
             for (const h of handlers) {
                 const who: Who = { scriptId: s.id, scriptName: s.name, kind: "onResponseHeaders", index: h.route.index };
                 try {
-                    const result = await withPage(args.page, () => h.fn({ ...base(h), status: args.status, statusLine: args.statusLine || "", responseHeaders: args.responseHeaders || [] }), callTab);
+                    ranOnMock(s, h);
+                    const result = await withPage(args.page, () => h.fn({ ...base(h), status: args.status, statusLine: args.statusLine || "", responseHeaders, ...(replacedBy ? { replacedBy } : {}) }), callTab);
                     if (hasHeaderMods(result?.headers)) {
                         env.log(s.id, "info", `[${s.name}] onResponseHeaders → ${Object.keys(result.headers.set || {}).length} set, ${(result.headers.remove || []).length} removed ${url}`);
                         stackHeaders(stack, result.headers, who, "response", url, env);
+                        responseHeaders = editPairs(responseHeaders, result.headers);
                     } else observed(s, "onResponseHeaders");
                 } catch (e: any) {
                     env.log(s.id, "error", formatScriptError(s.name, e, "onResponseHeaders"));
@@ -330,7 +440,8 @@ export async function runOp(scripts: OpScript[], op: BodyOp, args: any, env: OpE
                 try {
                     // A text-only handler only ever sees text.
                     if (out instanceof Uint8Array && !takesBinary(h.route)) out = new TextDecoder().decode(out);
-                    const result: any = await withPage(args.page, () => h.fn({ ...base(h), contentType: args.contentType, status: args.status }, out), callTab);
+                    ranOnMock(s, h);
+                    const result: any = await withPage(args.page, () => h.fn({ ...base(h), contentType: args.contentType, status: args.status, ...(replacedBy ? { replacedBy } : {}) }, out), callTab);
                     if (result !== undefined && result !== null) {
                         const before = typeof out === "string" ? out.length : out.byteLength;
                         const next = typeof result === "string" ? result : result instanceof Uint8Array ? result : JSON.stringify(result);
@@ -348,26 +459,6 @@ export async function runOp(scripts: OpScript[], op: BodyOp, args: any, env: OpE
         if (!touched) return null;
         // A raw or binary body: bytes stay bytes.
         return typeof out === "string" || args.raw || binaryBody ? out : new TextDecoder().decode(out);
-    }
-
-    if (op === "replace") {
-        for (const { s, handlers } of list) {
-            for (const h of handlers) {
-                try {
-                    const out = await withPage(args.page, () => h.fn(base(h)), callTab);
-                    if (out !== undefined && out !== null) {
-                        const isFile = out && typeof out === "object" && typeof out.file === "string";
-                        const { mime, content: body } = isFile ? resolveFileRef(out.file, url) : { mime: guessMimeFromUrl(url, TYPE_MIME[resourceType]), content: typeof out === "string" ? out : typeof out === "object" ? JSON.stringify(out) : String(out) };
-                        env.log(s.id, "info", `[${s.name}] replaceResponse → ${mime} (${body.length}b) ${url}`);
-                        return { mime, content: body, who: { scriptId: s.id, scriptName: s.name, kind: "replaceResponse", index: h.route.index } satisfies Who };
-                    }
-                    observed(s, "replaceResponse");
-                } catch (e: any) {
-                    env.log(s.id, "error", formatScriptError(s.name, e, "replaceResponse"));
-                }
-            }
-        }
-        return null;
     }
 
     return null;

@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import { RouteIndex, effectiveStrategy, hookCanSee, normalizeRoute, routeGroups, routeLabel, routeMatches, routeMayMatch, sampleUrl, scriptUrls, type RouteMeta } from "../src/shared/route";
 import { domHandlersFor, makePageShim } from "../src/shared/pageShim";
+import { compileScript } from "../src/shared/compile";
 
 describe("routeMayMatch", () => {
     it("a route following navigation may match any URL on its origins; others need a full match", () => {
@@ -47,8 +48,14 @@ describe("normalizeRoute", () => {
         expect(() => normalizeRoute("onRequest", { url: "*", navigation: "match", strategy: "page" }, 0)).toThrow(/"navigation" applies to onSite, onPage and onOverlay only/);
     });
 
+    it("tweak.replaceResponse was removed: calling it throws with the onRequest rewrite", () => {
+        const r = compileScript(`import { tweak } from "tangitweak"; tweak.replaceResponse({ url: "*://a.com/*", strategy: "page" }, () => "x");`);
+        expect(r.error).toContain("tweak.replaceResponse was removed: use tweak.onRequest(route, () => ({ replaceResponse: { body } }))");
+        expect(makePageShim({ world: "isolated", params: {}, log: () => {}, storage: { get: () => undefined, set: () => undefined } } as any).host.module("index").tweak.replaceResponse).toThrow(/was removed: use tweak\.onRequest/);
+    });
+
     it("network handlers require a strategy: bare patterns and strategy-less objects throw", () => {
-        for (const kind of ["onRequest", "onResponseHeaders", "replaceResponse", "onResponseBody"] as const) {
+        for (const kind of ["onRequest", "onResponseHeaders", "onResponseBody"] as const) {
             expect(() => normalizeRoute(kind, "*://a.com/*", 0)).toThrow(/bare URL pattern has no strategy — pass \{ url, strategy \}/);
             expect(() => normalizeRoute(kind, ["*://a.com/*"], 0)).toThrow(/bare URL pattern/);
             expect(() => normalizeRoute(kind, { url: "*://a.com/*" }, 0)).toThrow(/missing "strategy"/);

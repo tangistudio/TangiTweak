@@ -425,14 +425,14 @@ async function persistAnalyzeCache(entries: { id: string; name: string; updatedA
 }
 
 /**
- * Run a body op (requestDecision / transform / replace / responseHeaders)
+ * Run a body op (requestDecision / transform / responseHeaders)
  * in the sandbox — MV3 only (MV2 executes handlers in-place). Returns null
  * on any failure (callers treat it as passthrough).
  */
 export async function runBodyOp(
     scripts: PlainScript[],
     paramValues: Record<string, any>,
-    op: "requestDecision" | "transform" | "replace" | "responseHeaders",
+    op: "requestDecision" | "transform" | "responseHeaders",
     args: Record<string, any>
 ): Promise<any | null> {
     await ensureOffscreen();

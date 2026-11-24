@@ -1,5 +1,5 @@
 /**
- * Firefox: the extension strategy serves replaceResponse / respond 200 in place
+ * Firefox: the extension strategy serves an onRequest replaceResponse (200) in place
  * (filterResponseData) instead of redirecting, so the URL is kept.
  */
 import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
@@ -81,31 +81,31 @@ beforeEach(() => {
 });
 
 describe("Firefox extension strategy: in-place replacement", () => {
-    it("sync replaceResponse on a page load: no redirect, body swapped, headers fixed", async () => {
+    it("a sync mock on a page load: no redirect, body swapped, headers fixed", async () => {
         const s = await load();
-        s.reload([makeScript("a", "Page swap", `import { tweak } from "tangitweak"; tweak.replaceResponse({ url: "*", strategy: "extension" }, () => "<h1>NEW</h1>");`)]);
+        s.reload([makeScript("a", "Page swap", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*", strategy: "extension" }, () => ({ replaceResponse: { body: "<h1>NEW</h1>" } }));`)]);
         expect((s.handleBeforeRequest(page(), null) as any).kind).toBe("allow");
         expect(filters.size).toBe(0); // wired when the response headers arrive
         const h = (await s.handleHeadersReceived(page(), null)) as any;
         expect(h.set["Content-Type"]).toBe("text/html; charset=utf-8");
         expect(h.remove).toEqual(expect.arrayContaining(["Content-Length", "Content-Encoding"]));
         const f = filters.get("f1")!;
-        f.onstart!();
+        await f.onstart!();
         expect(text(f)).toBe("<h1>NEW</h1>");
         expect(f.closed).toBe(true);
         expect(entries.filter((e) => e.scriptId === "a").map((e) => [e.level, e.message])).toEqual([
-            ["info", "[Page swap] replaceResponse → text/html (12 bytes) https://site.example/page"],
+            ["info", "[Page swap] onRequest → replaceResponse 200 text/html (12b) https://site.example/page"],
         ]);
     });
 
-    it("async replaceResponse is also served in place", async () => {
+    it("an async mock is also served in place", async () => {
         const s = await load();
-        s.reload([makeScript("a", "Async swap", `import { tweak } from "tangitweak"; tweak.replaceResponse({ url: "*", strategy: "extension" }, async () => JSON.stringify({ ok: 1 }));`)]);
+        s.reload([makeScript("a", "Async swap", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*", strategy: "extension" }, async () => ({ replaceResponse: { body: { ok: 1 } } }));`)]);
         const d = await s.handleBeforeRequest(page({ type: "xmlhttprequest", url: "https://site.example/api" }), null);
         expect((d as any).kind).toBe("allow");
         await s.handleHeadersReceived(page({ type: "xmlhttprequest", url: "https://site.example/api" }), null);
         const f = filters.get("f1")!;
-        f.onstart!();
+        await f.onstart!();
         expect(text(f)).toBe('{"ok":1}');
     });
 
@@ -116,11 +116,11 @@ describe("Firefox extension strategy: in-place replacement", () => {
         await s.handleHeadersReceived(page({ statusCode: 302, responseHeaders: [{ name: "Location", value: "/other" }] }), null);
         expect(filters.size).toBe(0);
         const h = (await s.handleHeadersReceived(page(), null)) as any;
-        expect(h.set["Content-Type"]).toBe("application/json; charset=utf-8");
+        expect(h.set["Content-Type"]).toBe("text/html; charset=utf-8");
         const f = filters.get("f1")!;
-        f.onstart!();
+        await f.onstart!();
         expect(text(f)).toBe('{"m":true}');
-        expect(entries.find((e) => e.scriptId === "a")!.message).toMatch(/^\[Mock\] onRequest → replaceResponse 200 application\/json/);
+        expect(entries.find((e) => e.scriptId === "a")!.message).toMatch(/^\[Mock\] onRequest → replaceResponse 200 text\/html/);
     });
 
     it("respond with a non-200 status isn't served (no status control) and says so", async () => {
@@ -129,15 +129,32 @@ describe("Firefox extension strategy: in-place replacement", () => {
         expect((s.handleBeforeRequest(page(), null) as any).kind).toBe("allow");
         await s.handleHeadersReceived(page(), null);
         expect(filters.size).toBe(0);
-        expect(entries.find((e) => e.scriptId === "a")).toMatchObject({ level: "warn", message: expect.stringContaining("replaceResponse 404 not served") });
+        expect(entries.find((e) => e.scriptId === "a" && e.level === "warn")?.message).toContain("replaceResponse 404 not served");
     });
 
     it("a pruned request leaves nothing behind", async () => {
         const s = await load();
-        s.reload([makeScript("a", "Page swap", `import { tweak } from "tangitweak"; tweak.replaceResponse({ url: "*", strategy: "extension" }, () => "x");`)]);
+        s.reload([makeScript("a", "Page swap", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*", strategy: "extension" }, () => ({ replaceResponse: { body: "x" } }));`)]);
         s.handleBeforeRequest(page(), null);
         s.pruneRequest("f1");
         await s.handleHeadersReceived(page(), null);
         expect(filters.size).toBe(0);
+    });
+
+    it("the mock flows through onResponseHeaders and onResponseBody, with ctx.replacedBy", async () => {
+        const s = await load();
+        s.reload([
+            makeScript("a", "Mock", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*", strategy: "extension" }, () => ({ replaceResponse: { body: "mock" } }));`),
+            makeScript("b", "Edit", `import { tweak } from "tangitweak"; tweak.onResponseHeaders({ url: "*", strategy: "extension" }, (c) => ({ headers: { set: { "x-by": c.replacedBy.tweak } } }));
+tweak.onResponseBody({ url: "*", strategy: "extension" }, (c, body) => body + " via " + c.replacedBy.tweak + " " + c.replacedBy.handler);`),
+        ]);
+        const api = page({ type: "xmlhttprequest", url: "https://site.example/api" });
+        s.handleBeforeRequest(api, null);
+        const h = (await s.handleHeadersReceived(api, null)) as any;
+        expect(h.set["x-by"]).toBe("Mock");
+        const f = filters.get("f1")!;
+        await f.onstart!();
+        expect(text(f)).toBe("mock via Mock onRequest #1");
+        expect(entries.some((e) => e.message.startsWith("[Edit] onResponseBody #1 ran on a mock from [Mock] onRequest #1 (ctx.replacedBy is set)"))).toBe(true);
     });
 });

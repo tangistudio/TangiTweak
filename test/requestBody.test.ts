@@ -78,10 +78,9 @@ describe("ctx.json()", () => {
         const args = { url: "https://x.test/a", method: "POST", requestBody: '{"n":1}' };
         const env = { log: () => {} } as any;
         await runOp(scripts as any, "requestDecision", args, env);
-        await runOp(scripts as any, "replace", args, env);
         await runOp(scripts as any, "responseHeaders", { ...args, status: 200, responseHeaders: [] }, env);
         await runOp(scripts as any, "transform", { ...args, body: "resp", status: 200, contentType: "text/plain" }, env);
-        for (const k of ["onRequest", "replaceResponse", "onResponseHeaders", "onResponseBody"]) expect(got[k], k).toEqual({ body: '{"n":1}', json: { n: 1 } });
+        for (const k of ["onRequest", "onResponseHeaders", "onResponseBody"]) expect(got[k], k).toEqual({ body: '{"n":1}', json: { n: 1 } });
     });
 });
 
@@ -118,7 +117,7 @@ describe("page strategy: fetch / XHR bodies", () => {
         expect(await readFetchBody(url, { method: "POST" }, url, "POST")).toBeUndefined();
     });
 
-    it("the page strategy hands it to onRequest, replaceResponse and onResponseBody", async () => {
+    it("the page strategy hands it to onRequest, a mock and onResponseBody", async () => {
         {
             const s = new PageStrategy();
             s.reload([
@@ -127,11 +126,11 @@ describe("page strategy: fetch / XHR bodies", () => {
                     `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*://x.test/*", strategy: "page" }, (c) => ${SEEN});
 tweak.onResponseBody({ url: "*://x.test/*", strategy: "page" }, (c, body) => body + ":" + c.json().n);`
                 ),
-                makeScript("b", `import { tweak } from "tangitweak"; tweak.replaceResponse({ url: "*://x.test/*", strategy: "page" }, (c) => "replaced " + c.requestBody);`),
+                makeScript("b", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*://x.test/mock", strategy: "page" }, (c) => ({ replaceResponse: { body: "replaced " + c.requestBody } }));`),
             ]);
             const d: any = await s.runRequestDecision(url, "POST", -1, '{"n":7}');
             expect(seen(d.url)).toEqual({ kind: "text", body: '{"n":7}', json: { n: 7 } });
-            expect((await s.runReplace(url, "POST", -1, "abc"))?.content).toBe("replaced abc");
+            expect(((await s.runRequestDecision("https://x.test/mock", "POST", -1, '{"n":5}')) as any)?.content).toBe('replaced {"n":5}:5');
             expect(await s.runTransform(url, "POST", "resp", { requestBody: '{"n":3}' })).toBe("resp:3");
         }
     });

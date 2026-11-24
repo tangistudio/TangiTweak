@@ -644,7 +644,7 @@ import { watchCall, type CallWatch } from "../shared/callWatch";
 
             try {
                 const requestBody = await readFetchBody(input, init, url, method);
-                // 1. onRequest: replaceResponse (no network), block, redirect or header edits
+                // 1. onRequest: replaceResponse (no network; the background already ran onResponseBody on it), block, redirect or header edits
                 const dec = abortP ? await Promise.race([viaBridge({ op: "respond", url, method, requestBody }), abortP]) : await viaBridge({ op: "respond", url, method, requestBody });
                 if (dec && dec.content !== null && dec.content !== undefined) {
                     const hdrs = new Headers({ "content-type": dec.mime || "text/plain" });
@@ -668,13 +668,7 @@ import { watchCall, type CallWatch } from "../shared/callWatch";
                     init = { ...(init || {}), headers: hdrs };
                 }
 
-                // 2. replaceResponse? (background runs the handler)
-                const repl = abortP ? await Promise.race([viaBridge({ op: "replace", url, method, requestBody }), abortP]) : await viaBridge({ op: "replace", url, method, requestBody });
-                if (repl && repl.content !== null && repl.content !== undefined) {
-                    return withUrl(new Response(repl.content, { status: 200, headers: { "content-type": repl.mime || "text/plain" } }), url);
-                }
-
-                // 3. real request (abort propagates natively). A failure here
+                // 2. real request (abort propagates natively). A failure here
                 // is the PAGE's own request failing (network, or an invalid
                 // call the unpatched fetch would reject identically) —
                 // propagate natively, don't log as our pipeline error
@@ -686,7 +680,7 @@ import { watchCall, type CallWatch } from "../shared/callWatch";
                     throw new PassthroughError(e);
                 }
 
-                // 4. transform? only for readable, non-null-body responses
+                // 3. transform? only for readable, non-null-body responses
                 if (response.status === 204 || response.status === 304) return response;
                 // text → string; binary → bytes, only when a `binary: true` route wants them
                 const contentType = response.headers.get("content-type") || "";
@@ -790,7 +784,7 @@ import { watchCall, type CallWatch } from "../shared/callWatch";
             if (!wants(absUrl, xhr.__resMethod || "GET")) return OrigSend.apply(this, args as any);
             claim(absUrl);
 
-            // BECOME the transport: fetch (patched → replace/transform
+            // BECOME the transport: fetch (patched → onRequest/transform
             // applies), then populate the xhr and dispatch the events
             // ourselves — onload/addEventListener consumers see the result
             const abortCtl = new AbortController();
@@ -815,7 +809,7 @@ import { watchCall, type CallWatch } from "../shared/callWatch";
                     // send(body) on a GET would throw natively too) — drop it
                     const safeBody = method === "GET" || method === "HEAD" ? null : body;
 
-                    // the patched fetch runs onRequest → replaceResponse → network → onResponseBody,
+                    // the patched fetch runs onRequest → network → onResponseBody,
                     // exactly as for the page's own fetch (abort wired)
                     let resp: Response;
                     try {

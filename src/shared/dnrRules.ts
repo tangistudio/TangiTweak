@@ -726,7 +726,7 @@ export function rulesForProbe(o: RuleProbe):
       } {
     const fail = (error: string) => ({ error });
     if (o.error) return fail(o.error);
-    if (o.kind === "onResponseBody" || o.kind === "replaceResponse") return fail(`${o.kind} is not supported on rules — use another strategy for this handler`);
+    if (o.kind === "onResponseBody") return fail(`${o.kind} is not supported on rules — use another strategy for this handler`);
     if (o.forbidden?.length) return fail(`rules are fixed: the handler must return the same result for every request (it reads ${o.forbidden.map((f) => `ctx.${f}`).join(", ")})`);
     const route = o.route;
     if (route.exclude.length) return fail("`exclude` is not supported on rules — narrow the url pattern instead");

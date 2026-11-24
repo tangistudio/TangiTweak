@@ -17,7 +17,7 @@ describe("WebSocket limits", () => {
     });
 
     it("flags body routes limited to WebSockets in Problems", () => {
-        expect(wsRouteProblem({ kind: "replaceResponse", resourceTypes: ["websocket"] })).toContain("never runs on a WebSocket");
+        expect(wsRouteProblem({ kind: "onResponseBody", resourceTypes: ["websocket"] })).toContain("never runs on a WebSocket");
         expect(wsRouteProblem({ kind: "onResponseBody", resourceTypes: ["websocket", "script"] })).toBeNull();
         expect(wsRouteProblem({ kind: "onRequest", resourceTypes: ["websocket"] })).toBeNull();
         expect(routeProblem({ kind: "onResponseBody", strategy: "debugger", resourceTypes: ["websocket"] }, { firefox: false, mv3: true })).toContain("never runs on a WebSocket");

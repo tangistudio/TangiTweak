@@ -10,11 +10,15 @@
  * Within a layer, handlers run in stages, each in list order (scripts top
  * to bottom, then registration order within a script):
  *
- *   onRequest → replaceResponse → (network) → onResponseHeaders → onResponseBody
+ *   onRequest → (network) → onResponseHeaders → onResponseBody
  *
- * A final result (onRequest block/redirect/replaceResponse or a
- * replaceResponse body) ends the request in its layer: later handlers of
- * the layer and every handler of the layers behind it never see it.
+ * Every matching onRequest handler runs. The last one that returns a
+ * decision (`replaceResponse`, `redirect`, `block` or `allow`) has the last
+ * word; the earlier decisions it replaced are "overruled"
+ * ({@link overruledLine}). A final decision (block, redirect, replacement)
+ * ends the request in its layer: every handler of the layers behind it
+ * never sees it. A replacement (a mock) still goes through the layer's own
+ * response handlers, unless the strategy serves it by redirect.
  *
  * The background's strategies and `runOp` (`shared/bodyOps.ts`) apply these
  * rules; the `tangitweak/test` harness (`testing/layers.ts`) simulates them.
@@ -37,7 +41,7 @@ import { isNetKind, routeLabel, routeMatches, type NetKind, type RouteMeta, type
 export const LAYERS: Strategy[] = ["page", "rules", "extension", "debugger", "helper"];
 
 /** stage of each handler kind within a layer */
-const STAGE: Record<NetKind, number> = { onRequest: 0, replaceResponse: 1, onResponseHeaders: 2, onResponseBody: 3 };
+const STAGE: Record<NetKind, number> = { onRequest: 0, onResponseHeaders: 1, onResponseBody: 2 };
 
 /** The handler a result came from, as `runOp` results carry it in `who`. */
 export interface Who {
@@ -55,8 +59,7 @@ export interface Who {
  * What a final result did to the request.
  *
  * - `"replace"`: a response was served without the request reaching the
- *   network (an onRequest `replaceResponse` or a `tweak.replaceResponse`
- *   body).
+ *   network (an onRequest `replaceResponse`).
  * - `"block"`: an onRequest `block`.
  * - `"redirect"`: an onRequest `redirect`.
  */
@@ -106,14 +109,27 @@ export interface SkipRequest {
     type?: string;
 }
 
+/** How a final result was served, as {@link skippedBy} and {@link skipReason} take it. */
+export interface SkipOptions {
+    /**
+     * Whether a replacement went through its layer's response handlers.
+     * False where the strategy serves it by redirect (Chromium's
+     * `extension`, `rules`), so they never see it.
+     *
+     * @defaultValue `true`
+     */
+    mockFlows?: boolean;
+}
+
 /**
  * Lists the handlers a final result kept from running on this request.
  *
  * Only handlers whose route matches the request ({@link routeMatches}) count,
  * never the winner itself:
  *
- * - Same layer: later in list order within the winner's stage plus every
- *   later stage (nothing runs after a replacement, a block or a redirect).
+ * - Same layer: no onRequest handler (they all run). Response handlers
+ *   after a block or a redirect, and after a replacement only when it
+ *   doesn't flow through them (`opts.mockFlows` false).
  * - Layers behind the winner: everything (the request never gets there).
  * - Layers in front: only response handlers and only for a block (a
  *   replacement or a redirect still comes back to them as a response).
@@ -125,10 +141,9 @@ export interface SkipRequest {
  * @param w - The final result and the layer that decided it.
  * @returns The skipped handlers, in the order of `routes`.
  */
-export function skippedBy(routes: RouteRef[], req: SkipRequest, w: Winner): RouteRef[] {
+export function skippedBy(routes: RouteRef[], req: SkipRequest, w: Winner, opts: SkipOptions = {}): RouteRef[] {
     const wl = LAYERS.indexOf(w.strategy);
     const ws = STAGE[w.kind];
-    const wOrder = routes.find((r) => r.scriptId === w.scriptId)?.order ?? -1;
     const type = req.type || undefined;
     return routes.filter((r) => {
         const kind = r.route.kind;
@@ -142,8 +157,8 @@ export function skippedBy(routes: RouteRef[], req: SkipRequest, w: Winner): Rout
         const rs = STAGE[kind];
         if (l > wl) return true;
         if (l < wl) return w.outcome === "block" && rs >= STAGE.onResponseHeaders;
-        if (rs !== ws) return rs > ws;
-        return r.order > wOrder || (r.order === wOrder && r.route.index > w.index);
+        if (rs <= ws) return false;
+        return w.outcome !== "replace" || opts.mockFlows === false;
     });
 }
 
@@ -151,8 +166,7 @@ export function skippedBy(routes: RouteRef[], req: SkipRequest, w: Winner): Rout
  * Turns a `runOp` result into the {@link Winner} behind it.
  *
  * A requestDecision `respond`/`cancel`/`redirect` gives a `"replace"`,
- * `"block"` or `"redirect"` winner; a `replace` result (its `who` is a
- * `replaceResponse` handler) gives a `"replace"` one.
+ * `"block"` or `"redirect"` winner.
  *
  * @param r - The result; it must carry `who` ({@link Who}).
  * @param strategy - The layer that ran the op.
@@ -162,37 +176,78 @@ export function skippedBy(routes: RouteRef[], req: SkipRequest, w: Winner): Rout
 export function winnerOf(r: any, strategy: Strategy): Winner | null {
     const who: Who | undefined = r?.who;
     if (!who) return null;
-    if (who.kind === "replaceResponse") return { ...who, strategy, outcome: "replace" };
     if (r.kind === "respond") return { ...who, strategy, outcome: "replace" };
     if (r.kind === "cancel") return { ...who, strategy, outcome: "block" };
     if (r.kind === "redirect") return { ...who, strategy, outcome: "redirect", target: r.url };
     return null;
 }
 
-const WHAT: Record<FinalOutcome, string> = { replace: "replaceResponse", block: "block", redirect: "redirect" };
+/** What an onRequest decision does: a final one ({@link FinalOutcome}) or `"allow"`, which drops an earlier one. */
+export type RequestDecision = FinalOutcome | "allow";
+
+/** An onRequest handler with the decision it returned. */
+export interface Decided extends Who {
+    /** What it decided. */
+    outcome: RequestDecision;
+}
+
+/** Who served a mock: response handlers that run on it get this as `ctx.replacedBy`. */
+export interface ReplacedBy {
+    /** Name of the tweak whose onRequest handler returned the mock. */
+    tweak: string;
+    /** That handler's label, e.g. `onRequest #1`. */
+    handler: string;
+}
+
+const WHAT: Record<RequestDecision, string> = { replace: "replaceResponse", block: "block", redirect: "redirect", allow: "allow" };
 
 /**
- * Labels a final result for log lines: `onRequest #1 → block` (or
- * `→ replaceResponse`, `→ redirect`) for an onRequest result, else
- * `replaceResponse #1`. Numbers are 1-based.
+ * Labels a decision for log lines: `onRequest #1 → block` (or
+ * `→ replaceResponse`, `→ redirect`, `→ allow`). Numbers are 1-based.
  */
-export function winnerLabel(w: Winner): string {
-    return w.kind === "onRequest" ? `onRequest #${w.index + 1} → ${WHAT[w.outcome]}` : `replaceResponse #${w.index + 1}`;
+export function winnerLabel(w: Decided): string {
+    return `${w.kind} #${w.index + 1} → ${WHAT[w.outcome]}`;
 }
 
 /**
  * Says why `r` didn't run: the {@link skippedBy} rule that applies, as the
  * parenthesized reason of a {@link skippedLine}.
  *
- * Assumes {@link skippedBy} returned `r` for `w`.
+ * Assumes {@link skippedBy} returned `r` for `w` with the same `opts`.
  */
-export function skipReason(r: RouteRef, w: Winner): string {
+export function skipReason(r: RouteRef, w: Winner, opts: SkipOptions = {}): string {
     const wl = LAYERS.indexOf(w.strategy);
     const l = LAYERS.indexOf(r.strategy);
     if (l > wl) return `strategy "${w.strategy}" comes before "${r.strategy}", so the request never got there`;
     if (l < wl) return `a blocked request has no response`;
-    if (r.route.kind === w.kind) return `it comes earlier in the list`;
-    return w.outcome === "replace" ? `a replaced response is final` : `the request ended there`;
+    if (w.outcome === "replace" && opts.mockFlows === false) return `strategy "${w.strategy}" serves a mock by redirect here, so response handlers can't run on it`;
+    return `the request ended there`;
+}
+
+/** The reason an {@link overruledLine} gives when both handlers are in the same layer. */
+export const SAME_LAYER_LATER = "same layer, it comes later in the list";
+
+/**
+ * Builds the WARN line for an onRequest decision a later handler replaced:
+ * `[A] onRequest #1 → block was overruled: [B] onRequest #1 → replaceResponse has the last word (why) <url>`.
+ *
+ * @param over - The earlier decision, which no longer applies.
+ * @param by - The later decision, which applies unless another replaces it.
+ * @param why - Why `by` comes later. @defaultValue {@link SAME_LAYER_LATER}
+ */
+export function overruledLine(over: Decided, by: Decided, url: string, why = SAME_LAYER_LATER): string {
+    return `[${over.scriptName}] ${winnerLabel(over)} was overruled: [${by.scriptName}] ${winnerLabel(by)} has the last word (${why}) ${url}`;
+}
+
+/**
+ * Builds the INFO line for a response handler that ran on a mock:
+ * `[B] onResponseBody #1 ran on a mock from [A] onRequest #1 (ctx.replacedBy is set) <url>`.
+ *
+ * @param handler - The response handler's label, e.g. `onResponseBody #1`.
+ * @param mock - Who served the mock: the tweak's name and its handler's label.
+ */
+export function mockFlowLine(scriptName: string, handler: string, mock: ReplacedBy, url: string): string {
+    return `[${scriptName}] ${handler} ran on a mock from [${mock.tweak}] ${mock.handler} (ctx.replacedBy is set) ${url}`;
 }
 
 /**
@@ -214,8 +269,8 @@ export const SKIPPED_MARK = " → skipped: ";
  * @param r - The skipped handler.
  * @param w - The final result that took priority.
  */
-export function skippedLine(r: RouteRef, w: Winner, url: string): string {
-    return `[${r.scriptName}] ${routeLabel(r.route)}${SKIPPED_MARK}[${w.scriptName}] ${winnerLabel(w)} took priority (${skipReason(r, w)}) ${url}`;
+export function skippedLine(r: RouteRef, w: Winner, url: string, opts: SkipOptions = {}): string {
+    return `[${r.scriptName}] ${routeLabel(r.route)}${SKIPPED_MARK}[${w.scriptName}] ${winnerLabel(w)} took priority (${skipReason(r, w, opts)}) ${url}`;
 }
 
 // ---- header edits: the later handler in list order wins per header ----
@@ -334,22 +389,22 @@ export function overrideLine(o: HeaderOverride, which: "request" | "response", u
 }
 
 /** The keys of an onRequest result, in the order {@link singleRequestResult} keeps the first used one. */
-const REQUEST_RESULTS = ["replaceResponse", "redirect", "block", "headers"] as const;
+const REQUEST_RESULTS = ["replaceResponse", "redirect", "block", "allow", "headers"] as const;
 /** A key of an onRequest result: one of {@link REQUEST_RESULTS}. */
 type RequestResultKey = (typeof REQUEST_RESULTS)[number];
 
 function usesKey(result: any, k: RequestResultKey): boolean {
     if (k === "headers") return !!result.headers && ((result.headers.set && Object.keys(result.headers.set).length > 0) || (result.headers.remove && result.headers.remove.length > 0));
-    return k === "block" ? result.block === true : !!result[k];
+    return k === "block" || k === "allow" ? result[k] === true : !!result[k];
 }
 
 /**
  * Keeps one result of an onRequest return value: it is exactly one of
- * replaceResponse / redirect / block / headers.
+ * replaceResponse / redirect / block / allow / headers.
  *
  * One with several keeps the first in that order and drops the rest
  * (`dropped`, for the {@link mixedResultLine} warning), the same on every
- * strategy. A key counts as used when it is truthy, except `block` (only
+ * strategy. A key counts as used when it is truthy, except `block` and `allow` (only
  * `true`) and `headers` (only with a non-empty `set` or `remove`).
  *
  * @param result - The handler's return value.
@@ -388,5 +443,5 @@ export function singleRequestResult<T>(result: T): {
  */
 export function mixedResultLine(scriptName: string, handler: string, kept: string, dropped: string[], url: string): string {
     const ignored = dropped.map((k) => `\`${k}\``).join(", ");
-    return `[${scriptName}] ${handler} returned \`${kept}\` and ${ignored} — an onRequest result is one of replaceResponse, redirect, block or headers, so only \`${kept}\` applied${kept === "redirect" && dropped.includes("headers") ? " (to change the redirected request's headers, add an onRequest handler for the target URL)" : ""} ${url}`;
+    return `[${scriptName}] ${handler} returned \`${kept}\` and ${ignored} — an onRequest result is one of replaceResponse, redirect, block, allow or headers, so only \`${kept}\` applied${kept === "redirect" && dropped.includes("headers") ? " (to change the redirected request's headers, add an onRequest handler for the target URL)" : ""} ${url}`;
 }

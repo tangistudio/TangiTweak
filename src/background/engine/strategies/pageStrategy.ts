@@ -1,7 +1,7 @@
 /**
  * Page strategy: a MAIN-world content script overrides
  * fetch/XHR and asks the background to run the hook-owned handlers for
- * page-initiated requests — onRequest decisions, replaceResponse and
+ * page-initiated requests — onRequest decisions (mocks included) and
  * onResponseBody (streamed body). Banner-free. The page claims each request
  * it handles so the other strategies skip it.
  *
@@ -49,7 +49,7 @@ export class PageStrategy implements InterceptionStrategy {
         return this.hookOwners > 0;
     }
 
-    private async run(op: "requestDecision" | "transform" | "replace", args: Record<string, any>, tabId: number): Promise<any> {
+    private async run(op: "requestDecision" | "transform", args: Record<string, any>, tabId: number): Promise<any> {
         const a = await withOpPage({ ...args, tabId, tier: "page", resourceType: "xmlhttprequest" }, tabId);
         if (__MV3__) return runBodyOp(this.mv3Scripts, this.mv3Params, op, a);
         return runOp(this.ops, op, a, {
@@ -58,7 +58,7 @@ export class PageStrategy implements InterceptionStrategy {
         });
     }
 
-    /** onRequest handlers ONCE: the first final decision (replaceResponse | redirect | block) or merged headers; null = none. */
+    /** onRequest handlers ONCE: the last decision (replaceResponse | redirect | block; a mock already went through onResponseBody) or merged headers; null = none. */
     runRequestDecision(url: string, method: string, tabId = -1, requestBody?: RequestBody): Promise<Decision> {
         return this.run("requestDecision", { url, method, requestBody }, tabId);
     }
@@ -66,11 +66,6 @@ export class PageStrategy implements InterceptionStrategy {
     /** chained onResponseBody over the body (async handlers awaited); requestId: its webRequest request, when known */
     runTransform(url: string, method: string, body: string | Uint8Array, extra?: { status?: number; contentType?: string; requestId?: string; requestBody?: RequestBody }, tabId = -1): Promise<string | Uint8Array | null> {
         return this.run("transform", { url, method, body, status: extra?.status, contentType: extra?.contentType, requestId: extra?.requestId, requestBody: extra?.requestBody }, tabId);
-    }
-
-    /** first replaceResponse handler's result, or null */
-    runReplace(url: string, method: string, tabId = -1, requestBody?: RequestBody): Promise<{ mime: string; content: string } | null> {
-        return this.run("replace", { url, method, requestBody }, tabId);
     }
 
     supportsBodyModification(): boolean {
