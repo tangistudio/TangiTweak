@@ -25,6 +25,10 @@ export interface ToastLayerHost {
     send(op: "toast.corner", a: { host: string; position: ToastPosition | null }): void;
     /** Draws a pane toast's inside, or null to show the default toast. */
     pane?(view: ToastView, slot: HTMLElement): HTMLElement | null;
+    /** The toast of a drawn pane was shown again with the same pane: the pane draws the new one. */
+    paneUpdate?(view: ToastView): void;
+    /** A drawn pane went away (its toast closed, or it fell back to the default toast). */
+    paneRemoved?(key: string): void;
 }
 
 export interface ToastLayer {
@@ -32,6 +36,14 @@ export interface ToastLayer {
     dismiss(key: string): void;
     /** Toasts on screen or waiting in a pill. */
     keys(): string[];
+    /** A pane can't draw: its toast shows as a default one from now on. */
+    paneFailed(key: string): void;
+    /** A pane's `ui.action(id, value)`: tells the background, the toast stays. */
+    paneAction(key: string, actionId: string, value?: unknown): void;
+    /** A pane's `ui.close()`. */
+    paneClose(key: string): void;
+    /** A pane's `ui.keepOpen()`: its timer stops for good. */
+    paneKeepOpen(key: string): void;
     destroy(): void;
 }
 
@@ -89,7 +101,7 @@ const TOAST_CSS = `
 [part=source]{grid-column:2;font-size:12px;opacity:.65;cursor:grab;user-select:none}
 [part=progress]{position:absolute;left:0;bottom:0;height:2px;width:100%;background:var(--tt-accent);opacity:.5;transform-origin:left;animation:tt-progress var(--tt-ms) linear forwards;animation-play-state:paused}
 [part=progress].run{animation-play-state:running}
-.pane{grid-column:1/-1;max-height:480px;overflow:auto}
+.pane{grid-column:1/3;grid-row:1;max-height:480px;overflow:auto}
 @keyframes tt-progress{from{transform:scaleX(1)}to{transform:scaleX(0)}}
 @keyframes tt-pulse{50%{opacity:.3}}
 @media (prefers-reduced-motion:reduce){.strip.pulse{animation:none}}
@@ -153,6 +165,8 @@ interface Item {
     hover: boolean;
     /** It timed out: it waits in the pill. */
     missed: boolean;
+    /** Its pane's element, while one draws it. */
+    paneEl: HTMLElement | null;
 }
 
 export function createToastLayer(h: ToastLayerHost, win: Window = window): ToastLayer {
@@ -161,6 +175,8 @@ export function createToastLayer(h: ToastLayerHost, win: Window = window): Toast
     const open = new Set<ToastPosition>();
     let layer: HTMLElement | null = null;
     let unseen: Item[] = [];
+    /** Toasts whose pane failed: they stay default ones. */
+    const failed = new Set<string>();
 
     function ensureLayer(): HTMLElement {
         const root = h.root();
@@ -205,6 +221,7 @@ export function createToastLayer(h: ToastLayerHost, win: Window = window): Toast
         slot.className = "slot";
         slot.dataset.key = view.key;
         slot.style.width = `${toastWidth(view.look)}px`;
+        slot.style.removeProperty("--tt-ms");
         const shadow = (slot as any).__tt ?? ((slot as any).__tt = slot.attachShadow({ mode: "closed" }));
         shadow.textContent = "";
         const vars = lookVars(view.look, view.kind);
@@ -261,14 +278,16 @@ export function createToastLayer(h: ToastLayerHost, win: Window = window): Toast
             progress = part("div", "progress");
             box.appendChild(progress);
         }
+        // the current view's url: a pane's toast updates in place
+        const urlNow = () => items.get(view.key)?.view.url;
         box.addEventListener("click", () => {
-            if (view.url) act(view.key, "click", undefined, true);
+            if (urlNow()) act(view.key, "click", undefined, true);
         });
         box.addEventListener("keydown", (e) => {
             if (e.key === "Escape") {
                 e.stopPropagation();
                 act(view.key, "close", undefined, true);
-            } else if (e.key === "Enter" && e.target === box && view.url) act(view.key, "click", undefined, true);
+            } else if (e.key === "Enter" && e.target === box && urlNow()) act(view.key, "click", undefined, true);
         });
         shadow.appendChild(box);
         const it: Item = {
@@ -282,6 +301,7 @@ export function createToastLayer(h: ToastLayerHost, win: Window = window): Toast
             timer: null,
             hover: prev?.hover ?? false,
             missed: false,
+            paneEl: pane,
         };
         if (!prev) {
             slot.addEventListener("pointerenter", () => {
@@ -340,6 +360,8 @@ export function createToastLayer(h: ToastLayerHost, win: Window = window): Toast
         if (!it) return;
         if (it.timer) clearTimeout(it.timer);
         items.delete(key);
+        failed.delete(key);
+        if (it.paneEl) h.paneRemoved?.(key);
         it.slot.remove();
         unseen = unseen.filter((u) => u.view.key !== key);
         layout();
@@ -374,7 +396,11 @@ export function createToastLayer(h: ToastLayerHost, win: Window = window): Toast
             const waiting = isOpen ? 0 : folded.length + list.filter((t) => t.missed).length;
             const kids: HTMLElement[] = shown.map((t) => t.slot);
             if (waiting || isOpen) kids.push(pillFor(pos, waiting, list));
-            stack.replaceChildren(...kids);
+            // move only what changed: a moved pane frame reloads
+            for (const c of [...stack.children]) if (!kids.includes(c as HTMLElement)) c.remove();
+            kids.forEach((k, i) => {
+                if (stack!.children[i] !== k) stack!.insertBefore(k, stack!.children[i] ?? null);
+            });
             for (const t of list) {
                 if (isOpen && t.missed) {
                     // opened again: it stays until closed
@@ -562,11 +588,55 @@ export function createToastLayer(h: ToastLayerHost, win: Window = window): Toast
     doc.addEventListener("fullscreenchange", onFullscreen);
     win.addEventListener("resize", onResize);
 
+    /** The same pane shows the toast again: keep its frame, restart the timer. */
+    function updatePane(it: Item, view: ToastView): void {
+        if (it.timer) clearTimeout(it.timer);
+        it.timer = null;
+        it.started = null;
+        it.missed = false;
+        it.view = view;
+        it.left = view.duration === "sticky" ? Infinity : (view.duration ?? TOAST_DEFAULT_DURATION_MS);
+        const box = it.progress?.parentNode ?? it.paneEl?.parentNode;
+        it.progress?.remove();
+        it.progress = null;
+        if (view.duration !== "sticky" && box) {
+            it.progress = part("div", "progress");
+            it.slot.style.setProperty("--tt-ms", `${it.left}ms`);
+            box.appendChild(it.progress);
+        }
+        h.paneUpdate?.(view);
+    }
+
+    /** Rebuild `it` (its pane gone), keeping its place and what's left of its timer. */
+    function rebuild(it: Item, view: ToastView): void {
+        if (it.timer) clearTimeout(it.timer);
+        const left = it.started === null ? it.left : Math.max(0, it.left - (Date.now() - it.started));
+        const next = build(view, it);
+        next.left = left;
+        next.missed = it.missed;
+        items.set(view.key, next);
+        layout();
+    }
+
+    const pane = (key: string) => {
+        const it = items.get(key);
+        return it?.paneEl ? it : undefined;
+    };
+
     return {
         show(view) {
             if (!TOAST_POSITIONS.includes(view.position)) view = { ...view, position: "bottom-right" };
+            if (view.pane && failed.has(view.key)) view = { ...view, pane: undefined };
             const prev = items.get(view.key);
+            if (prev?.paneEl && view.pane === prev.view.pane) {
+                updatePane(prev, view);
+                if (!visible() && view.attention !== "none") unseen = [...unseen.filter((u) => u.view.key !== view.key), prev];
+                layout();
+                signals();
+                return;
+            }
             if (prev?.timer) clearTimeout(prev.timer);
+            if (prev?.paneEl) h.paneRemoved?.(view.key);
             const it = build(view, prev);
             items.set(view.key, it);
             if (!prev) {
@@ -580,8 +650,37 @@ export function createToastLayer(h: ToastLayerHost, win: Window = window): Toast
         },
         dismiss: remove,
         keys: () => [...items.keys()],
+        paneFailed(key) {
+            const it = pane(key);
+            failed.add(key);
+            if (!it) return;
+            h.paneRemoved?.(key);
+            const { pane: _drop, ...view } = it.view;
+            if (!view.title && !view.message) view.message = "";
+            rebuild(it, view);
+        },
+        paneAction(key, actionId, value) {
+            if (pane(key)) act(key, actionId, value, false);
+        },
+        paneClose(key) {
+            if (pane(key)) act(key, "close", undefined, true);
+        },
+        paneKeepOpen(key) {
+            const it = pane(key);
+            if (!it) return;
+            if (it.timer) clearTimeout(it.timer);
+            it.timer = null;
+            it.started = null;
+            it.left = Infinity;
+            it.progress?.remove();
+            it.progress = null;
+            tick(it);
+        },
         destroy() {
-            for (const it of items.values()) if (it.timer) clearTimeout(it.timer);
+            for (const it of items.values()) {
+                if (it.timer) clearTimeout(it.timer);
+                if (it.paneEl) h.paneRemoved?.(it.view.key);
+            }
             items.clear();
             unseen = [];
             stopFlash();

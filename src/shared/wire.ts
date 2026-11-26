@@ -836,6 +836,78 @@ export interface WireOps {
             keys: string[];
         };
     };
+    /**
+     * L2: the bridge is about to frame one of script `s`'s toast panes
+     * (`tweak.toastPane`) in a toast. Like `overlay.open`: top frame only,
+     * `url` on the port's origin and a script with panes. It grants the
+     * frame's ops for `s` on this link until every pane frame of `s` closed
+     * (`pane.closed`).
+     */
+    "pane.open": {
+        req: {
+            /** The one-time nonce the frame will say hello with (at least 16 characters). */
+            nonce: string;
+            /** The page's URL. */
+            url: string;
+        };
+        res: {};
+    };
+    /** L2: what script `s`'s pane frame runs. Refused unless `pane.open` granted it. The bridge adds `pane`. */
+    "pane.init": {
+        req: {};
+        /** What the frame runs, without `phase` and `pane`. */
+        res: OverlayInit;
+    };
+    /** L2: one of script `s`'s pane frames closed. The grant goes with the last one. */
+    "pane.closed": { push: {} };
+    /** L3: a pane called `ui.action(id, value)`. The toast stays open. */
+    "pane.action": {
+        push: {
+            /** The action's id. */
+            actionId: string;
+            /** What the pane passed. */
+            value?: unknown;
+        };
+    };
+    /** L3: a pane called `ui.close()`. */
+    "pane.close": { push: {} };
+    /** L3: a pane called `ui.keepOpen()`: the toast's timer stops. */
+    "pane.keepOpen": { push: {} };
+    /** L3: the pane's height in px changed (the bridge caps it at 480). */
+    "pane.size": {
+        push: {
+            /** Its content's height. */
+            height: number;
+        };
+    };
+    /** L3: the pane can't draw (no such pane, it threw): the toast shows its title and message instead. */
+    "pane.failed": {
+        push: {
+            /** Why, for the Log. */
+            why: string;
+        };
+    };
+    /** L3: the toast was shown again with the same id: draw the new one. */
+    "pane.update": {
+        push: {
+            /** What the pane gets now. */
+            toast: PaneToast;
+        };
+    };
+}
+
+/** What a toast pane's render function gets as `t`. */
+export interface PaneToast {
+    /** The toast's id. */
+    id: string;
+    /** The toast's `data`. */
+    data: unknown;
+    /** The toast's title. */
+    title?: string;
+    /** The toast's message. */
+    message?: string;
+    /** The toast's kind. */
+    kind: "info" | "success" | "warning" | "error";
 }
 
 /**
@@ -909,6 +981,13 @@ export interface OverlayInit {
     react: boolean;
     /** The page's current `when` phase. The host adds it; the background leaves it out. */
     phase?: "document_start" | "document_end" | "document_idle";
+    /** Set in a toast pane's frame: which pane to draw for which toast (no onOverlay handlers run). The bridge adds it. */
+    pane?: {
+        /** The pane's name. */
+        name: string;
+        /** The toast. */
+        toast: PaneToast;
+    };
 }
 
 /** The names of the ops that are calls (they have `req` and `res`). */

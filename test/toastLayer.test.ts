@@ -152,6 +152,61 @@ describe("toast layer", () => {
     });
 });
 
+describe("toast panes", () => {
+    let panes: { key: string; el: HTMLElement }[];
+    let updates: ToastView[];
+    let removed: string[];
+    beforeEach(() => {
+        layer.destroy();
+        panes = [];
+        updates = [];
+        removed = [];
+        layer = createToastLayer({
+            root: () => root,
+            send: (op: string, a: any) => void sent.push({ op, a }),
+            pane: (v: ToastView) => {
+                const el = document.createElement("div");
+                panes.push({ key: v.key, el });
+                return el;
+            },
+            paneUpdate: (v: ToastView) => void updates.push(v),
+            paneRemoved: (key: string) => void removed.push(key),
+        } as any);
+    });
+
+    it("keeps the pane's frame when the toast shows again, and draws the new data in it", () => {
+        layer.show(view({ pane: "price", data: { p: 1 } }));
+        layer.show(view({ id: "b", key: "s1:b" }));
+        layer.show(view({ pane: "price", data: { p: 2 } }));
+        expect(panes.length).toBe(1);
+        expect(panes[0].el.isConnected).toBe(true);
+        expect(updates.map((v) => v.data)).toEqual([{ p: 2 }]);
+        expect(removed).toEqual([]);
+    });
+
+    it("falls back to the default toast when the pane fails, and stays default", () => {
+        layer.show(view({ pane: "price" }));
+        layer.paneFailed("s1:a");
+        const [s] = slots();
+        expect(removed).toEqual(["s1:a"]);
+        expect(partOf(s, "title")!.textContent).toBe("Price dropped");
+        layer.show(view({ pane: "price" }));
+        expect(panes.length).toBe(1);
+    });
+
+    it("pane actions leave the toast open; close and keepOpen work", () => {
+        layer.show(view({ pane: "price" }));
+        layer.paneAction("s1:a", "buy", 3);
+        expect(sent).toContainEqual({ op: "toast.event", a: { key: "s1:a", actionId: "buy", value: 3 } });
+        layer.paneKeepOpen("s1:a");
+        vi.advanceTimersByTime(60_000);
+        expect(sent.some((x) => x.a.actionId === "timeout")).toBe(false);
+        layer.paneClose("s1:a");
+        expect(layer.keys()).toEqual([]);
+        expect(removed).toEqual(["s1:a"]);
+    });
+});
+
 describe("toast placement", () => {
     it("stacks by width", () => {
         expect(stackOf("top-left", 500)).toBe("bottom-center");

@@ -13,6 +13,10 @@
  * the page (the bridge does it, with the page's cookies), calls into
  * onPage code and back go through shared/rpc.ts, and the frame reports
  * its visible areas so the bridge lets clicks through everywhere else.
+ *
+ * A toast pane's frame (`init.pane`) runs the same module graph but no
+ * onOverlay handlers: it draws one `tweak.toastPane` for one toast and
+ * reports its height instead of its rects.
  */
 import { compileScript, runInTweak, type ResApiOverrides } from "../shared/compile";
 import { messagePortEndpoint, type Endpoint, type OverlayInit } from "../shared/wire";
@@ -28,6 +32,8 @@ import { followsNav, routeMatches, type DocumentWhen } from "../shared/route";
 import { NavRoutes } from "../shared/navRoutes";
 import { fireRun, pageCtxBase, type PageDocumentHandler } from "../shared/pageShim";
 import { reactOf, ScriptLife, type Generation, type ReactDomClient } from "../shared/runLifecycle";
+import type { PaneToast } from "../shared/wire";
+import type { ToastPaneEntry } from "../shared/compile";
 import { hotRegistry } from "../shared/hotRefresh";
 import { fromWireResponse, toWireRequest } from "../shared/ttFetch";
 import { formatScriptError } from "../shared/scriptError";
@@ -67,6 +73,7 @@ export interface OverlayEnv {
 export async function startOverlay(ep: Endpoint, init: OverlayInit, env: OverlayEnv = { win: window as any, doc: document }): Promise<OverlayRuntime> {
     const { win, doc } = env;
     const s = init.s;
+    const paneMode = !!init.pane;
     const log = (level: ScriptLogLevel, msg: string) => ep.push("log", { level, msg });
     const errorLine = (e: any, context: string) => formatScriptError(init.name, e, context);
 
@@ -249,6 +256,13 @@ export async function startOverlay(ep: Endpoint, init: OverlayInit, env: Overlay
             return;
         }
         reactDom = () => reactOf(requireFrom(init.name));
+        if (paneMode) {
+            exposer.done();
+            gen = g;
+            life.commit(g);
+            drawPane(compiled.handlers.toastPane);
+            return;
+        }
         const all: PageDocumentHandler[] = compiled.handlers.onOverlay.map(({ fn, route }) => ({ h: route.key!, route, when: route.when || "document_end", fn }));
         handlers = all.filter(({ route }) => {
             if (followsNav(route)) return false;
@@ -300,6 +314,70 @@ export async function startOverlay(ep: Endpoint, init: OverlayInit, env: Overlay
         }
     };
     ep.on("overlay.update", (next) => void load(next, true));
+
+    // ---- toast panes ----
+    let paneToast: PaneToast | undefined = init.pane?.toast;
+    let paneRoot: { render(node: unknown): void; unmount(): void } | null = null;
+    let paneEl: HTMLElement | null = null;
+    let paneFailed = false;
+    const failPane = (why: string) => {
+        if (paneFailed || ep.closed) return;
+        paneFailed = true;
+        ep.push("pane.failed", { why });
+    };
+    const ui = {
+        action: (id: string, value?: unknown) => {
+            if (typeof id === "string" && !ep.closed) ep.push("pane.action", { actionId: id, ...(value !== undefined ? { value } : {}) });
+        },
+        close: () => !ep.closed && ep.push("pane.close", {}),
+        keepOpen: () => !ep.closed && ep.push("pane.keepOpen", {}),
+        update: (data: unknown) => {
+            if (!paneToast) return;
+            paneToast = { ...paneToast, data };
+            renderPane();
+        },
+    };
+    let paneEntry: ToastPaneEntry | undefined;
+    // one component for every draw (the pane's hooks keep their state across updates and saves)
+    const PaneHost = ({ t, render }: { t: PaneToast; render: (t: PaneToast, u: typeof ui) => unknown }) => {
+        try {
+            return render(t, ui);
+        } catch (e) {
+            log("error", errorLine(e, `toastPane "${init.pane!.name}"`));
+            queueMicrotask(() => failPane("it threw"));
+            return null;
+        }
+    };
+    const renderPane = () => {
+        if (!paneEntry || !paneToast || paneFailed) return;
+        let client: ReactDomClient;
+        try {
+            client = reactDom();
+        } catch {
+            return failPane(`the pane "${init.pane!.name}" needs React: write it with JSX`);
+        }
+        const h = client.createElement!;
+        if (!paneEl) {
+            paneEl = doc.createElement("div");
+            paneEl.className = "tt-pane";
+            doc.body.style.margin = "0";
+            doc.body.appendChild(paneEl);
+            const size = () => !ep.closed && ep.push("pane.size", { height: Math.ceil(paneEl!.getBoundingClientRect().height) });
+            if (typeof (win as any).ResizeObserver === "function") new (win as any).ResizeObserver(size).observe(paneEl);
+            else setTimeout(size, 50);
+        }
+        paneRoot ??= client.createRoot(paneEl);
+        paneRoot.render(h(PaneHost, { t: paneToast, render: paneEntry.render }));
+    };
+    const drawPane = (entries: ToastPaneEntry[]) => {
+        paneEntry = entries.find((p) => p.name === init.pane!.name);
+        if (!paneEntry) return failPane(`the script has no tweak.toastPane named "${init.pane!.name}"`);
+        renderPane();
+    };
+    ep.on("pane.update", ({ toast }) => {
+        paneToast = toast;
+        renderPane();
+    });
     const onError = (ev: ErrorEvent) => log("error", ev.error ? errorLine(ev.error, "overlay") : scriptLogLine(init.name, "overlay", ev.message));
     const onRejection = (ev: PromiseRejectionEvent) => log("error", ev.reason instanceof Error ? errorLine(ev.reason, "overlay (unhandled rejection)") : scriptLogLine(init.name, "overlay (unhandled rejection)", formatLogArgs([ev.reason])));
     const onPointer = () => ep.push("focus", {});
@@ -315,10 +393,10 @@ export async function startOverlay(ep: Endpoint, init: OverlayInit, env: Overlay
         lastRects = key;
         ep.push("rects", { rects });
     };
-    const stopRects = env.watchRects === false ? () => {} : watchRects(doc, win, measure);
+    const stopRects = env.watchRects === false || paneMode ? () => {} : watchRects(doc, win, measure);
 
     await load(init, false);
-    measure();
+    if (!paneMode) measure();
     const stop = () => {
         life.stop();
         stopRects();
@@ -329,6 +407,7 @@ export async function startOverlay(ep: Endpoint, init: OverlayInit, env: Overlay
         ep.close("stopped");
     };
     ep.onClose(() => life.stop("the overlay closed"));
+    ep.onClose(() => paneRoot?.unmount());
     ep.onClose(stopRects);
     ep.onClose(stopKeys);
     return { client, exposer, ran, measure, stop };

@@ -55,6 +55,22 @@ describe("overlay links (L2 per-script grants)", () => {
         await expect(b.call("overlay.open", { nonce: NONCE, url: PAGE }, "s1")).resolves.toEqual({});
     });
 
+    it("pane.open grants a script with panes in the top frame until its last pane closes", async () => {
+        setupOverlayLinks({ overlayRuns: async () => new Map(), paneRun: async (s) => (s === "s1" ? run("Script s1") : Promise.reject(new Error("the script has no tweak.toastPane"))) });
+        await expect(bridge({ frameId: 2 }).call("pane.open", { nonce: NONCE, url: PAGE }, "s1")).rejects.toThrow(/top-frame/);
+        const b = bridge();
+        await expect(b.call("pane.open", { nonce: "short", url: PAGE }, "s1")).rejects.toThrow(/refused/);
+        await expect(b.call("pane.open", { nonce: NONCE, url: PAGE }, "s2")).rejects.toThrow(/toastPane/);
+        await expect(b.call("pane.init", {}, "s1")).rejects.toThrow(/no pane here/);
+        await b.call("pane.open", { nonce: NONCE, url: PAGE }, "s1");
+        await b.call("pane.open", { nonce: NONCE + "x", url: PAGE }, "s1");
+        expect(await b.call("pane.init", {}, "s1")).toMatchObject({ s: "s1", routes: [], stores: { n: { value: 1 } } });
+        b.push("pane.closed", {}, "s1");
+        await expect(b.call("fetch", { request: { method: "GET", url: "https://x/" } } as any, "s1")).resolves.toMatchObject({ status: 200 });
+        b.push("pane.closed", {}, "s1");
+        await expect(b.call("fetch", { request: { method: "GET", url: "https://x/" } } as any, "s1")).rejects.toThrow(/no overlay here/);
+    });
+
     it("overlay.init needs a grant and hands over only that script's code and stores", async () => {
         const b = bridge();
         await expect(b.call("overlay.init", {}, "s1")).rejects.toThrow(/no overlay here/);

@@ -51,6 +51,8 @@ import { ShortcutRegistry, watchShortcuts, FrameShortcuts, ShortcutWindows, shor
 import { FrameKeyOffers, FrameKeyWatch, claimToken } from "../shared/frameKeys";
 import type { RanApi } from "../shared/netTypes";
 import { createToastLayer, type ToastLayer } from "./toastLayer";
+import type { ToastView } from "../shared/toast";
+import type { PaneToast } from "../shared/wire";
 
 (() => {
     // ctx.elements/mount/iframes { shadow }: closed shadow roots too (Chrome: chrome.dom; Firefox: the element's own method)
@@ -702,6 +704,23 @@ import { createToastLayer, type ToastLayer } from "./toastLayer";
     let l2Holders = 0;
     // the toasts this (top) frame draws; it holds the port while any are up
     let toastLayer: ToastLayer | null = null;
+    /** A toast pane's frame (`tweak.toastPane`), by toast key. */
+    interface PaneFrame {
+        key: string;
+        s: string;
+        view: ToastView;
+        frame: HTMLIFrameElement;
+        nonce: string;
+        /** its current link (after it said hello) */
+        ep: Endpoint | null;
+        /** the background granted it (`pane.open`) */
+        granted: boolean;
+        /** a load we asked for is coming (others are reloads: the frame moved) */
+        expect: boolean;
+        loads: number;
+        closed: boolean;
+    }
+    const paneFrames = new Map<string, PaneFrame>();
     let l2Backoff = 50;
     let l2Timer: ReturnType<typeof setTimeout> | null = null;
     let l2Opened = 0;
@@ -730,6 +749,7 @@ import { createToastLayer, type ToastLayer } from "./toastLayer";
                     const ovlId = nul < 0 ? s : s.slice(0, nul);
                     const storeId = nul < 0 ? s : s.slice(nul + 1);
                     overlays.get(ovlId)?.ep?.push(op, a, storeId);
+                    for (const p of paneFrames.values()) if (p.s === ovlId) p.ep?.push(op, a, storeId);
                 }
             });
         // MV3: the overlay ⇄ isolated-world relay (the background checks tab, frame and script)
@@ -761,6 +781,14 @@ import { createToastLayer, type ToastLayer } from "./toastLayer";
                     ep.call("overlay.open", { nonce: newNonce(), url: o.url }, o.info.scriptId).then(
                         () => o.ep?.push("store.resync", {}),
                         (e: any) => dlog("warn", `overlay ${o.info.name}: no longer granted: ${e?.message || e}`)
+                    );
+        // and each pane frame
+        if (l2Opened > 1)
+            for (const p of paneFrames.values())
+                if (p.ep)
+                    ep.call("pane.open", { nonce: newNonce(), url: location.href }, p.s).then(
+                        () => p.ep?.push("store.resync", {}),
+                        (e: any) => dlog("warn", `toast pane of ${p.view.source}: no longer granted: ${e?.message || e}`)
                     );
         for (const w of l2Waiters.splice(0)) w();
         // isolated code's replicas re-grant (on first use) and re-subscribe
@@ -973,7 +1001,142 @@ import { createToastLayer, type ToastLayer } from "./toastLayer";
             root: ensureHost,
             // a click after the service worker stopped reopens the port
             send: (op: any, a: any) => void l2up(op).then((ep) => ep.push(op, a), () => {}),
+            pane: (view) => {
+                let el: HTMLElement | null = null;
+                guard(() => void (el = newPane(view)));
+                return el;
+            },
+            paneUpdate: (view) => {
+                const p = paneFrames.get(view.key);
+                if (!p) return;
+                p.view = view;
+                p.ep?.push("pane.update", { toast: paneToastOf(view) });
+            },
+            paneRemoved: (key) => closePane(key),
         }));
+    }
+
+    // ---- toast panes: a tweak's own toast inside, in an overlay.html frame ----
+    const PANE_MAX = 480;
+    const paneToastOf = (v: ToastView): PaneToast => ({ id: v.id, data: v.data, ...(v.title !== undefined ? { title: v.title } : {}), ...(v.message !== undefined ? { message: v.message } : {}), kind: v.kind });
+
+    function newPane(view: ToastView): HTMLElement | null {
+        const cut = view.key.indexOf(":");
+        if (cut <= 0 || !view.pane) return null;
+        closePane(view.key);
+        const frame = document.createElement("iframe");
+        frame.setAttribute("allowtransparency", "true");
+        frame.setAttribute("aria-label", `${view.title ?? view.pane} (from ${view.source})`);
+        frame.style.cssText = "all:initial;display:block;width:100%;height:48px;border:0;margin:0;padding:0;background:transparent;color-scheme:normal";
+        const p: PaneFrame = { key: view.key, s: view.key.slice(0, cut), view, frame, nonce: "", ep: null, granted: false, expect: false, loads: 0, closed: false };
+        paneFrames.set(view.key, p);
+        frame.addEventListener("load", () => guard(() => paneLoaded(p)));
+        openPane(p);
+        return frame;
+    }
+
+    /** grant a fresh nonce, then (re)load the frame with it */
+    function openPane(p: PaneFrame): void {
+        p.nonce = newNonce();
+        l2call("pane.open", { nonce: p.nonce, url: location.href }, p.s).then(
+            () => {
+                if (p.closed) return void l2?.push("pane.closed", {}, p.s);
+                p.granted = true;
+                p.expect = true;
+                // a query of its own each time: only the hash changing wouldn't load it again
+                p.frame.src = chrome.runtime.getURL("overlay.html") + (p.loads ? `?${p.loads}` : "") + "#" + p.nonce;
+                p.loads++;
+            },
+            (e: any) => failPane(p, `couldn't start: ${e?.message || e}`)
+        );
+    }
+
+    function paneLoaded(p: PaneFrame): void {
+        if (p.closed || !p.frame.getAttribute("src")) return;
+        if (!p.expect) {
+            // it moved in the DOM and reloaded: grant a new nonce (a few times)
+            if (p.loads > 3) return failPane(p, "its frame kept reloading");
+            p.ep?.close("reloaded");
+            p.ep = null;
+            if (p.granted) l2?.push("pane.closed", {}, p.s);
+            p.granted = false;
+            return openPane(p);
+        }
+        p.expect = false;
+        connectPane(p);
+    }
+
+    function connectPane(p: PaneFrame): void {
+        const win = p.frame.contentWindow;
+        if (p.closed || !win) return;
+        const s = p.s;
+        const { port1, port2 } = new MessageChannel();
+        const ep = messagePortEndpoint(port1, { debug: (m) => dlog("debug", `toast pane of ${p.view.source}:`, m) });
+        const nonce = p.nonce;
+        let proven = false;
+        const live = () => proven && !p.closed && p.ep === ep;
+        ep.handle("hello", async (a) => {
+            if (proven || a?.nonce !== nonce || p.closed) {
+                ep.close("refused");
+                throw new Error("refused");
+            }
+            proven = true;
+            p.ep = ep;
+            const init = await l2call("pane.init", {}, s);
+            return { ...init, phase: phaseNow(), pane: { name: p.view.pane!, toast: paneToastOf(p.view) } };
+        });
+        const mine = <T>(fn: (a: T, targetS?: string) => any) => (a: T, targetS?: string) => {
+            if (live()) return fn(a, targetS);
+            throw new Error("refused");
+        };
+        const tag = (targetS?: string) => (targetS && targetS !== s ? `${s}\u0000${targetS}` : s);
+        ep.on("store.declare", (a, targetS) => live() && l2?.push("store.declare", a, tag(targetS)));
+        ep.on("store.set", (a, targetS) => live() && l2?.push("store.set", a, tag(targetS)));
+        ep.handle("store.sub", mine((a: ReqOf<"store.sub">, targetS) => l2call("store.sub", a, tag(targetS))));
+        ep.handle("fetch", mine((a: ReqOf<"fetch">) => l2call("fetch", { request: a.request, bypass: !!a.bypass }, s)));
+        ep.handle("pagefetch", mine((a: ReqOf<"pagefetch">) => pageFetch(s, a.request, !!a.bypass)));
+        ep.handle("storage.get", mine((a: ReqOf<"storage.get">) => new Promise((r) => safeSend({ type: "scriptStorageGet", scriptId: s, key: a.key }, (x: any) => r({ value: x?.value })))));
+        ep.handle("storage.set", mine((a: ReqOf<"storage.set">) => new Promise((r) => safeSend({ type: "scriptStorageSet", scriptId: s, key: a.key, value: a.value }, () => r({})))));
+        ep.handle("param.set", mine((a: ReqOf<"param.set">) => new Promise((r) => safeSend({ type: "scriptParamSet", scriptId: s, key: a.key, value: a.value, lib: a.lib }, () => r({})))));
+        ep.handle("toast", mine((a: ReqOf<"toast">) => l2call("toast", a, s)));
+        ep.on("log", (a) => live() && scriptLog(s, ["debug", "info", "warn", "error"].includes(a?.level) ? a.level : "info", String(a?.msg ?? ""), "overlay"));
+        ep.on("pane.action", (a) => live() && typeof a?.actionId === "string" && a.actionId.length <= 64 && toastLayer?.paneAction(p.key, a.actionId, a.value));
+        ep.on("pane.close", () => live() && toastLayer?.paneClose(p.key));
+        ep.on("pane.keepOpen", () => live() && toastLayer?.paneKeepOpen(p.key));
+        ep.on("pane.size", (a) => {
+            if (live() && typeof a?.height === "number" && isFinite(a.height)) p.frame.style.height = `${Math.min(PANE_MAX, Math.max(0, Math.ceil(a.height)))}px`;
+        });
+        ep.on("pane.failed", (a) => live() && failPane(p, String(a?.why ?? "it failed").slice(0, 300)));
+        ep.onClose(() => {
+            if (p.ep === ep) p.ep = null;
+        });
+        win.postMessage({ ttOverlay: true }, "*", [port2]);
+        // a frame that never says hello (a page that blocks extension frames) shows the default toast
+        setTimeout(() => {
+            if (!proven && !p.closed && p.nonce === nonce) {
+                ep.close("no hello");
+                failPane(p, "its frame didn't start");
+            }
+        }, 15000);
+    }
+
+    function failPane(p: PaneFrame, why: string): void {
+        if (p.closed) return;
+        scriptLog(p.s, "warn", scriptLogLine(p.view.source, "toast pane", `"${p.view.pane}" ${why}; showing the default toast`));
+        // the layer calls paneRemoved (closePane)
+        if (toastLayer) toastLayer.paneFailed(p.key);
+        else closePane(p.key);
+    }
+
+    function closePane(key: string): void {
+        const p = paneFrames.get(key);
+        if (!p) return;
+        paneFrames.delete(key);
+        p.closed = true;
+        p.ep?.close("the toast closed");
+        p.ep = null;
+        if (p.granted) l2?.push("pane.closed", {}, p.s);
+        p.granted = false;
     }
 
     function ensureHost(): ShadowRoot {

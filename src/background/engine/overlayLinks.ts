@@ -59,6 +59,8 @@ interface Grant {
     expires: number;
     /** the overlay's link to the store owner (created on first use) */
     store: Endpoint | null;
+    /** a toast pane grant (`pane.open`): how many of the script's pane frames are open */
+    panes?: number;
     /** the page the overlay is on: the only one whose `tweak.pageStore` copies it reaches */
     page: string;
     /** script ids of libraries imported by this overlay */
@@ -131,6 +133,8 @@ export interface OverlayLinkDeps {
     ran?(tabId: number, s: string, name: string, api: string, url: string): void;
     /** the Editor preview: script `s`'s overlay with every onOverlay route, whether or not it matches (throws why there's none) */
     previewRun?(s: string): Promise<OverlayRun>;
+    /** script `s`'s code for its toast panes' frames (throws when it's off or has no `tweak.toastPane`) */
+    paneRun?(s: string): Promise<OverlayRun>;
     /** `tweak.toast` from page, overlay or preview code: the toast center checks and shows it */
     toast?(from: ToastFrom, spec: unknown): Promise<ToastResult>;
 }
@@ -232,7 +236,8 @@ export function confirmNonce(sender: chrome.runtime.MessageSender, nonce: unknow
     if (typeof nonce !== "string" || typeof tabId !== "number" || !sender.url?.startsWith(chrome.runtime.getURL("overlay.html"))) return false;
     const mineByTab = [...grants].filter(([link]) => link.tabId === tabId).flatMap(([, mine]) => [...mine.values()]);
     const previewByTab = [...previews].filter((p) => p.tabId === tabId && p.grant).map((p) => p.grant!);
-    for (const g of [...mineByTab, ...previewByTab])
+    const paneByTab = [...paneNonces].filter(([, n]) => n.tabId === tabId).map(([, n]) => n);
+    for (const g of [...mineByTab, ...previewByTab, ...paneByTab])
         if (g.nonce === nonce && !g.seen && g.expires > Date.now()) {
             g.seen = true;
             return true;
@@ -253,18 +258,25 @@ export async function revalidateOverlayLinks(): Promise<void> {
         }
 }
 
+/** pane frames' nonces until they confirmed (Firefox), with their tab */
+const paneNonces = new Map<string, { tabId: number; nonce: string; seen: boolean; expires: number }>();
+
 export function serveLink(link: BridgeLink): void {
     const mine = new Map<string, Grant>();
+    /** toast pane grants, apart from overlays' (`overlay.closed` and revalidation leave them alone) */
+    const panes = new Map<string, Grant>();
     grants.set(link, mine);
     serveFrameKeyOffers(link.ep, link.tabId, link.frameId);
     serveFrameKeyClaims(link);
     link.ep.onClose(() => {
         for (const g of mine.values()) g.store?.close("the bridge went away");
+        for (const g of panes.values()) g.store?.close("the bridge went away");
         mine.clear();
+        panes.clear();
         grants.delete(link);
     });
     const granted = (op: string, s: string | undefined): Grant => {
-        const g = s === undefined ? undefined : mine.get(s);
+        const g = s === undefined ? undefined : (mine.get(s) ?? panes.get(s));
         if (!g) throw new Error(`${op}: this script has no overlay here`);
         return g;
     };
@@ -285,7 +297,7 @@ export function serveLink(link: BridgeLink): void {
         const nul = tag.indexOf("\u0000");
         const ovlId = nul < 0 ? tag : tag.slice(0, nul);
         const storeId = nul < 0 ? tag : tag.slice(nul + 1);
-        const g = mine.get(ovlId);
+        const g = mine.get(ovlId) ?? panes.get(ovlId);
         if (!g || (storeId !== ovlId && !g.libs.has(storeId))) return undefined;
         return {
             s: storeId,
@@ -360,6 +372,37 @@ export function serveLink(link: BridgeLink): void {
         if (!g) return;
         g.store?.close("the overlay closed");
         mine.delete(s!);
+    });
+
+    // ---- toast panes: a script's tweak.toastPane frames in this tab's toasts ----
+    link.ep.handle("pane.open", async ({ nonce, url }, s) => {
+        if (s === undefined || link.frameId !== 0) throw new Error("pane.open: toasts are top-frame only");
+        if (typeof nonce !== "string" || nonce.length < 16 || typeof url !== "string" || !sameOrigin(url, link.port.sender?.url)) throw new Error("pane.open: refused");
+        if (!deps.paneRun) throw new Error("pane.open: no panes here");
+        const run = await deps.paneRun(s);
+        const page = await pageOfFrame(link.tabId, 0, link.port);
+        const old = panes.get(s);
+        if (old && old.page !== page) old.store?.close("the page changed");
+        panes.set(s, { url, name: run.name, nonce, seen: false, expires: Date.now() + NONCE_TTL_MS, store: old?.page === page ? old.store : null, page, libs: new Set(shippedLibIds(run.libs)), panes: (old?.panes ?? 0) + 1 });
+        paneNonces.set(nonce, { tabId: link.tabId, nonce, seen: false, expires: Date.now() + NONCE_TTL_MS });
+        setTimeout(() => paneNonces.delete(nonce), NONCE_TTL_MS);
+        return {};
+    });
+    link.ep.handle("pane.init", async (_a, s): Promise<OverlayInit> => {
+        const g = s === undefined ? undefined : panes.get(s);
+        if (!g || !deps.paneRun) throw new Error("pane.init: this script has no pane here");
+        const run = await deps.paneRun(s!);
+        const libs = new Set(shippedLibIds(run.libs));
+        g.libs = libs;
+        const initAll = await storeOwner.init([s!, ...libs], { page: g.page });
+        const libStores = libs.size ? Object.fromEntries([...libs].map((id) => [id, initAll[id] ?? {}])) : undefined;
+        return { s: s!, name: run.name, code: run.code, codeHash: run.codeHash, routes: [], url: g.url, params: run.params, stores: initAll[s!] ?? {}, ...(libStores ? { libStores } : {}), page: g.page, libs: run.libs, react: run.react };
+    });
+    link.ep.on("pane.closed", (_a, s) => {
+        const g = s === undefined ? undefined : panes.get(s);
+        if (!g || --g.panes! > 0) return;
+        g.store?.close("the toast closed");
+        panes.delete(s!);
     });
 
     link.ep.handle("fetch", (a, s) => {
@@ -672,5 +715,6 @@ export function resetOverlayLinks(): void {
     relayed.clear();
     linkWaiters.clear();
     previews.clear();
+    paneNonces.clear();
     deps = { overlayRuns };
 }
