@@ -239,12 +239,16 @@ async function checkExplorerUi(ctx: any, mgr: any, check: Check, t: (s: string) 
     await mgr.waitForFunction(() => document.querySelector("#btn-save")?.getAttribute("data-state") === "saved", null, { timeout: 5000 }).catch(() => {});
 
     // F2 with a / moves it into another folder; the open file follows
-    await mgr.click(`${row(uiData?.id)} .script-name`);
-    await mgr.keyboard.press("F2");
+    // the list can still re-render after the save and drop the rename input: retry F2
     const input = "#script-list input.script-rename";
-    const before = await mgr.inputValue(input).catch(() => "");
-    await mgr.fill(input, "moved/ui-data.json");
-    await mgr.press(input, "Enter");
+    let before = "";
+    for (let i = 0; i < 3; i++) {
+        await mgr.click(`${row(uiData?.id)} .script-name`);
+        await mgr.keyboard.press("F2");
+        before = await mgr.inputValue(input, { timeout: 3000 }).catch(() => "");
+        const ok = await mgr.fill(input, "moved/ui-data.json", { timeout: 3000 }).then(() => mgr.press(input, "Enter", { timeout: 3000 })).then(() => true, () => false);
+        if (ok) break;
+    }
     const moved = await mgr.waitForSelector(row("dir:moved"), { timeout: 5000 }).then(() => true, () => false);
     const movedData = (await send({ type: "listDataFiles" })).find((d: any) => d.id === uiData?.id);
     const shown = await mgr.evaluate(() => (window as any).monaco.editor.getEditors()[0].getModel()?.uri.path);
