@@ -50,6 +50,7 @@ import { fromWireRequest, toWireResponse } from "../shared/ttFetch";
 import { ShortcutRegistry, watchShortcuts, FrameShortcuts, ShortcutWindows, shortcutFrames } from "../shared/shortcut";
 import { FrameKeyOffers, FrameKeyWatch, claimToken } from "../shared/frameKeys";
 import type { RanApi } from "../shared/netTypes";
+import { createToastLayer, type ToastLayer } from "./toastLayer";
 
 (() => {
     // ctx.elements/mount/iframes { shadow }: closed shadow roots too (Chrome: chrome.dom; Firefox: the element's own method)
@@ -699,6 +700,8 @@ import type { RanApi } from "../shared/netTypes";
     let l2: Endpoint | null = null;
     let l2Port: chrome.runtime.Port | null = null;
     let l2Holders = 0;
+    // the toasts this (top) frame draws; it holds the port while any are up
+    let toastLayer: ToastLayer | null = null;
     let l2Backoff = 50;
     let l2Timer: ReturnType<typeof setTimeout> | null = null;
     let l2Opened = 0;
@@ -744,6 +747,12 @@ import type { RanApi } from "../shared/netTypes";
             })
         );
         ep.on("frameKeys.unwatch", (a) => guard(() => typeof a?.token === "string" && childKeys.remove(a.token)));
+        // toasts: the top frame draws them; each new port says which it still shows
+        if (window === window.top) {
+            ep.on("toast.show", (a) => guard(() => a?.toast && toasts().show(a.toast)));
+            ep.on("toast.dismiss", (a) => guard(() => typeof a?.key === "string" && toastLayer?.dismiss(a.key)));
+            ep.push("toast.sync", { keys: toastLayer?.keys() ?? [] });
+        }
         // a new link (after a drop, or a new service worker): re-grant each
         // overlay (a fresh nonce), then its replicas re-declare and re-subscribe
         if (l2Opened++)
@@ -767,7 +776,7 @@ import type { RanApi } from "../shared/netTypes";
                     isoPending.delete(cid);
                     p.reply({ cid, ok: false, error: { name: "DisconnectedError", message: "the link to the extension dropped" } });
                 }
-            if (dead || (!l2Holders && !isoHub && !keyHold) || l2Timer) return;
+            if (dead || (!l2Holders && !isoHub && !keyHold && !toastLayer?.keys().length) || l2Timer) return;
             l2Timer = setTimeout(() => {
                 l2Timer = null;
                 openPort();
@@ -959,6 +968,14 @@ import type { RanApi } from "../shared/netTypes";
         );
     }
 
+    function toasts(): ToastLayer {
+        return (toastLayer ??= createToastLayer({
+            root: ensureHost,
+            // a click after the service worker stopped reopens the port
+            send: (op: any, a: any) => void l2up(op).then((ep) => ep.push(op, a), () => {}),
+        }));
+    }
+
     function ensureHost(): ShadowRoot {
         if (host && shadow && host.isConnected) return shadow;
         if (!host || !shadow) {
@@ -967,6 +984,7 @@ import type { RanApi } from "../shared/netTypes";
             host.style.cssText = "all:initial!important;display:block!important;position:fixed!important;inset:0!important;width:auto!important;height:auto!important;z-index:2147483647!important;pointer-events:none!important;visibility:visible!important;opacity:1!important;transform:none!important;contain:strict!important";
             // a page that rewrites its <html> drops the host: put it back (its frames reload)
             new MutationObserver(() => {
+                if (host && !host.isConnected && !overlays.size && toastLayer?.keys().length && !dead) document.documentElement.appendChild(host);
                 if (host && !host.isConnected && overlays.size && !dead) {
                     document.documentElement.appendChild(host);
                     for (const s of [...overlays.keys()]) removeOverlay(s, "reloaded");
@@ -1272,6 +1290,8 @@ import type { RanApi } from "../shared/netTypes";
             }
             // with an open port the same update arrives as `bundle.update`
             if (msg && msg.type === "bundleUpdate" && !l2) onBundleUpdate();
+            // the toast center has a toast for this tab: open the port (it flushes on connect)
+            if (msg && msg.type === "toastWake" && window === window.top && !l2 && !dead) openPort();
         });
         return false;
     });

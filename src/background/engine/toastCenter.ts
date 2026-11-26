@@ -53,6 +53,8 @@ export interface ToastPrefs {
 export const TOAST_PREFS_KEY = "ttToastPrefs";
 /** chrome.storage.session (MV3): the queue, so a restarted service worker keeps it */
 const QUEUE_KEY = "ttToastQueue";
+/** chrome.storage.session (MV3): the toasts on screen, so a click after a service worker restart still finds its toast */
+const SHOWN_KEY = "ttToastShown";
 /** Toasts kept per tweak for the popup. */
 export const TOAST_HISTORY = 20;
 
@@ -91,6 +93,8 @@ interface Shown {
     s: string;
     view: ToastView;
     tabId: number;
+    /** Its push number (0: restored after a service worker restart), to tell it from what a later port shows. */
+    at: number;
 }
 
 let host: ToastCenterHost | null = null;
@@ -168,10 +172,12 @@ export function startToastCenter(h: ToastCenterHost): void {
     if (!first) return;
     void loadPrefs();
     if (hasSession())
-        chrome.storage.session.get([QUEUE_KEY], (d) => {
+        chrome.storage.session.get([QUEUE_KEY, SHOWN_KEY], (d) => {
             void chrome.runtime?.lastError;
             const saved: Waiting[] = Array.isArray(d?.[QUEUE_KEY]) ? d[QUEUE_KEY] : [];
             queue = [...saved.filter((w) => w?.view?.key && w.expires > Date.now()), ...queue];
+            const was: Shown[] = Array.isArray(d?.[SHOWN_KEY]) ? d[SHOWN_KEY] : [];
+            for (const x of was) if (x?.view?.key && typeof x.tabId === "number" && !shown.get(x.tabId)?.has(x.view.key)) mapOf(x.tabId).set(x.view.key, { ...x, at: 0 });
             void flush();
         });
     onBridgeConnect(serveBridge);
@@ -192,8 +198,15 @@ export function startToastCenter(h: ToastCenterHost): void {
 
 function serveBridge(link: BridgeLink): void {
     if (link.frameId !== 0) return;
-    // a new document: what the old one showed is gone
-    shown.delete(link.tabId);
+    const since = ++pushes;
+    // the bridge says what it still shows (none in a new document); what it doesn't is gone
+    link.ep.on("toast.sync", (a) => {
+        const keys = new Set(Array.isArray(a?.keys) ? a.keys.filter((k: unknown) => typeof k === "string") : []);
+        const mine = shown.get(link.tabId);
+        if (!mine) return;
+        for (const [k, x] of [...mine]) if (x.at < since && !keys.has(k)) mine.delete(k);
+        saveQueue();
+    });
     link.ep.on("toast.event", (a) => void onEvent(link.tabId, a));
     link.ep.on("toast.corner", (a) => {
         if (typeof a?.host !== "string" || !a.host) return;
@@ -362,11 +375,13 @@ async function deliver(w: Waiting): Promise<number | undefined> {
 
 async function showOn(w: Waiting, tab: chrome.tabs.Tab): Promise<boolean> {
     const link = topLink(tab.id!);
-    if (!link) return false;
+    if (!link) {
+        wake(tab.id!);
+        return false;
+    }
     const pos = resolveToastPosition({ site: prefs.sites?.[hostOf(tab.url)], global: prefs.corner, toast: w.view.style?.position, tweak: w.view.look.position });
     const view: ToastView = { ...w.view, ...pos };
-    let mine = shown.get(tab.id!);
-    if (!mine) shown.set(tab.id!, (mine = new Map()));
+    const mine = mapOf(tab.id!);
     mine.delete(view.key);
     // the tab keeps at most TOAST_MAX_PER_TAB: the oldest non-sticky one goes first
     while (mine.size >= TOAST_MAX_PER_TAB) {
@@ -375,8 +390,9 @@ async function showOn(w: Waiting, tab: chrome.tabs.Tab): Promise<boolean> {
         mine.delete(old.view.key);
         link.ep.push("toast.dismiss", { key: old.view.key });
     }
-    mine.set(view.key, { s: w.s, view, tabId: tab.id! });
+    mine.set(view.key, { s: w.s, view, tabId: tab.id!, at: ++pushes });
     link.ep.push("toast.show", { toast: view });
+    saveQueue();
     if (!tab.active) {
         unread.set(tab.id!, view.look.accent ?? "#0b6bcb");
         notifyUnread();
@@ -421,7 +437,26 @@ async function flush(_tabId?: number): Promise<void> {
 function saveQueue(): void {
     if (!hasSession()) return;
     try {
-        chrome.storage.session.set({ [QUEUE_KEY]: queue }, () => void chrome.runtime?.lastError);
+        const all = [...shown.values()].flatMap((m) => [...m.values()]);
+        chrome.storage.session.set({ [QUEUE_KEY]: queue, [SHOWN_KEY]: all }, () => void chrome.runtime?.lastError);
+    } catch {}
+}
+
+const mapOf = (tabId: number): Map<string, Shown> => {
+    let m = shown.get(tabId);
+    if (!m) shown.set(tabId, (m = new Map()));
+    return m;
+};
+
+let pushes = 0;
+const woken = new Map<number, number>();
+/** A tab whose bridge has no open port: asks it to open one (it connects, then the queue flushes). */
+function wake(tabId: number): void {
+    const now = Date.now();
+    if (now - (woken.get(tabId) ?? 0) < 2000) return;
+    woken.set(tabId, now);
+    try {
+        chrome.tabs.sendMessage(tabId, { type: "toastWake" }, { frameId: 0 }, () => void chrome.runtime?.lastError);
     } catch {}
 }
 
@@ -431,7 +466,10 @@ async function onEvent(tabId: number, a: { key?: unknown; actionId?: unknown; va
     const mine = shown.get(tabId);
     const t = mine?.get(a.key);
     if (!t) return;
-    if (a.closed) mine!.delete(a.key);
+    if (a.closed) {
+        mine!.delete(a.key);
+        saveQueue();
+    }
     if (unread.delete(tabId)) notifyUnread();
     if (a.actionId === "timeout") return;
     const action = t.view.actions?.find((x) => x.id === a.actionId);
@@ -457,12 +495,15 @@ export function dismissToasts(s: string): void {
     const before = queue.length;
     queue = queue.filter((w) => w.s !== s);
     if (queue.length !== before) saveQueue();
+    let gone = false;
     for (const [tabId, mine] of shown)
         for (const [key, t] of [...mine])
             if (t.s === s) {
                 mine.delete(key);
+                gone = true;
                 topLink(tabId)?.ep.push("toast.dismiss", { key });
             }
+    if (gone) saveQueue();
 }
 
 /** A tweak's toast style changed (a save): its toasts on screen take the new look. */
@@ -503,4 +544,5 @@ export function __resetToastCenter(): void {
     history.clear();
     unread.clear();
     unreadFns.clear();
+    woken.clear();
 }

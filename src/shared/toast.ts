@@ -49,7 +49,14 @@ export const TOAST_MAX_VISIBLE = 3;
 /** The most toasts a tab keeps open at once, all tweaks together; the oldest non-sticky one goes first. */
 export const TOAST_MAX_PER_TAB = 6;
 /** The narrowest and widest a toast is, in CSS pixels. */
-export const TOAST_WIDTH = { min: 280, max: 480, default: 360 } as const;
+export const TOAST_WIDTH = {
+    /** The narrowest a toast gets, in pixels. */
+    min: 280,
+    /** The widest a toast gets, in pixels. */
+    max: 480,
+    /** A toast's width when its look sets none, in pixels. */
+    default: 360,
+} as const;
 
 /** A button on a toast. */
 export interface ToastActionSpec {
@@ -98,19 +105,33 @@ export type ToastInput = string | ToastOptionsInput;
 
 /** The options a tweak passes to `tweak.toast`, before they are checked. */
 export interface ToastOptionsInput {
+    /** The bold first line. */
     title?: string;
+    /** The text under it. Plain text only. */
     message?: string;
+    /** Its kind: `"info"` (the default), `"success"`, `"warning"` or `"error"`. */
     kind?: ToastKind;
+    /** An emoji or short text, an http(s) or `data:image` URL, or `false` for none. */
     icon?: string | false;
+    /** What a click on the toast opens, in a new tab: http(s) only. */
     url?: string;
+    /** Its buttons: `{ id, label }`, or a label that is its own id. */
     actions?: (ToastActionSpec | string)[];
+    /** How long it stays: milliseconds, a duration such as `"10s"`, or `"sticky"`. */
     duration?: number | string;
+    /** Its id in the tweak: a toast with the same id replaces it. */
     id?: string;
+    /** Which tab shows it: `"active"`, `"this"` or a URL pattern. */
     where?: string;
+    /** How long it waits for a tab: milliseconds or a duration such as `"1h"` or `"1d"`. */
     ttl?: number | string;
+    /** Its own look, over the tweak's `tweak.toastStyle`. */
     style?: ToastStyle;
+    /** What its tab does while it waits unseen: `"normal"` or `"none"`. */
     attention?: ToastAttention;
+    /** The `tweak.toastPane` that draws it. */
     pane?: string;
+    /** What the pane gets, as JSON. */
     data?: unknown;
 }
 
@@ -349,13 +370,32 @@ export interface ToastView extends ToastSpec {
     /** Whether the user's corner decided `position`. */
     userCorner: boolean;
     /** Whether the tab title flashes and its icon gets a dot while the toast waits unseen. */
-    signals: { titleFlash: boolean; iconDot: boolean };
+    signals: {
+        /** The tab title flashes. */
+        titleFlash: boolean;
+        /** The tab icon gets a dot. */
+        iconDot: boolean;
+    };
     /** When the tweak made it (ms since epoch). */
     createdAt: number;
 }
 
 /** Picks a toast's corner. `site` and `global` are the user's choices; the user wins over the tweak. */
-export function resolveToastPosition(o: { site?: ToastPosition; global?: ToastPosition; toast?: ToastPosition; tweak?: ToastPosition }): { position: ToastPosition; userCorner: boolean } {
+export function resolveToastPosition(o: {
+    /** The user's corner for this site. */
+    site?: ToastPosition;
+    /** The user's corner for every site. */
+    global?: ToastPosition;
+    /** The toast's own `style.position`. */
+    toast?: ToastPosition;
+    /** The tweak's `toastStyle.position`. */
+    tweak?: ToastPosition;
+}): {
+    /** The corner. */
+    position: ToastPosition;
+    /** Whether the user's corner decided it. */
+    userCorner: boolean;
+} {
     const user = o.site ?? o.global;
     if (user) return { position: user, userCorner: true };
     return { position: o.toast ?? o.tweak ?? "bottom-right", userCorner: false };
@@ -370,7 +410,14 @@ export const TOAST_NOT_HERE = "tweak.toast isn't available here";
  * `tweak.toast` for a context: checks the input, then hands it to `send`.
  * `blocked()` says why it can't run now (at top level, say), if it can't.
  */
-export function toastCaller(o: { send?: (spec: ToastSpec) => Promise<ToastResult>; blocked?: () => string | undefined; defaultWhere?: string }): (input: ToastInput) => Promise<ToastResult> {
+export function toastCaller(o: {
+    /** Hands the checked toast on; none where toasts can't show. */
+    send?: (spec: ToastSpec) => Promise<ToastResult>;
+    /** Why it can't run now, if it can't. */
+    blocked?: () => string | undefined;
+    /** `where` when the toast sets none. */
+    defaultWhere?: string;
+}): (input: ToastInput) => Promise<ToastResult> {
     return (input) => {
         const why = o.blocked?.();
         if (why) return Promise.reject(new Error(why));

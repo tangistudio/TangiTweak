@@ -90,7 +90,12 @@ export interface ScriptHandlers {
     /** `tweak.every` schedules, which run in the background. */
     every: EveryEntry[];
     /** `tweak.onToastAction` handlers. */
-    toastAction: { fn: HandlerFn; line?: number }[];
+    toastAction: {
+        /** The handler. */
+        fn: HandlerFn;
+        /** Its line in the script, for errors. */
+        line?: number;
+    }[];
     /** `tweak.toastPane` renderers, in order (names are unique). */
     toastPane: ToastPaneEntry[];
     /** The merged `tweak.toastStyle` calls, if any. */

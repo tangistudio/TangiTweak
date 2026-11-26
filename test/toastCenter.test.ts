@@ -31,12 +31,13 @@ const created: any[] = [];
 const local: Record<string, any> = {};
 let scripts: Record<string, { name: string; enabled: boolean; meta: any }>;
 const actions: any[] = [];
+const wakes: any[] = [];
 
 const tab = (id: number, url: string, active = false): chrome.tabs.Tab => ({ id, url, active, index: id, windowId: 1 }) as any;
 
 beforeEach(() => {
     __resetToastCenter();
-    logs.length = created.length = actions.length = 0;
+    logs.length = created.length = actions.length = wakes.length = 0;
     for (const k of Object.keys(local)) delete local[k];
     tabs = [tab(1, "https://a.example/x", true), tab(2, "https://b.example/y")];
     links = [link(1), link(2)];
@@ -48,6 +49,7 @@ beforeEach(() => {
             query: async (q: any) => (q.active ? tabs.filter((t) => t.active) : tabs),
             get: async (id: number) => tabs.find((t) => t.id === id) ?? Promise.reject(new Error("no tab")),
             create: async (o: any) => void created.push(o),
+            sendMessage: (tabId: number, msg: any, o: any, cb?: () => void) => (wakes.push([tabId, msg, o]), cb?.()),
             onActivated: ev(),
             onRemoved: ev(),
         },
@@ -86,6 +88,27 @@ describe("toast center", () => {
         connect!(l);
         await vi.waitFor(() => expect(shows(l)).toHaveLength(1));
         expect(toastHistory("s1").s1[0].status).toBe("shown");
+    });
+
+    it("wakes a tab whose bridge has no port, at most once per 2 s", async () => {
+        links = [];
+        await expect(showToast({ s: "s1" }, { id: "a", title: "x" })).resolves.toMatchObject({ status: "queued" });
+        await showToast({ s: "s1" }, { id: "a", title: "y" });
+        expect(wakes).toEqual([[1, { type: "toastWake" }, { frameId: 0 }]]);
+        const l = link(1);
+        links.push(l);
+        connect!(l);
+        await vi.waitFor(() => expect(shows(l).map((t) => t.title)).toEqual(["y"]));
+    });
+
+    it("a new port's toast.sync forgets the toasts the tab no longer shows", async () => {
+        await showToast({ s: "s1" }, { id: "a", title: "x" });
+        const l = link(1);
+        links = [l, links[1]];
+        connect!(l);
+        l.on["toast.sync"]({ keys: [] });
+        dismissToasts("s1");
+        expect(l.pushed.filter(([n]) => n === "toast.dismiss")).toEqual([]);
     });
 
     it("where: \"this\" needs a tab", async () => {

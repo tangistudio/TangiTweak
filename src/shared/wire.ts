@@ -775,6 +775,7 @@ export interface WireOps {
             /** The toast, checked by the caller's shim. */
             spec: ToastSpec;
         };
+        /** What became of it. */
         res: ToastResult;
     };
     /** L2: `tweak.toast` from MV2/Firefox isolated onPage code, which the bridge runs. Checked like `iso.fetch`. */
@@ -785,20 +786,56 @@ export interface WireOps {
             /** The toast, checked by the caller's shim. */
             spec: ToastSpec;
         };
+        /** What became of it. */
         res: ToastResult;
     };
     /** L2: the background shows a toast in this tab (top frame only). The bridge draws it in its shadow root. */
-    "toast.show": { push: { toast: ToastView } };
+    "toast.show": {
+        push: {
+            /** The toast, ready to draw. */
+            toast: ToastView;
+        };
+    };
     /** L2: the background takes a toast down (its tweak was turned off or muted, or it showed in another tab). */
-    "toast.dismiss": { push: { key: string } };
+    "toast.dismiss": {
+        push: {
+            /** The toast's key. */
+            key: string;
+        };
+    };
     /**
      * L2: the user did something to a toast: clicked it or a button
      * (`actionId`), closed it (`"close"`), or it timed out (`"timeout"`, not
      * passed to the tweak). A pane's `ui.action(id, value)` comes as `value`.
      */
-    "toast.event": { push: { key: string; actionId: string; value?: unknown } };
-    /** L2: the user dragged the toast stack to another corner on this site. */
-    "toast.corner": { push: { host: string; position: ToastPosition } };
+    "toast.event": {
+        push: {
+            /** The toast's key. */
+            key: string;
+            /** What happened: an action's id, `"click"`, `"close"` or `"timeout"`. */
+            actionId: string;
+            /** What a pane passed to `ui.action`. */
+            value?: unknown;
+            /** Whether the toast is gone from the tab. */
+            closed?: boolean;
+        };
+    };
+    /** L2: the user dragged the toast stack to another corner on this site (null: Reset position). */
+    "toast.corner": {
+        push: {
+            /** The site. */
+            host: string;
+            /** The corner, or null to forget it. */
+            position: ToastPosition | null;
+        };
+    };
+    /** L2: on each new port, the toasts this tab still shows (none in a new document). */
+    "toast.sync": {
+        push: {
+            /** The keys of the toasts it shows. */
+            keys: string[];
+        };
+    };
 }
 
 /**
