@@ -239,7 +239,7 @@ describe("the Preview tab (OverlayPreview.tsx)", () => {
         const tab = document.getElementById("preview-tab")!;
         expect(tab.textContent).toBe("Preview");
         expect(tab.title).toMatch(/\(Alt\+Shift\+V\)$/);
-        expect([...document.querySelectorAll("#panel-tabs .panel-tab")].map((t) => t.textContent)).toEqual(["Problems", "Log", "Network", "Preview"]);
+        expect([...document.querySelectorAll("#panel-tabs .panel-tab")].map((t) => t.textContent)).toEqual(["Problems", "Log", "Network", "Preview", "Schedules"]);
         expect(document.getElementById("preview-view")).toBeNull();
         expect(bg.links).toHaveLength(0);
 

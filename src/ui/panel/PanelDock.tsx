@@ -15,6 +15,7 @@ import { panel } from "../state/panel";
 import { LogView } from "./LogView";
 import { OverlayPreview, PreviewTools } from "./OverlayPreview";
 import { ProblemsView } from "./ProblemsView";
+import { SchedulesView } from "./SchedulesView";
 
 const ico = (d: string) => (
     <svg className="panel-tab-ico" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
@@ -27,6 +28,7 @@ const ICONS: Record<PanelTab, ReactElement> = {
     log: ico("M2.5 4h11M2.5 8h11M2.5 12h7"),
     network: ico("M5 13V3M2.5 5.5 5 3l2.5 2.5M11 3v10M8.5 10.5 11 13l2.5-2.5"),
     preview: ico("M2 3.5h12v9H2zM2 6h12M6.5 8.3v2.4l2-1.2z"),
+    schedules: ico("M8 2.5a5.5 5.5 0 1 1 0 11 5.5 5.5 0 0 1 0-11zM8 5v3l2 1.5"),
 };
 
 const TABS: { tab: PanelTab; id: string; label: string; title: string; key: string }[] = [
@@ -34,6 +36,7 @@ const TABS: { tab: PanelTab; id: string; label: string; title: string; key: stri
     { tab: "log", id: "log-header-title", label: "Log", title: "Extension and script log", key: "Alt+Shift+L" },
     { tab: "network", id: "network-tab", label: "Network", title: "Network activity, with what TangiTweak scripts did to each request", key: "Alt+Shift+N" },
     { tab: "preview", id: "preview-tab", label: "Preview", title: "Preview — the open script's overlay (dom: \"overlay\"), live, over a placeholder page", key: "Alt+Shift+V" },
+    { tab: "schedules", id: "schedules-tab", label: "Schedules", title: "Schedules: every tweak.every, when it runs next and how its last run went", key: "Alt+Shift+S" },
 ];
 
 const SCROLL_TITLE = {
@@ -162,6 +165,7 @@ function Panel() {
             </div>
             <ProblemsView hidden={tab !== "problems"} />
             {tab === "preview" ? <OverlayPreview hidden={false} /> : null}
+            {tab === "schedules" ? <SchedulesView hidden={false} /> : null}
         </>
     );
 }

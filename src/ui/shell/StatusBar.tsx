@@ -22,7 +22,7 @@ const ICONS: Record<string, ReactNode> = {
 };
 
 // the Preview has no counts: no status bar item
-const ITEMS: { view: Exclude<PanelTab, "preview">; id: string; label: string; aria: string; key: string; kind?: ReactNode }[] = [
+const ITEMS: { view: Exclude<PanelTab, "preview" | "schedules">; id: string; label: string; aria: string; key: string; kind?: ReactNode }[] = [
     { view: "problems", id: "sb-problems", label: "Problems", aria: "Show the Problems view", key: "Alt+Shift+P" },
     {
         view: "log",

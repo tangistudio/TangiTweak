@@ -1361,6 +1361,7 @@ function panelFilter(which: PanelTab): HTMLInputElement | null {
     if (which === "problems") return byId("problems-filter") as HTMLInputElement;
     if (which === "log") return document.querySelector<HTMLInputElement>("#log-filter-host input.net-filter, #log-filter-host input.net-query");
     if (which === "preview") return byId("preview-url") as HTMLInputElement | null;
+    if (which === "schedules") return null;
     return document.querySelector<HTMLInputElement>("#net-filter-host input.net-filter, #net-filter-host input.net-query");
 }
 
@@ -2189,6 +2190,7 @@ function layoutShortcut(e: KeyboardEvent): (() => void) | null {
         if (e.code === "KeyL") return () => focusPanelView("log");
         if (e.code === "KeyN") return () => focusPanelView("network");
         if (e.code === "KeyV") return () => focusPanelView("preview");
+        if (e.code === "KeyS") return () => focusPanelView("schedules");
         if (e.code === "KeyK") return clearPanelView;
     }
     // ⌥Z types a character (Ω on macOS) in the log/network filter boxes
@@ -2223,6 +2225,7 @@ function registerLayoutActions(): void {
         ["tt.showLog", "View: Show Log", [KeyMod.Alt | KeyMod.Shift | KeyCode.KeyL], () => focusPanelView("log")],
         ["tt.showNetwork", "View: Show Network", [KeyMod.Alt | KeyMod.Shift | KeyCode.KeyN], () => focusPanelView("network")],
         ["tt.showPreview", "View: Show Preview", [KeyMod.Alt | KeyMod.Shift | KeyCode.KeyV], () => focusPanelView("preview")],
+        ["tt.showSchedules", "View: Show Schedules", [KeyMod.Alt | KeyMod.Shift | KeyCode.KeyS], () => focusPanelView("schedules")],
         ["tt.clearPanel", "View: Clear Log / Network", [KeyMod.Alt | KeyMod.Shift | KeyCode.KeyK], clearPanelView],
         ["tt.showShortcuts", "Help: Keyboard Shortcuts", [], () => openHelp("shortcuts")],
         ["tt.navigateBack", "Go Back", navKeybindings().back, navigateBack],
