@@ -388,7 +388,8 @@ try {
 tweak.onRequest({ url: "${ORIGIN}/sf-data", strategy: "page" }, async () => {
     st.n++;
     const real = await (await tweak.fetch("${ORIGIN}/data", { bypass: true })).json();
-    return { replaceResponse: { body: { n: st.n, real: real.value } } };
+    // a boolean: mocks go through onResponseBody, where "MV3 hook" rewrites ORIGINAL
+    return { replaceResponse: { body: { n: st.n, real: real.value === "ORIGINAL" } } };
 });`);
         await mgr.waitForTimeout(1500);
         const sfPage = await ctx.newPage();
@@ -398,7 +399,7 @@ tweak.onRequest({ url: "${ORIGIN}/sf-data", strategy: "page" }, async () => {
         const second = await get();
         let a: any = {}, b: any = {};
         try { a = JSON.parse(first); b = JSON.parse(second); } catch {}
-        check("tweak.fetch from the sandbox runs in the service worker (MV3)", a.real === "ORIGINAL", first);
+        check("tweak.fetch from the sandbox runs in the service worker (MV3)", a.real === true, first);
         check("tweak.globalStore keeps its value across requests (MV3 sandbox)", a.n >= 1 && b.n === a.n + 1, `${first} ${second}`);
         await sfPage.close();
         // deleted: later checks count and lay out the script list
