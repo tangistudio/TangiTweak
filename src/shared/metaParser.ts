@@ -10,6 +10,7 @@
  */
 
 import { scriptUrls, type RouteMeta } from "./route";
+import type { ToastStyle } from "./toast";
 
 export type { Strategy } from "./route";
 
@@ -23,6 +24,38 @@ export interface ResMeta {
     routes: RouteMeta[];
     /** The union of its routes' URL patterns, for the badge and "active on this tab" only (never to dispatch). */
     match: string[];
+    /** Its `tweak.every` schedules, in order. Absent when it has none. */
+    every?: EveryMeta[];
+    /** What it set up for toasts at top level. Absent when nothing. */
+    toast?: ToastMeta;
+}
+
+/** One `tweak.every` schedule, as the compile found it. */
+export interface EveryMeta {
+    /** Its registration index in the script (`every #index` in the Log). */
+    index: number;
+    /** The line of the `tweak.every` call in the script, when known. */
+    line?: number;
+    /** A fixed interval's period in milliseconds (after clamping). Absent for an interval function or a bad interval. */
+    periodMs?: number;
+    /** Set when the interval is a function, read in the background whenever a store it read changes. */
+    dynamic?: true;
+    /** Set when a fixed interval was shorter than the 1 minute floor and was clamped up to it. */
+    clamped?: true;
+    /** Why a fixed interval is unusable (`"1x"`), for Problems. */
+    error?: string;
+}
+
+/** A script's toast setup. */
+export interface ToastMeta {
+    /** Whether it registered `tweak.onToastAction`. */
+    actions?: true;
+    /** The names of its `tweak.toastPane` panes, in order. */
+    panes?: string[];
+    /** Its merged `tweak.toastStyle`. */
+    style?: ToastStyle;
+    /** Style keys more than one `tweak.toastStyle` call set (Problems warns). */
+    repeated?: string[];
 }
 
 /**
@@ -41,9 +74,9 @@ export function defaultMeta(name?: string): ResMeta {
     return { ...DEFAULT_META, routes: [], match: [], name: name || DEFAULT_META.name };
 }
 
-/** Fills `active` and `match` from `routes` in place and returns `meta`. */
+/** Fills `active` (it registered a handler or a `tweak.every`) and `match` from `routes` in place and returns `meta`. */
 export function finishMeta(meta: ResMeta): ResMeta {
-    meta.active = meta.routes.length > 0;
+    meta.active = meta.routes.length > 0 || !!meta.every?.length;
     meta.match = scriptUrls(meta.routes);
     return meta;
 }

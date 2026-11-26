@@ -57,6 +57,8 @@ export interface ToastActionSpec {
     id: string;
     /** The button's text. */
     label: string;
+    /** An http(s) URL the button opens in a new tab (the action still reaches `tweak.onToastAction`). */
+    url?: string;
 }
 
 /**
@@ -81,8 +83,8 @@ export interface ToastStyle {
     width?: number;
     /** The CSS font family. */
     font?: string;
-    /** Dark colors, light ones, or (`"auto"`, the default) the user's system setting. */
-    dark?: boolean | "auto";
+    /** Overrides used while the system is in dark mode: colors, radius, width and font. */
+    dark?: Omit<ToastStyle, "dark" | "position" | "css" | "titleFlash" | "iconDot">;
     /** Extra CSS, scoped to the tweak's own toasts; style parts with `[part=title]` and the like. */
     css?: string;
     /** Whether the tab's title flashes while the toast waits in a background tab. Default: the user's setting. */
@@ -99,7 +101,7 @@ export interface ToastOptionsInput {
     title?: string;
     message?: string;
     kind?: ToastKind;
-    icon?: string;
+    icon?: string | false;
     url?: string;
     actions?: (ToastActionSpec | string)[];
     duration?: number | string;
@@ -122,8 +124,8 @@ export interface ToastSpec {
     message?: string;
     /** Its kind. */
     kind: ToastKind;
-    /** An emoji or short text, or an http(s) or `data:image` URL. */
-    icon?: string;
+    /** An emoji or short text, an http(s) or `data:image` URL, or `false` for none (the kind's icon otherwise). */
+    icon?: string | false;
     /** What a click on the toast opens, in a new tab: http(s) only. */
     url?: string;
     /** Its buttons, at most {@link TOAST_MAX_ACTIONS}. */
@@ -211,7 +213,8 @@ export function normalizeToast(input: ToastInput): ToastSpec {
     };
     if (title) spec.title = title;
     if (message) spec.message = message;
-    if (o.icon !== undefined) {
+    if (o.icon === false) spec.icon = false;
+    else if (o.icon !== undefined) {
         const icon = text(o.icon, "icon", 2048)!;
         if (/^(https?:|data:image\/)/i.test(icon) ? false : icon.length > 8) throw new Error("tweak.toast: icon is an emoji or short text, or an http(s) or data:image URL");
         spec.icon = icon;
@@ -228,7 +231,9 @@ export function normalizeToast(input: ToastInput): ToastSpec {
             if (!label) throw new Error(`tweak.toast: actions[${i}] needs a label`);
             const id = isStr(a) ? a : text(a.id, `actions[${i}].id`, 100) || label;
             if (id === "click" || id === "close") throw new Error(`tweak.toast: "${id}" is taken, pick another action id`);
-            return { id, label };
+            const url = isStr(a) ? undefined : a.url;
+            if (url !== undefined && (!isStr(url) || !isWebUrl(url))) throw new Error(`tweak.toast: actions[${i}].url must be an http(s) URL`);
+            return url ? { id, label, url } : { id, label };
         });
     }
     if (o.duration === undefined) spec.duration = kind === "error" ? "sticky" : TOAST_DEFAULT_DURATION_MS;
@@ -261,6 +266,7 @@ export function normalizeToast(input: ToastInput): ToastSpec {
 }
 
 const STYLE_KEYS = ["position", "accent", "background", "text", "border", "radius", "width", "font", "dark", "css", "titleFlash", "iconDot"] as const;
+const DARK_KEYS = ["accent", "background", "text", "border", "radius", "width", "font"];
 
 /**
  * Checks a {@link ToastStyle}.
@@ -284,8 +290,9 @@ export function normalizeToastStyle(s: unknown, where = "tweak.toastStyle"): Toa
             else if (isStr(v) && /^[\w.%\s-]{1,40}$/.test(v)) out.radius = v;
             else throw new Error(`${where}: radius is a number of pixels or a CSS length`);
         } else if (k === "dark") {
-            if (typeof v !== "boolean" && v !== "auto") throw new Error(`${where}: dark is true, false or "auto"`);
-            out.dark = v;
+            const bad = v && typeof v === "object" ? Object.keys(v).find((x) => !DARK_KEYS.includes(x)) : "";
+            if (bad !== undefined) throw new Error(`${where}: dark is an object of ${DARK_KEYS.join(", ")}${bad ? ` (not "${bad}")` : ""}`);
+            out.dark = normalizeToastStyle(v, `${where}: dark`) as ToastStyle["dark"];
         } else if (k === "titleFlash" || k === "iconDot") {
             if (typeof v !== "boolean") throw new Error(`${where}: ${k} is true or false`);
             out[k] = v;
@@ -306,7 +313,6 @@ export function normalizeToastStyle(s: unknown, where = "tweak.toastStyle"): Toa
 /**
  * Merges looks, later ones winning per key; `css` adds up.
  *
- * @returns The merged style and the keys set more than once (Problems warns about them in `tweak.toastStyle`).
  */
 export function mergeToastStyle(...styles: (ToastStyle | undefined)[]): ToastStyle {
     const out: ToastStyle = {};
@@ -315,6 +321,7 @@ export function mergeToastStyle(...styles: (ToastStyle | undefined)[]): ToastSty
         for (const [k, v] of Object.entries(s)) {
             if (v === undefined) continue;
             if (k === "css") out.css = out.css ? `${out.css}\n${v}` : (v as string);
+            else if (k === "dark") out.dark = { ...out.dark, ...(v as object) };
             else (out as any)[k] = v;
         }
     }
@@ -324,4 +331,32 @@ export function mergeToastStyle(...styles: (ToastStyle | undefined)[]): ToastSty
 /** The keys both styles set (but `css`, which adds up). */
 export function repeatedStyleKeys(a: ToastStyle, b: ToastStyle): string[] {
     return Object.keys(b).filter((k) => k !== "css" && k in a);
+}
+
+/**
+ * A toast as the bridge draws it: its spec, whose it is and how it looks,
+ * resolved by the background's toast center.
+ */
+export interface ToastView extends ToastSpec {
+    /** Unique in the tab: `<script id>:<toast id>`. Showing a toast with the same key replaces it in place. */
+    key: string;
+    /** The tweak's name, for the "from <tweak>" line. */
+    source: string;
+    /** The look: the tweak's `toastStyle`, then the toast's own `style` (empty when the user chose the same look for all toasts). */
+    look: ToastStyle;
+    /** The corner, resolved: the user's (for the site, then global), then the toast's, then the tweak's, then bottom-right. */
+    position: ToastPosition;
+    /** Whether the user's corner decided `position`. */
+    userCorner: boolean;
+    /** Whether the tab title flashes and its icon gets a dot while the toast waits unseen. */
+    signals: { titleFlash: boolean; iconDot: boolean };
+    /** When the tweak made it (ms since epoch). */
+    createdAt: number;
+}
+
+/** Picks a toast's corner. `site` and `global` are the user's choices; the user wins over the tweak. */
+export function resolveToastPosition(o: { site?: ToastPosition; global?: ToastPosition; toast?: ToastPosition; tweak?: ToastPosition }): { position: ToastPosition; userCorner: boolean } {
+    const user = o.site ?? o.global;
+    if (user) return { position: user, userCorner: true };
+    return { position: o.toast ?? o.tweak ?? "bottom-right", userCorner: false };
 }

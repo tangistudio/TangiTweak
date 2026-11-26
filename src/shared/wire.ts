@@ -85,6 +85,7 @@ import type { RouteMeta } from "./route";
 import type { ShippedLib } from "./scriptImports";
 import type { RpcCall, RpcResult } from "./rpc";
 import type { SiteDown, SiteUp } from "./siteStoreHost";
+import type { ToastPosition, ToastResult, ToastSpec, ToastView } from "./toast";
 
 /** A JSON value: what store data, store ops and most op arguments are made of. */
 export type Json = null | boolean | number | string | Json[] | { [k: string]: Json };
@@ -762,6 +763,34 @@ export interface WireOps {
             matching: number;
         };
     };
+    /**
+     * `tweak.toast` from code that isn't the background's: L1 (the MV3
+     * sandbox), L6 (MV3 isolated onPage code) and L2 (an overlay, and
+     * MV2/Firefox isolated onPage code). The background's toast center
+     * checks that script `s` runs there, then routes, rate-limits and
+     * queues the toast like one from background code.
+     */
+    toast: {
+        req: {
+            /** The checked toast. */
+            spec: ToastSpec;
+            /** L2 (MV2/Firefox isolated code): the frame's URL, checked like `iso.fetch`. */
+            url?: string;
+        };
+        res: ToastResult;
+    };
+    /** L2: the background shows a toast in this tab (top frame only). The bridge draws it in its shadow root. */
+    "toast.show": { push: { toast: ToastView } };
+    /** L2: the background takes a toast down (its tweak was turned off or muted, or it showed in another tab). */
+    "toast.dismiss": { push: { key: string } };
+    /**
+     * L2: the user did something to a toast: clicked it or a button
+     * (`actionId`), closed it (`"close"`), or it timed out (`"timeout"`, not
+     * passed to the tweak). A pane's `ui.action(id, value)` comes as `value`.
+     */
+    "toast.event": { push: { key: string; actionId: string; value?: unknown } };
+    /** L2: the user dragged the toast stack to another corner on this site. */
+    "toast.corner": { push: { host: string; position: ToastPosition } };
 }
 
 /**

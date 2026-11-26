@@ -39,3 +39,12 @@ describe("toast styles", () => {
         expect(mergeToastStyle({ accent: "red", css: "a{}" }, undefined, { accent: "blue", css: "b{}" })).toEqual({ accent: "blue", css: "a{}\nb{}" });
     });
 });
+
+describe("toast extras", () => {
+    it("takes dark overrides, action urls and no icon", () => {
+        expect(normalizeToastStyle({ dark: { background: "#111" } })).toEqual({ dark: { background: "#111" } });
+        expect(() => normalizeToastStyle({ dark: { css: "x" } })).toThrow(/dark/);
+        expect(normalizeToast({ title: "x", icon: false, actions: [{ id: "o", label: "Open", url: "https://a.b" }] })).toMatchObject({ icon: false, actions: [{ id: "o", label: "Open", url: "https://a.b" }] });
+        expect(() => normalizeToast({ title: "x", actions: [{ id: "o", label: "Open", url: "file:///x" }] })).toThrow(/url/);
+    });
+});

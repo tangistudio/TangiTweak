@@ -24,7 +24,9 @@
  * @module
  */
 
-import { defaultMeta, finishMeta, type ResMeta } from "./metaParser";
+import { defaultMeta, finishMeta, type EveryMeta, type ResMeta, type ToastMeta } from "./metaParser";
+import { EVERY_MAX, everyPeriod } from "./every";
+import { mergeToastStyle, normalizeToast, normalizeToastStyle, repeatedStyleKeys, type ToastInput, type ToastResult, type ToastSpec, type ToastStyle } from "./toast";
 import { PARAM_TYPES, resolveParamValues, serializableParamTree, type ParamDef, type ParamTree } from "./scriptDef";
 import { paramsProxy, PARAM_AT_TOP, PARAM_NOT_HERE } from "./paramsProxy";
 import { parseShortcut } from "./shortcut";
@@ -85,6 +87,40 @@ export interface ScriptHandlers {
     onDocument: Routed[];
     /** `tweak.onOverlay` handlers, which run in the script's overlay frame above the page. */
     onOverlay: Routed[];
+    /** `tweak.every` schedules, which run in the background. */
+    every: EveryEntry[];
+    /** `tweak.onToastAction` handlers. */
+    toastAction: { fn: HandlerFn; line?: number }[];
+    /** `tweak.toastPane` renderers, in order (names are unique). */
+    toastPane: ToastPaneEntry[];
+    /** The merged `tweak.toastStyle` calls, if any. */
+    toastStyle?: ToastStyle;
+    /** Style keys set by more than one `tweak.toastStyle` call. */
+    toastStyleRepeats?: string[];
+}
+
+/** A `tweak.every` registration. */
+export interface EveryEntry {
+    /** Its registration index in the script. */
+    index: number;
+    /** A fixed interval (a duration) or a function returning one, or `false` for off. */
+    interval: unknown;
+    /** The handler. */
+    fn: HandlerFn;
+    /** The line of the call, when known. */
+    line?: number;
+}
+
+/** A `tweak.toastPane` registration. */
+export interface ToastPaneEntry {
+    /** Its name, as `tweak.toast({ pane })` picks it. */
+    name: string;
+    /** Draws a toast: `(toast, ui) => JSX`. */
+    render: HandlerFn;
+    /** Data for the Editor's preview. */
+    sample?: unknown;
+    /** The line of the call, when known. */
+    line?: number;
 }
 
 /** What {@link compileScript} returns for one script. */
@@ -193,6 +229,11 @@ export interface ResApiOverrides {
      * Assigning one during the top level always throws.
      */
     setParam?: (key: string, value: any) => Promise<void>;
+    /**
+     * Shows a checked toast (`tweak.toast`). Unset: `tweak.toast` rejects
+     * (this context can't show toasts).
+     */
+    toast?: (spec: ToastSpec) => Promise<ToastResult>;
 }
 
 /**
@@ -322,6 +363,10 @@ export function compileScript(code: string, overrides?: ResApiOverrides): Compil
               };
         withCollector(store, { name: overrides?.name ?? "", remote: overrides?.remote, run: shim.run, host: shim.host }, () => fn(shim.host, makeForwardingConsole(overrides?.logSink), requireShim, moduleObj, moduleObj.exports));
         meta.routes = routesOf(store);
+        const every = everyMetaOf(store);
+        if (every.length) meta.every = every;
+        const toast = toastMetaOf(store);
+        if (toast) meta.toast = toast;
         finishMeta(meta);
         return { meta, handlers: store, error: null, code, paramDefs: owner.defs, exports: moduleObj.exports };
     } catch (e: any) {
@@ -864,6 +909,9 @@ function createCollector(): ScriptHandlers {
         onResponseBody: [],
         onDocument: [],
         onOverlay: [],
+        every: [],
+        toastAction: [],
+        toastPane: [],
     };
 }
 
@@ -897,6 +945,33 @@ function withCollector<T>(c: ScriptHandlers, owner: CollectorOwner, run: () => T
 /** Every handler's route, by kind. */
 function routesOf(h: ScriptHandlers): RouteMeta[] {
     return [...h.onRequest, ...h.onResponseHeaders, ...h.onResponseBody, ...h.onDocument, ...h.onOverlay].map((x) => x.route);
+}
+
+/** The `tweak.every` schedules' meta: fixed periods read now, functions marked dynamic. */
+function everyMetaOf(h: ScriptHandlers): EveryMeta[] {
+    return h.every.map((e) => {
+        const m: EveryMeta = { index: e.index };
+        if (e.line) m.line = e.line;
+        if (typeof e.interval === "function") m.dynamic = true;
+        else {
+            const p = everyPeriod(e.interval);
+            if ("ms" in p) {
+                m.periodMs = p.ms;
+                if (p.clamped) m.clamped = true;
+            } else if ("error" in p) m.error = p.error;
+        }
+        return m;
+    });
+}
+
+/** The script's toast setup, or undefined when it set none up. */
+function toastMetaOf(h: ScriptHandlers): ToastMeta | undefined {
+    const t: ToastMeta = {};
+    if (h.toastAction.length) t.actions = true;
+    if (h.toastPane.length) t.panes = h.toastPane.map((p) => p.name);
+    if (h.toastStyle) t.style = h.toastStyle;
+    if (h.toastStyleRepeats?.length) t.repeated = h.toastStyleRepeats;
+    return Object.keys(t).length ? t : undefined;
 }
 
 /** The per-script state behind `tweak.params`: the definitions declared so far, checked as they come. */
@@ -1088,8 +1163,72 @@ function makeShim(owner: ReturnType<typeof createOwner>, overrides: ResApiOverri
         list.push({ fn: fn as HandlerFn, route: r });
         return remote(r);
     };
+    /** The script whose top level is running, or null (logged as too late) for `tweak.<name>` */
+    const topOrLate = (name: string): ScriptHandlers | null => {
+        const top = collectors[collectors.length - 1];
+        if (top) return top;
+        const msg = `tweak.${name} called after the script's top level finished; call it synchronously at top level (not after await / in callbacks); ignored`;
+        if (overrides?.logSink) overrides.logSink("error", `tweak.${name}`, msg);
+        else console.error("[TangiTweak]", msg);
+        return null;
+    };
+    const every = (interval: unknown, fn: unknown) => {
+        const top = topOrLate("every");
+        if (!top) return;
+        if (typeof fn !== "function") throw new Error(`tweak.every: second argument must be the handler function`);
+        if (!mentionsStub(interval) && typeof interval !== "function") {
+            const p = everyPeriod(interval);
+            if ("error" in p) throw new Error(p.error);
+        }
+        if (top.every.length >= EVERY_MAX) throw new Error(`tweak.every: at most ${EVERY_MAX} schedules per tweak`);
+        const line = callerLine();
+        top.every.push({ index: top.every.length, interval: mentionsStub(interval) ? undefined : interval, fn: fn as HandlerFn, ...(line ? { line } : {}) });
+    };
+    const onToastAction = (fn: unknown) => {
+        const top = topOrLate("onToastAction");
+        if (!top) return;
+        if (typeof fn !== "function") throw new Error(`tweak.onToastAction: pass the handler function`);
+        const line = callerLine();
+        top.toastAction.push({ fn: fn as HandlerFn, ...(line ? { line } : {}) });
+    };
+    const toastPane = (name: unknown, render: unknown, opts?: { sample?: unknown }) => {
+        const top = topOrLate("toastPane");
+        if (!top) return;
+        if (isStub(name)) return;
+        if (typeof name !== "string" || !name) throw new Error(`tweak.toastPane: first argument is the pane's name`);
+        if (typeof render !== "function") throw new Error(`tweak.toastPane: second argument must be the render function`);
+        if (top.toastPane.some((p) => p.name === name)) throw new Error(`tweak.toastPane: a pane named "${name}" is already registered`);
+        const line = callerLine();
+        top.toastPane.push({ name, render: render as HandlerFn, ...(opts && !isStub(opts) && opts.sample !== undefined ? { sample: opts.sample } : {}), ...(line ? { line } : {}) });
+    };
+    const toastStyle = (style: unknown) => {
+        const top = topOrLate("toastStyle");
+        if (!top || mentionsStub(style)) return;
+        const next = normalizeToastStyle(style);
+        if (top.toastStyle) {
+            const rep = repeatedStyleKeys(top.toastStyle, next);
+            if (rep.length) top.toastStyleRepeats = [...new Set([...(top.toastStyleRepeats || []), ...rep])];
+        }
+        top.toastStyle = mergeToastStyle(top.toastStyle, next);
+    };
+    const toast = (input: ToastInput): Promise<ToastResult> => {
+        if (collectors.length) return Promise.reject(new Error("tweak.toast: call it from a handler (tweak.every, onRequest, onToastAction, …), not at the tweak's top level, which runs on every save and reload"));
+        let spec: ToastSpec;
+        try {
+            spec = normalizeToast(input);
+        } catch (e) {
+            return Promise.reject(e);
+        }
+        if (!overrides?.toast) return Promise.reject(new Error("tweak.toast isn't available here"));
+        return overrides.toast(spec);
+    };
     const run = storeRun(makeStores(overrides));
     const host = tweakHost((file) => ({
+        every,
+        onToastAction,
+        toastPane,
+        toastStyle,
+        toast,
         onRequest: register("onRequest", undefined, file),
         onResponseHeaders: register("onResponseHeaders", undefined, file),
         replaceResponse: removedReplaceResponse,
