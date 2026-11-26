@@ -41,11 +41,11 @@ describe("normalizeRoute", () => {
         expect(() => normalizeRoute("onDocument", { url: "*", when: "later" }, 0)).toThrow(/when must be one of/);
         expect(() => normalizeRoute("onDocument", { url: "*", when: "DOMContentLoaded" }, 0)).toThrow(/when must be one of document_start, document_end, document_idle$/);
         expect(() => normalizeRoute("onDocument", { url: "*", methods: ["GET"] }, 0)).toThrow(/doesn't apply to onDocument/);
-        expect(() => normalizeRoute("onRequest", { url: "*", when: "document_idle" }, 0)).toThrow(/"when" applies to onSite, onPage and onOverlay only/);
+        expect(() => normalizeRoute("onRequest", { url: "*", when: "document_idle" }, 0)).toThrow(/"when" applies to onSite, onPage, onOverlay and site only/);
         expect(normalizeRoute("onOverlay", { url: "*", navigation: "every" }, 0, "onOverlay").navigation).toBe("every");
         expect(normalizeRoute("onDocument", { url: "*", navigation: "load" }, 0)).not.toHaveProperty("navigation");
         expect(() => normalizeRoute("onDocument", { url: "*", navigation: "always" }, 0)).toThrow(/navigation must be one of "load", "match", "every"/);
-        expect(() => normalizeRoute("onRequest", { url: "*", navigation: "match", strategy: "page" }, 0)).toThrow(/"navigation" applies to onSite, onPage and onOverlay only/);
+        expect(() => normalizeRoute("onRequest", { url: "*", navigation: "match", strategy: "page" }, 0)).toThrow(/"navigation" applies to onSite, onPage, onOverlay and site only/);
     });
 
     it("tweak.replaceResponse was removed: calling it throws with the onRequest rewrite", () => {

@@ -28,7 +28,7 @@ import { makeLibRequire } from "../shared/scriptImports";
 import type { PackageModules } from "../shared/packageImports";
 import { Exposer, RpcClient, isRpcCall } from "../shared/rpc";
 import { inertRemote } from "../shared/remote";
-import { followsNav, routeMatches, type DocumentWhen } from "../shared/route";
+import { followsNav, isDebuggerSafeOverlay, isSiteRoute, routeMatches, type DocumentWhen } from "../shared/route";
 import { NavRoutes } from "../shared/navRoutes";
 import { fireRun, pageCtxBase, type PageDocumentHandler } from "../shared/pageShim";
 import { reactOf, ScriptLife, type Generation, type ReactDomClient } from "../shared/runLifecycle";
@@ -111,6 +111,103 @@ export async function startOverlay(ep: Endpoint, init: OverlayInit, env: Overlay
     let hotNow = false;
     let runDue = () => {};
     const page = { url: init.url, fetch: (request: any, bypass: boolean) => ep.call("pagefetch", { request, bypass }) };
+    const fullPage = !!init.fullPage;
+    if (fullPage) {
+        try {
+            doc.documentElement.style.background = "#ffffff";
+            if (doc.body) {
+                doc.body.style.margin = "0";
+                doc.body.style.minHeight = "100vh";
+            }
+        } catch {}
+    }
+
+    // `tweak.site` navigation state + React Router-compatible navigator + page-origin bridge
+    let navState: unknown = null;
+    let navKey = "default";
+    const parseLocation = (href: string) => {
+        try {
+            const u = new URL(href);
+            return { href: u.href, origin: u.origin, hostname: u.hostname, pathname: u.pathname, search: u.search, hash: u.hash, state: navState, key: navKey };
+        } catch {
+            return { href, origin: "", hostname: "", pathname: "/", search: "", hash: "", state: navState, key: navKey };
+        }
+    };
+    const resolveTo = (to: string | { pathname?: string; search?: string; hash?: string }): string => {
+        if (typeof to === "string") return new URL(to, page.url).href;
+        const base = new URL(page.url);
+        if (to.pathname !== undefined) base.pathname = to.pathname;
+        if (to.search !== undefined) base.search = to.search;
+        if (to.hash !== undefined) base.hash = to.hash;
+        return base.href;
+    };
+    const siteNavigator = {
+        createHref(to: string | { pathname?: string; search?: string; hash?: string }): string {
+            const target = new URL(resolveTo(to));
+            const cur = new URL(page.url);
+            return target.origin === cur.origin ? target.pathname + target.search + target.hash : target.href;
+        },
+        push(to: string | { pathname?: string; search?: string; hash?: string }, state?: unknown): void {
+            const href = resolveTo(to);
+            navState = state ?? null;
+            navKey = Math.random().toString(36).slice(2, 10);
+            ep.push("site.navigate", { to: href, replace: false });
+        },
+        replace(to: string | { pathname?: string; search?: string; hash?: string }, state?: unknown): void {
+            const href = resolveTo(to);
+            navState = state ?? null;
+            navKey = Math.random().toString(36).slice(2, 10);
+            ep.push("site.navigate", { to: href, replace: true });
+        },
+        go(delta: number): void {
+            ep.push("site.go", { delta });
+        },
+    };
+    const base64ToBytes = (b64: string): Uint8Array => {
+        const bin = atob(b64);
+        const out = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+        return out;
+    };
+    const makeOriginStorage = (area: "local" | "session") => ({
+        get: async (key: string) => (await ep.call("origin.storage", { area, op: "get", key })).value ?? null,
+        set: async (key: string, value: string) => void (await ep.call("origin.storage", { area, op: "set", key, value })),
+        remove: async (key: string) => void (await ep.call("origin.storage", { area, op: "remove", key })),
+        clear: async () => void (await ep.call("origin.storage", { area, op: "clear" })),
+        keys: async () => (await ep.call("origin.storage", { area, op: "keys" })).keys ?? [],
+    });
+    const siteOrigin = () => ({
+        origin: (() => {
+            try {
+                return new URL(page.url).origin;
+            } catch {
+                return "";
+            }
+        })(),
+        localStorage: makeOriginStorage("local"),
+        sessionStorage: makeOriginStorage("session"),
+        cookies: {
+            all: async () => (await ep.call("origin.cookie", { op: "all" })).all ?? {},
+            get: async (key: string) => (await ep.call("origin.cookie", { op: "get", key })).value ?? null,
+            set: async (key: string, value: string, opts?: any) => void (await ep.call("origin.cookie", { op: "set", key, value, opts })),
+            remove: async (key: string, opts?: any) => void (await ep.call("origin.cookie", { op: "remove", key, opts })),
+        },
+        indexedDB: {
+            databases: async () => (await ep.call("origin.idb", { op: "databases" })).databases ?? [],
+            stores: async (db: string) => (await ep.call("origin.idb", { op: "stores", db })).stores ?? [],
+            get: async <T = unknown>(db: string, store: string, key: IDBValidKey) => (await ep.call("origin.idb", { op: "get", db, store, key })).value as T | undefined,
+            getAll: async <T = unknown>(db: string, store: string, limit?: number) => ((await ep.call("origin.idb", { op: "getAll", db, store, limit })).value ?? []) as T[],
+            put: async (db: string, store: string, value: unknown, key?: IDBValidKey) => void (await ep.call("origin.idb", { op: "put", db, store, value, key })),
+            delete: async (db: string, store: string, key: IDBValidKey) => void (await ep.call("origin.idb", { op: "delete", db, store, key })),
+            clear: async (db: string, store: string) => void (await ep.call("origin.idb", { op: "clear", db, store })),
+        },
+        readBlob: async (url: string) => {
+            const res = await ep.call("origin.blob", { url });
+            return new Blob([base64ToBytes(res.base64) as BlobPart], { type: res.mime });
+        },
+        fetch: (input: RequestInfo | URL, rinit?: RequestInit) => win.fetch(input, rinit),
+    });
+
     ep.on("when", (a) => {
         if (rank(a.phase) > rank(phase)) phase = a.phase;
         runDue();
@@ -249,6 +346,7 @@ export async function startOverlay(ep: Endpoint, init: OverlayInit, env: Overlay
         });
         if (compiled.error) {
             log("error", `[${init.name}] overlay compile: ${compiled.error}`);
+            if (fullPage) ep.push("site.error", { message: compiled.error });
             // the previous code keeps running
             exposer.revert();
             exposer.done();
@@ -263,7 +361,9 @@ export async function startOverlay(ep: Endpoint, init: OverlayInit, env: Overlay
             drawPane(compiled.handlers.toastPane);
             return;
         }
-        const all: PageDocumentHandler[] = compiled.handlers.onOverlay.map(({ fn, route }) => ({ h: route.key!, route, when: route.when || "document_end", fn }));
+        const all: PageDocumentHandler[] = compiled.handlers.onOverlay
+            .filter(({ route }) => (fullPage ? isSiteRoute(route) : !isSiteRoute(route) && !isDebuggerSafeOverlay(route)))
+            .map(({ fn, route }) => ({ h: route.key!, route, when: route.when || "document_end", fn }));
         handlers = all.filter(({ route }) => {
             if (followsNav(route)) return false;
             const on = routeMatches(route, page.url);
@@ -287,16 +387,32 @@ export async function startOverlay(ep: Endpoint, init: OverlayInit, env: Overlay
         life.commit(g);
     };
 
-    const report = (e: unknown) => log("error", errorLine(e, "onOverlay"));
-    const ctx = (url: string) => (signal: AbortSignal) => ({
-        ...pageCtxBase(url),
-        onNavigate: navs.onNavigate(signal, (e) => log("error", errorLine(e, "ctx.onNavigate"))),
-        shortcut(combo: string, fn: () => unknown, opts?: ShortcutOptions) {
-            const off = shortcut(combo, fn, opts);
-            signal.addEventListener("abort", off, { once: true });
-            return off;
-        },
-    });
+    const report = (e: unknown) => {
+        const line = errorLine(e, fullPage ? "site" : "onOverlay");
+        log("error", line);
+        if (fullPage) ep.push("site.error", { message: e instanceof Error ? e.message : String(e) });
+    };
+    const ctx = (url: string, siteRoute: boolean) => (signal: AbortSignal) => {
+        const base: Record<string, any> = {
+            ...pageCtxBase(url),
+            onNavigate: navs.onNavigate(signal, (e) => log("error", errorLine(e, "ctx.onNavigate"))),
+            shortcut(combo: string, fn: () => unknown, opts?: ShortcutOptions) {
+                const off = shortcut(combo, fn, opts);
+                signal.addEventListener("abort", off, { once: true });
+                return off;
+            },
+        };
+        if (siteRoute || fullPage) {
+            Object.defineProperty(base, "location", { enumerable: true, get: () => parseLocation(page.url) });
+            base.navigator = siteNavigator;
+            base.navigate = (to: string, opts?: { replace?: boolean }) => (opts?.replace ? siteNavigator.replace(to) : siteNavigator.push(to));
+            base.setTitle = (title: string) => ep.push("site.title", { title: String(title ?? "") });
+            base.setFavicon = (href: string) => ep.push("site.favicon", { href: String(href ?? "") });
+            base.showOriginal = () => ep.push("site.showOriginal", {});
+            base.origin = siteOrigin();
+        }
+        return base;
+    };
     runDue = () => {
         const g = gen;
         if (!g) return;
@@ -308,7 +424,7 @@ export async function startOverlay(ep: Endpoint, init: OverlayInit, env: Overlay
     };
     const fire = (g: Generation, d: PageDocumentHandler, url: string) => {
         try {
-            fireRun(life, g, d, ctx(url), exposer, report);
+            fireRun(life, g, d, ctx(url, isSiteRoute(d.route)), exposer, report);
         } catch (e) {
             report(e);
         }
@@ -388,13 +504,14 @@ export async function startOverlay(ep: Endpoint, init: OverlayInit, env: Overlay
 
     let lastRects = "";
     const measure = () => {
+        if (fullPage) return;
         const rects = normalizeRects(collectRects(doc, win) ?? [[0, 0, win.innerWidth, win.innerHeight]], win.innerWidth, win.innerHeight);
         const key = JSON.stringify(rects);
         if (key === lastRects) return;
         lastRects = key;
         ep.push("rects", { rects });
     };
-    const stopRects = env.watchRects === false || paneMode ? () => {} : watchRects(doc, win, measure);
+    const stopRects = env.watchRects === false || paneMode || fullPage ? () => {} : watchRects(doc, win, measure);
 
     await load(init, false);
     if (!paneMode) measure();
@@ -425,7 +542,7 @@ export async function startOverlay(ep: Endpoint, init: OverlayInit, env: Overlay
  * gets nothing.
  */
 function boot(): void {
-    const nonce = location.hash.slice(1);
+    const nonce = (typeof (window as any).__ttOverlayNonce === "string" && (window as any).__ttOverlayNonce) || location.hash.slice(1);
     if (!nonce) return;
     const onMessage = async (ev: MessageEvent) => {
         if (ev.source !== window.parent || ev.data?.ttOverlay !== true || !ev.ports?.[0]) return;

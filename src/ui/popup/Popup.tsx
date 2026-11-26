@@ -8,7 +8,7 @@ import { useEffect, useState, type MouseEvent } from "react";
 import { Switch } from "../components/Switch";
 import { ParamTreeFields } from "../components/ParamField";
 import { IconBell, IconPen } from "../components/icons";
-import type { PopupApi, ScriptInfo, ScriptLayer, ScriptParams, ToastActivity } from "./api";
+import type { PopupApi, ScriptInfo, ScriptLayer, ScriptParams, SiteTabState, ToastActivity } from "./api";
 import { TAB_NOTICE, type TabStatus } from "../../shared/tabStatus";
 
 type Load = { state: "loading" } | { state: "ready"; scripts: ScriptInfo[] } | { state: "error" };
@@ -37,14 +37,19 @@ export function Popup({ api }: { api: PopupApi }) {
     // bumped on outside changes so open param folds re-fetch too
     const [version, setVersion] = useState(0);
     const [tab, setTab] = useState<TabStatus>("ok");
+    const [siteTab, setSiteTab] = useState<SiteTabState | null>(null);
+    const refreshSiteTab = () =>
+        api.siteTabState?.().then(setSiteTab, () => {});
     useEffect(() => {
         void refresh();
+        void refreshSiteTab();
         api.tabStatus().then(setTab, () => {});
         let t: ReturnType<typeof setTimeout> | undefined;
         const off = api.onChange?.(() => {
             clearTimeout(t);
             t = setTimeout(() => {
                 void refresh();
+                void refreshSiteTab();
                 setVersion((v) => v + 1);
             }, 150);
         });
@@ -75,6 +80,39 @@ export function Popup({ api }: { api: PopupApi }) {
                     Open Editor
                 </button>
             </div>
+            {siteTab && (
+                <div id="site-mode-bar" role="region" aria-label="Site mode">
+                    <span className="site-mode-name" title={siteTab.scriptName}>
+                        {siteTab.scriptName}
+                    </span>
+                    <div className="site-mode-toggle" role="group" aria-label="View mode">
+                        <button
+                            type="button"
+                            className={siteTab.mode === "original" ? "active" : undefined}
+                            aria-pressed={siteTab.mode === "original"}
+                            onClick={async () => {
+                                if (siteTab.mode === "original") return;
+                                setSiteTab({ ...siteTab, mode: "original" });
+                                await api.toggleSiteTab?.("original");
+                            }}
+                        >
+                            Original
+                        </button>
+                        <button
+                            type="button"
+                            className={siteTab.mode === "custom" ? "active" : undefined}
+                            aria-pressed={siteTab.mode === "custom"}
+                            onClick={async () => {
+                                if (siteTab.mode === "custom") return;
+                                setSiteTab({ ...siteTab, mode: "custom" });
+                                await api.toggleSiteTab?.("custom");
+                            }}
+                        >
+                            Custom
+                        </button>
+                    </div>
+                </div>
+            )}
             {tab !== "ok" && (
                 <div id="tab-notice" role="alert">
                     {TAB_NOTICE[tab].lines.map((l, i) => (

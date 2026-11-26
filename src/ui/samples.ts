@@ -16,6 +16,7 @@ export function sampleStrategies(code: string): string[] {
     const out = new Set<string>();
     for (const route of code.matchAll(/strategy:([^}\n]*)/g)) for (const name of route[1].matchAll(/"(\w+)"/g)) out.add(name[1]);
     const list = [...out].sort();
+    if (code.includes("tweak.site(")) list.push("site");
     if (code.includes("tweak.onOverlay(")) list.push("overlay");
     if (!list.length && /tweak\.on(Page|Site)\(/.test(code)) list.push("onPage");
     return list;
@@ -340,6 +341,46 @@ tweak.onPage("*://en.wikipedia.org/wiki/*", async (ctx) => {
     out.style.cssText = "margin: 0; padding: 8px; font: bold 16px system-ui; color: #fff; background: #555";
     out.textContent = "Wikipedia articles opened with this script on: " + visits;
     document.body.prepend(out);
+});`,
+    },
+    {
+        name: "Replace a website",
+        blurb: "Replace an existing website in place with your own React app while keeping the real URL and origin session. Try it: open example.com to see the custom app.",
+        code: `// Try it: open https://example.com/
+import { tweak } from "tangitweak";
+import { useState } from "react";
+
+tweak.site({ url: "*://example.com/*", exclude: ["*://example.com/original/*"] }, (ctx) => {
+    ctx.setTitle("Custom Example");
+    ctx.style(\`
+        body { font: 15px/1.5 system-ui, sans-serif; color: #1f2328; background: #f6f8fa; }
+        .shell { max-width: 680px; margin: 40px auto; padding: 24px; background: #fff; border: 1px solid #d0d7de; border-radius: 8px; }
+        .row { display: flex; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
+        button { padding: 6px 12px; border: 1px solid #d0d7de; border-radius: 6px; background: #fff; cursor: pointer; }
+        button.primary { background: #1f2328; color: #fff; border-color: #1f2328; }
+    \`);
+
+    function App() {
+        const [path, setPath] = useState(ctx.location.pathname);
+        const go = (to: string) => {
+            ctx.navigate(to);
+            setPath(to);
+        };
+        return (
+            <main className="shell">
+                <h1>Custom site on {ctx.location.hostname}</h1>
+                <p>Current route: <code>{path}</code></p>
+                <div className="row">
+                    <button className="primary" onClick={() => go("/")}>Home</button>
+                    <button onClick={() => go("/deals")}>Deals</button>
+                    <button onClick={() => go("/saved")}>Saved</button>
+                    <button onClick={() => ctx.showOriginal()}>Show original site</button>
+                </div>
+            </main>
+        );
+    }
+
+    ctx.mount(<App />);
 });`,
     },
     {

@@ -315,6 +315,33 @@ describe("Popup", () => {
             ["setParam", "a", "network.retries.max", 7],
         ]);
     });
+
+    it("renders Original | Custom site mode toggle bar when a tweak.site matches the active tab", async () => {
+        const api = fakeApi([script("s1", "Costco Site")]);
+        api.siteTabState = vi.fn(async () => ({
+            scriptId: "s1",
+            scriptName: "Costco Site",
+            mode: "custom" as const,
+            defaultMode: "custom" as const,
+            debuggerSafe: false,
+        }));
+        api.toggleSiteTab = vi.fn(async (mode) => void api.calls.push(["toggleSiteTab", mode]));
+
+        const { container } = render(<Popup api={api} />);
+        const bar = await waitFor(() => {
+            const el = container.querySelector("#site-mode-bar");
+            if (!el) throw new Error("site mode bar not rendered");
+            return el;
+        });
+        const origBtn = bar.querySelectorAll("button")[0];
+        const customBtn = bar.querySelectorAll("button")[1];
+        expect(customBtn.getAttribute("aria-pressed")).toBe("true");
+        expect(origBtn.getAttribute("aria-pressed")).toBe("false");
+
+        fireEvent.click(origBtn);
+        expect(api.calls).toContainEqual(["toggleSiteTab", "original"]);
+        expect(origBtn.getAttribute("aria-pressed")).toBe("true");
+    });
 });
 
 describe("Popup toasts", () => {

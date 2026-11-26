@@ -16,7 +16,7 @@
  * the site's world no handle can be called (siteRemote), and the stores
  * aren't there.
  */
-import { normalizeRoute, placeKeyer, placeKind, routeMatches, type DocumentWhen, type PageWorld, type PlaceApi, type RouteMeta } from "./route";
+import { isDebuggerSafeOverlay, normalizeRoute, placeKeyer, placeKind, routeMatches, type DocumentWhen, type PageWorld, type PlaceApi, type RouteMeta } from "./route";
 import { inertRemote, LIB_SITE_STORE, siteRemote, SITE_NO_STORES, unusableStore, type SiteCannotCallError } from "./remote";
 import type { Exposer } from "./rpc";
 import { fromWireResponse, splitFetchInit, toWireRequest, type WtFetchInit } from "./ttFetch";
@@ -75,6 +75,8 @@ export interface PageShimOptions {
     fetch?: (request: WireRequest, bypass: boolean) => Promise<WireResponse>;
     /** `tweak.toast` in onPage code: the background's toast center shows it (absent: it rejects; onSite code never has it) */
     toast?: (spec: ToastSpec) => Promise<ToastResult>;
+    /** isolated world (top frame only): also collect `onOverlay({ debuggerSafe: true })` handlers to mount in a closed shadow root */
+    debuggerSafeOverlays?: boolean;
 }
 
 /** onPage's `tweak.fetch`: from the background (relative URLs resolve against the page) */
@@ -107,12 +109,15 @@ export interface PageShim {
     /** what the script's code runs with (scriptFunction) */
     host: TweakHost;
     dom: PageDocumentHandler[];
+    /** opt-in `onOverlay({ debuggerSafe: true })` handlers collected in the isolated world */
+    shadowOverlays: PageDocumentHandler[];
     /** run the script's top level (`run`): libraries' functions it calls register into it, like the background's */
     top<T>(run: () => T): T;
 }
 
 export function makePageShim(o: PageShimOptions): PageShim {
     const dom: PageDocumentHandler[] = [];
+    const shadowOverlays: PageDocumentHandler[] = [];
     const world = o.world || "page";
     const mine: PlaceApi = world === "page" ? "onSite" : "onPage";
     const inert = () => {};
@@ -134,6 +139,9 @@ export function makePageShim(o: PageShimOptions): PageShim {
         if (api === mine) {
             o.exposer?.register(k.key);
             dom.push({ h: k.key, route: r, when: r.when || "document_end", fn: fn as any });
+        } else if (world === "isolated" && o.debuggerSafeOverlays && isDebuggerSafeOverlay(r)) {
+            o.exposer?.register(k.key);
+            shadowOverlays.push({ h: k.key, route: r, when: r.when || "document_end", fn: fn as any });
         }
         if (world === "page") return siteRemote(o.onSiteCall);
         return o.call ? o.call(api, k.key, r) : inertHandle();
@@ -194,6 +202,7 @@ export function makePageShim(o: PageShimOptions): PageShim {
         onSite: register("onSite"),
         onPage: register("onPage"),
         onOverlay: register("onOverlay"),
+        site: register("site"),
         params: (defs: ParamTree) => {
             const split = (obj: Record<string, any>): { known: ParamTree; unknown: Record<string, any> } => {
                 const known: ParamTree = {};
@@ -228,7 +237,7 @@ export function makePageShim(o: PageShimOptions): PageShim {
             running = prev;
         }
     };
-    return { host, dom, top };
+    return { host, dom, shadowOverlays, top };
 }
 
 function inertHandle(): any {
@@ -292,5 +301,15 @@ export const pageCtxBase = (url: string) => ({ url, method: "GET", tabUrl: url, 
 
 /** run handler `d` as a run of `gen` (shared/runLifecycle.ts): its ctx gets signal, once, patch, style, mount, each */
 export function fireRun(life: ScriptLife, gen: Generation, d: PageDocumentHandler, base: object | ((signal: AbortSignal) => object), exposer: Exposer | undefined, report: (e: unknown) => void): void {
-    life.fire(gen, d.h, report, (ctx, quiet) => firePageHandler(d, { ...(typeof base === "function" ? base(ctx.signal) : base), ...ctx }, exposer, quiet), d.route);
+    life.fire(
+        gen,
+        d.h,
+        report,
+        (ctx, quiet) => {
+            const b = typeof base === "function" ? base(ctx.signal) : base;
+            const merged = Object.defineProperties({}, { ...Object.getOwnPropertyDescriptors(b), ...Object.getOwnPropertyDescriptors(ctx) });
+            return firePageHandler(d, merged, exposer, quiet);
+        },
+        d.route
+    );
 }

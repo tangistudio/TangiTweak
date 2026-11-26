@@ -1809,6 +1809,85 @@ tweak.onOverlay("*://app.example.com/*", async () => {
   reloads and is the same in every tab.
 - **Per-tab switch (kept across reloads):** a `tweak.tabStore` field — works with `strategy: "rules"` too.
 - **Per-page switch (resets on reload):** a `tweak.pageStore` field, so turning it on affects only this document load.
+- **Surviving Chrome debugger extensions (such as Playwriter):** Chrome blocks `chrome-extension://` iframes inside a tab while another extension attaches `chrome.debugger`. Pass `debuggerSafe: true` in the `onOverlay` route options to mount your overlay in an isolated-world closed shadow root instead. On Chrome MV3, this option requires [user scripts](#user-scripts-on-chrome) to be enabled.
+
+## Full-page replacement: `tweak.site`
+
+`tweak.site(route, fn)` replaces an existing website in place without running a local helper or showing Chrome's debugger banner.
+
+The browser stays on the real origin URL (for example `https://www.costco.ca/`). Before the original page can run, TangiTweak attaches a strict `Content-Security-Policy` rule to matching `main_frame` responses so the original scripts, styles and media do not execute. TangiTweak then mounts your React or DOM app full-viewport at `document_start`.
+
+```ts
+import { tweak } from "tangitweak";
+
+tweak.site(
+    {
+        url: "*://www.costco.ca/*",
+        exclude: ["*://www.costco.ca/checkout*", "*://www.costco.ca/Logon*"],
+    },
+    (ctx) => {
+        ctx.setTitle("Costco Reimagined");
+        ctx.mount(<App ctx={ctx} />);
+    },
+);
+```
+
+### Route options
+
+- `url`: URL pattern or list of patterns to replace.
+- `exclude`: patterns that always load the real website (useful for login or checkout flows). Calling `ctx.navigate()` to an excluded path triggers a real top-frame navigation so the original page loads.
+- `defaultMode`: `"custom"` (default) replaces matching pages automatically. `"original"` loads the real website until the user switches to **Custom** in the popup.
+- `debuggerSafe`: opt-in (`false` by default). Set `debuggerSafe: true` if you use Playwriter or another `chrome.debugger` extension on the same tab. In this mode, TangiTweak hosts the full-page app in a nonce-authorized `srcdoc` iframe instead of a `chrome-extension://` iframe so it stays visible while a debugger is attached.
+
+### Switching between Custom and Original
+
+When a tab matches an enabled `tweak.site` tweak, the toolbar popup shows an **Original | Custom** toggle bar for that tab. Switching reloads the tab in the chosen mode. Your app can also call `ctx.showOriginal()` directly, and if your app fails to start, TangiTweak displays a recovery bar with a **Show original site** button.
+
+### Origin data: `ctx.origin`
+
+Because your app runs on the real website's origin, `ctx.origin` exposes that origin's browser state:
+
+- `ctx.origin.fetch(input, init)` fetches as the page with its session cookies (including `HttpOnly` cookies).
+- `ctx.origin.localStorage` and `ctx.origin.sessionStorage` provide async `get`, `set`, `remove`, `keys` and `clear` over the origin's Web Storage.
+- `ctx.origin.cookies` provides async `all`, `get`, `set` and `remove` for non-`HttpOnly` cookies.
+- `ctx.origin.indexedDB` provides async `databases`, `stores`, `get`, `getAll`, `put`, `delete` and `clear` over the origin's IndexedDB databases.
+- `ctx.origin.readBlob(url)` fetches same-origin or `blob:` resources as the page and returns a `Blob`.
+
+### Client-side routing and React Router
+
+`tweak.site` syncs with the real browser address bar. `ctx.location` mirrors the top-frame URL (`href`, `origin`, `pathname`, `search`, `hash`, `state`, `key`), and `ctx.navigate(to, { replace })` updates the top-frame URL via the History API when staying inside matched paths or performs a real navigation for cross-origin and `exclude` URLs.
+
+`ctx.navigator` implements React Router's `Navigator` interface (`createHref`, `push`, `replace`, `go`), so you can mount `<Router>` directly:
+
+```tsx
+import { tweak } from "tangitweak";
+import { useEffect, useState } from "react";
+import { Router, Routes, Route, Link } from "react-router";
+
+tweak.site({ url: "*://www.costco.ca/*", exclude: ["*://www.costco.ca/checkout*"] }, (ctx) => {
+    function App() {
+        const [loc, setLoc] = useState(ctx.location);
+        useEffect(() => {
+            ctx.onNavigate(() => setLoc({ ...ctx.location }));
+        }, []);
+
+        return (
+            <Router location={loc} navigator={ctx.navigator}>
+                <nav>
+                    <Link to="/">Home</Link>
+                    <Link to="/deals">Deals</Link>
+                </nav>
+                <Routes>
+                    <Route path="/" element={<Home />} />
+                    <Route path="/deals" element={<Deals />} />
+                </Routes>
+            </Router>
+        );
+    }
+
+    ctx.mount(<App />);
+});
+```
 
 ## Schedules and toasts
 

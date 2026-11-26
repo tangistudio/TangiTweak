@@ -45,6 +45,15 @@ export interface ScriptParams {
     values: Record<string, any>;
 }
 
+/** Active `tweak.site` takeover state on the current tab. */
+export interface SiteTabState {
+    scriptId: string;
+    scriptName: string;
+    mode: "custom" | "original";
+    defaultMode: "custom" | "original";
+    debuggerSafe: boolean;
+}
+
 /** Everything the popup needs from the extension — swapped for a fake in tests. */
 export interface PopupApi {
     listScripts(): Promise<ScriptInfo[]>;
@@ -52,6 +61,10 @@ export interface PopupApi {
     activeOnTab(): Promise<string[]>;
     /** is TangiTweak running in the current tab (see tabStatus.ts) */
     tabStatus(): Promise<TabStatus>;
+    /** active `tweak.site` state for the current tab, if one matches its URL */
+    siteTabState?(): Promise<SiteTabState | null>;
+    /** switch the current tab between the custom site and the original site, then reload */
+    toggleSiteTab?(mode: "custom" | "original"): Promise<void>;
     /** the notice's button: grant site access if that's missing, then reload the tab */
     fixTab(status: TabStatus): Promise<void>;
     setEnabled(id: string, enabled: boolean): Promise<void>;
@@ -89,6 +102,17 @@ export const chromePopupApi: PopupApi = {
         noticeTab = tab;
         if (tab?.id === undefined) return "ok";
         return (await sendWake<TabStatus>({ type: "tabStatus", tabId: tab.id })) || "ok";
+    },
+    siteTabState: async () => {
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (tab?.id === undefined || !tab.url) return null;
+        const res = await sendWake<(SiteTabState & { matched?: boolean }) | null>({ type: "siteTabState", tabId: tab.id, url: tab.url });
+        return res && res.matched !== false && res.scriptId ? res : null;
+    },
+    toggleSiteTab: async (mode) => {
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        if (tab?.id === undefined) return;
+        await send({ type: "toggleSiteTab", tabId: tab.id, mode });
     },
     fixTab: async (status) => {
         const tab = noticeTab;

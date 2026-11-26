@@ -16,7 +16,7 @@
 
 import { builtinSpec } from "./builtinSpecs";
 import type { ResMeta } from "./metaParser";
-import { routePatterns } from "./route";
+import { isSiteRoute, routePatterns } from "./route";
 
 /**
  * What a package can do, as plain data: stored with the installed package,
@@ -33,6 +33,8 @@ export interface Capabilities {
     pageJs: boolean;
     /** Whether it registers a `tweak.onOverlay` handler, which draws an overlay over pages. */
     overlay: boolean;
+    /** Whether it registers a `tweak.site` handler, which replaces matching pages with a custom app and bridges origin storage. */
+    site?: boolean;
     /** Hosts its `tweak.fetch` calls reach, as package.json's `tangitweak.connect` declares them. */
     connect: string[];
     /**
@@ -58,11 +60,13 @@ const sorted = (xs: Iterable<string>) => [...new Set(xs)].sort();
  */
 export function capabilitiesOf(routes: ResMeta["routes"], connect: string[], dependencies: Record<string, string> = {}): Capabilities {
     const packages = Object.keys(dependencies).filter((n) => !builtinSpec(n));
+    const site = routes.some((r) => isSiteRoute(r));
     return {
         urls: sorted(routes.flatMap((r) => routePatterns(r.url))),
         strategies: sorted(routes.flatMap((r) => (r.strategy ? [r.strategy] : []))),
         pageJs: routes.some((r) => r.kind === "onDocument" && r.world !== "isolated"),
-        overlay: routes.some((r) => r.kind === "onOverlay"),
+        overlay: routes.some((r) => r.kind === "onOverlay" && !isSiteRoute(r)),
+        ...(site ? { site: true } : {}),
         connect: sorted(connect),
         packages: sorted(packages),
     };
@@ -106,6 +110,7 @@ export function describeCapabilities(c: Capabilities): {
     if (urls.some(isAllUrls)) out.push({ text: "Runs on every site", risk: "high" });
     if (c.strategies.includes("debugger")) out.push({ text: 'Intercepts with the browser debugger (strategy "debugger": a banner shows on the tab)', risk: "high" });
     if (c.pageJs) out.push({ text: "Runs code in the site's own JavaScript world", risk: "medium" });
+    if (c.site) out.push({ text: "Replaces the website with a custom app and reads its storage", risk: "medium" });
     if (c.strategies.includes("helper")) out.push({ text: 'Intercepts through the local helper process (strategy "helper")', risk: "medium" });
     const sites = urls.filter((u) => !isAllUrls(u));
     if (sites.length) out.push({ text: `Runs on ${sites.join(", ")}`, risk: "low" });
@@ -141,6 +146,7 @@ export function addedCapabilities(prev: Capabilities, next: Capabilities): strin
     const strategies = next.strategies.filter((s) => !prev.strategies.includes(s));
     if (strategies.length) out.push(`intercepts with ${strategies.join(", ")}`);
     if (next.pageJs && !prev.pageJs) out.push("runs code in the site's own JavaScript world");
+    if (next.site && !prev.site) out.push("replaces the website with a custom app");
     if (next.overlay && !prev.overlay) out.push("draws an overlay");
     const connect = next.connect.filter((h) => !prev.connect.includes(h));
     if (connect.length) out.push(`connects to ${connect.join(", ")}`);

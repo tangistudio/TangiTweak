@@ -37,7 +37,8 @@ import { binaryOptedOut, debuggerMissedLine, frameHasHook as pingHook, isLoopbac
 import { resolveParamValues } from "../../shared/scriptDef";
 import { shippedLibIds, type ShippedLib } from "../../shared/scriptImports";
 import { autoLayerLabel, isLayer, type ScriptLayers } from "../../shared/route";
-import { effectiveStrategy, hookCanSee, indexRoutes, isNetKind, pageWorld, routeLabel, routeMatches, routeMayMatch, takesBinary, type RouteMeta, type Strategy } from "../../shared/route";
+import { effectiveStrategy, hookCanSee, indexRoutes, isDebuggerSafeOverlay, isNetKind, isSiteRoute, pageWorld, routeLabel, routeMatches, routeMayMatch, takesBinary, type RouteMeta, type Strategy } from "../../shared/route";
+import { SiteRulesManager } from "./siteRules";
 import { analyzeScripts, runBodyOp, type Analyzed } from "../compileHost";
 import { recordNetBody } from "../network";
 import { netRouteRefs, reportSkipped, setSkipRoutes, stackFor } from "./skipped";
@@ -200,6 +201,9 @@ export function createPipeline(
     noteRequestForBadge?: (tabId: number, url: string, newPage?: boolean) => number
 ): Pipeline {
     const tabUrls = new Map<number, string>();
+    const siteRules = new SiteRulesManager();
+    const onSiteTabRemoved = (tabId: number) => siteRules.forgetTab(tabId);
+    chrome.tabs?.onRemoved?.addListener(onSiteTabRemoved);
 
     // ---- tab URL tracking ----
     /** `${tabId}|${url}` page loads re-issued through the debugger (MV3) */
@@ -351,8 +355,8 @@ export function createPipeline(
             for (const msg of rulesProblems(s.code, s.meta.routes || [])) problems.push({ id: s.id, msg });
             for (const msg of toastEveryProblems(s.code, s.meta)) problems.push({ id: s.id, msg });
             for (const r of s.meta.routes || []) {
-                // Chrome MV3: onPage and onSite code need chrome.userScripts (an error, see problems.ts)
-                if (userScripts !== "ok" && r.kind === "onDocument") problems.push({ id: s.id, msg: userScriptsProblem(routeLabel(r), userScripts, chrome.runtime.id) });
+                // Chrome MV3: onPage, onSite and debuggerSafe onOverlay code need chrome.userScripts (an error, see problems.ts)
+                if (userScripts !== "ok" && (r.kind === "onDocument" || isDebuggerSafeOverlay(r))) problems.push({ id: s.id, msg: userScriptsProblem(routeLabel(r), userScripts, chrome.runtime.id) });
                 if (!isNetKind(r.kind)) continue;
                 const strategy = effectiveStrategy(r);
                 const msg = routeProblem({ kind: r.kind, strategy, resourceTypes: r.resourceTypes }, { firefox: IS_FIREFOX, mv3: __MV3__ });
@@ -574,17 +578,31 @@ export function createPipeline(
         return { requestHeaders: applyHeaderChanges(details.requestHeaders || [], changes) };
     };
 
+    const mergeHeaderChanges = (a: HeaderChanges | null, b: HeaderChanges | null): HeaderChanges | null => {
+        if (!a) return b;
+        if (!b) return a;
+        return {
+            set: { ...(a.set || {}), ...(b.set || {}) },
+            remove: [...(a.remove || []), ...(b.remove || [])],
+        };
+    };
+
     const onHeadersReceived = (details: any) => {
         if (bypassed(details, `wr:${details.requestId}`)) return {};
         const tabUrl = tabUrlFor(details.tabId, details.url);
+        const siteChanges = siteRules.headerChangesFor(details);
         const changes =
             extensionStrategy.handleHeadersReceived(details, tabUrl) ||
             pageStrategy.handleHeadersReceived(details, tabUrl);
         if (isThenable(changes)) {
-            return changes.then((c: any) => (c ? { responseHeaders: applyHeaderChanges(details.responseHeaders || [], c) } : {}));
+            return changes.then((c: any) => {
+                const merged = mergeHeaderChanges(c || null, siteChanges);
+                return merged ? { responseHeaders: applyHeaderChanges(details.responseHeaders || [], merged) } : {};
+            });
         }
-        if (!changes) return {};
-        return { responseHeaders: applyHeaderChanges(details.responseHeaders || [], changes) };
+        const merged = mergeHeaderChanges(changes || null, siteChanges);
+        if (!merged) return {};
+        return { responseHeaders: applyHeaderChanges(details.responseHeaders || [], merged) };
     };
 
     if (!__MV3__) {
@@ -670,24 +688,23 @@ export function createPipeline(
      * `pane`: only that script's overlay run, for its toast panes' frames
      * (it must be enabled and have a `tweak.toastPane`; onOverlay routes don't matter).
      */
-    async function hookBundle(url: string, top: boolean, preview?: string, pane?: boolean | "preview") {
+    async function hookBundle(url: string, top: boolean, preview?: string, pane?: boolean | "preview", tabId?: number) {
         const t0 = performance.now();
         // onSite scripts (hook.ts; the bridge when CSP blocks eval)
         // `v`: the onSite code's version — onPage code tags its calls with it, and the hook waits for that version (hook.ts answerCall)
         // `layers`: the script's explicit layers, for the order of its ctx.patch chains (runLifecycle.ts)
         const domHandlers: { scriptId: string; name: string; src: string; params: Record<string, any>; v: string; fk?: string; layers?: ScriptLayers }[] = [];
-        // onPage scripts: never shipped to the page's own world. MV3 runs
-        // them in chrome.userScripts worlds that load the code from the owner
-        // (`isoRuns`): the bridge only learns which scripts, to relay the
-        // overlay's calls
-        const isoHandlers: (typeof domHandlers[number] | { scriptId: string; name: string })[] = [];
+        // onPage scripts (and opt-in debuggerSafe onOverlay scripts): never shipped to the page's own world.
+        // MV3 runs them in chrome.userScripts worlds that load the code from the owner (`isoRuns`)
+        const isoHandlers: ((typeof domHandlers[number] & { shadowOverlay?: boolean }) | { scriptId: string; name: string; shadowOverlay?: boolean })[] = [];
         const isoRuns = new Map<string, IsoRun>();
-        // onOverlay routes only — overlay code never goes through the page
-        const overlays: { scriptId: string; name: string; routes: RouteMeta[]; codeHash: string }[] = [];
+        // onOverlay / tweak.site routes only — overlay code never goes through the page
+        const overlays: { scriptId: string; name: string; routes: RouteMeta[]; codeHash: string; fullPage?: boolean; debuggerSafe?: boolean; react?: boolean }[] = [];
         const overlayRuns = new Map<string, OverlayRun>();
         const overlayDeps = new Map<string, Set<string>>();
         const routes: RouteMeta[] = [];
         await loadTextTypes();
+        const activeSite = preview === undefined && top && typeof tabId === "number" ? (await siteRules.ensureReady(), siteRules.activeForTab(url, tabId)) : null;
         const pageScripts = await listScripts();
         const paramValues = await loadAllParamValues();
         // MV3: analyzed in the sandbox page (the SW can't eval),
@@ -701,7 +718,7 @@ export function createPipeline(
             const a = analyzed.get(s.id);
             if (preview !== undefined) {
                 if (s.id !== preview) continue;
-                previewWhy = !a || a.error ? "the script doesn't compile" : pane ? "the script has no tweak.toastPane" : "the script has no overlay handler (tweak.onOverlay)";
+                previewWhy = !a || a.error ? "the script doesn't compile" : pane ? "the script has no tweak.toastPane" : "the script has no overlay or site handler (tweak.onOverlay / tweak.site)";
                 if (pane === true && !s.enabled) {
                     previewWhy = "the script is off";
                     continue;
@@ -718,7 +735,9 @@ export function createPipeline(
             if (!a || a.error || !a.meta.active) continue;
             let main = false;
             let iso = false;
+            let shadowOver = false;
             const over: RouteMeta[] = [];
+            const siteOver: RouteMeta[] = [];
             for (const r of a.meta.routes) {
                 if (r.kind === "onDocument") {
                     // a route that follows in-place navigation ships wherever its origin matches
@@ -726,12 +745,35 @@ export function createPipeline(
                     if (pageWorld(r) === "isolated") iso = true;
                     else main = true;
                 } else if (r.kind === "onOverlay") {
-                    if (preview !== undefined || (top && routeMayMatch(r, url))) over.push(r);
+                    if (preview !== undefined) over.push(r);
+                    else if (top && routeMayMatch(r, url)) {
+                        if (isSiteRoute(r)) {
+                            if (activeSite && activeSite.scriptId === s.id) siteOver.push(r);
+                        } else if (isDebuggerSafeOverlay(r)) {
+                            shadowOver = true;
+                            iso = true;
+                        } else {
+                            over.push(r);
+                        }
+                    }
                 } else if (r.kind !== "onResponseHeaders" && effectiveStrategy(r) === "page" && hookCanSee(r)) routes.push(r);
             }
-            if (over.length) {
-                overlays.push({ scriptId: s.id, name: s.meta.name, routes: over, codeHash: "" });
-                overlayRuns.set(s.id, { name: s.meta.name, code: toRunnableJs(s.code), routes: over, params: resolveParamValues(a.paramDefs || {}, paramValues[s.id]), libs: [], react: false, codeHash: "" });
+            const combinedOver = [...over, ...siteOver];
+            if (combinedOver.length) {
+                const fullPage = preview !== undefined ? combinedOver.some(isSiteRoute) : siteOver.length > 0;
+                const debuggerSafe = preview === undefined && fullPage && !!activeSite?.debuggerSafe;
+                overlays.push({ scriptId: s.id, name: s.meta.name, routes: combinedOver, codeHash: "", ...(fullPage ? { fullPage: true } : {}), ...(debuggerSafe ? { debuggerSafe: true } : {}) });
+                overlayRuns.set(s.id, {
+                    name: s.meta.name,
+                    code: toRunnableJs(s.code),
+                    routes: combinedOver,
+                    params: resolveParamValues(a.paramDefs || {}, paramValues[s.id]),
+                    libs: [],
+                    react: false,
+                    codeHash: "",
+                    ...(fullPage ? { fullPage: true } : {}),
+                    ...(debuggerSafe ? { debuggerSafe: true } : {}),
+                });
                 overlayDeps.set(s.id, new Set(a.deps));
             }
             if (!main && !iso || preview !== undefined) continue;
@@ -740,10 +782,10 @@ export function createPipeline(
             const h = { scriptId: s.id, name: s.meta.name, src, params, v: contentHash(JSON.stringify([src, params])) };
             if (main) domHandlers.push(h);
             if (iso && __MV3__) {
-                isoHandlers.push({ scriptId: s.id, name: s.meta.name });
-                isoRuns.set(s.id, { name: s.meta.name, src: h.src, siteV: h.v, params: h.params, libs: [], codeHash: "", overlay: !!over.length });
+                isoHandlers.push({ scriptId: s.id, name: s.meta.name, ...(shadowOver ? { shadowOverlay: true } : {}) });
+                isoRuns.set(s.id, { name: s.meta.name, src: h.src, siteV: h.v, params: h.params, libs: [], codeHash: "", overlay: !!combinedOver.length, ...(shadowOver ? { shadowOverlay: true } : {}) });
                 isoScriptDeps.set(s.id, new Set(a.deps));
-            } else if (iso) isoHandlers.push(h);
+            } else if (iso) isoHandlers.push({ ...h, ...(shadowOver ? { shadowOverlay: true } : {}) });
             if (main) for (const d of a.deps) mainDeps.add(d);
             if (iso && !__MV3__) for (const d of a.deps) isoDeps.add(d);
         }
@@ -768,6 +810,7 @@ export function createPipeline(
             const run = overlayRuns.get(o.scriptId)!;
             run.libs = libsOf(overlayDeps.get(o.scriptId)!);
             run.react = needsReact([pageScripts.find((x) => x.id === o.scriptId)?.code ?? "", run.code, ...run.libs.map((l) => l.src ?? "")], pkgs);
+            if (run.react) o.react = true;
             run.codeHash = o.codeHash = contentHash(JSON.stringify([run.code, run.params, run.libs.map((l) => [l.name, l.src ?? l.json ?? l.alias ?? ""])]));
         }
         // a user-script world re-runs when its code, params or imports change
@@ -779,11 +822,21 @@ export function createPipeline(
         const isoOff = isoRuns.size && (await userScriptsStatus()) !== "ok" ? USER_SCRIPTS_OFF : undefined;
         // MV3 without user scripts: no onSite code either (the hook answers calls into it with why)
         const siteOff = __MV3__ && domHandlers.length && (await userScriptsStatus()) !== "ok" ? USER_SCRIPTS_OFF : undefined;
+        const siteOverlay = activeSite && overlays.find((o) => o.scriptId === activeSite.scriptId && o.fullPage);
+        const siteInfo = siteOverlay && activeSite
+            ? {
+                  scriptId: activeSite.scriptId,
+                  name: activeSite.scriptName,
+                  debuggerSafe: activeSite.debuggerSafe,
+                  ...(activeSite.debuggerSafe ? { cspNonce: await siteRules.getCspNonce() } : {}),
+                  exclude: activeSite.route.exclude || [],
+              }
+            : undefined;
         // what a frame runs from this bundle (its overlays apart: they carry their own code hash): a page back from the back/forward cache compares it
         const libRev = (l: ShippedLib) => [l.name, siteKey(l.name, l.src ?? l.pkg?.js ?? l.json ?? l.alias ?? ""), l.params];
-        const rev = contentHash(JSON.stringify([routes, getTextTypes(), domHandlers.map((h) => [h.scriptId, h.v]), libs.map(libRev), isoHandlers.map((h) => [h.scriptId, "v" in h ? h.v : ""]), isoLibs.map(libRev), isoOff, siteOff]));
+        const rev = contentHash(JSON.stringify([routes, getTextTypes(), domHandlers.map((h) => [h.scriptId, h.v]), libs.map(libRev), isoHandlers.map((h) => [h.scriptId, "v" in h ? h.v : "", !!h.shadowOverlay]), isoLibs.map(libRev), isoOff, siteOff, siteInfo?.scriptId ?? null, !!siteInfo?.debuggerSafe]));
         dlogLevel("compile", "debug", `timing: page bundle for ${url.slice(0, 80)} — ${Math.round(performance.now() - t0)} ms`);
-        return { bundle: { count: routes.length, routes, textTypes: getTextTypes(), domHandlers, isoHandlers, overlays, libs, isoLibs, rev, ...(isoOff ? { isoOff } : {}), ...(siteOff ? { siteOff } : {}) }, overlayRuns, isoRuns, previewWhy };
+        return { bundle: { count: routes.length, routes, textTypes: getTextTypes(), domHandlers, isoHandlers, overlays, libs, isoLibs, rev, ...(isoOff ? { isoOff } : {}), ...(siteOff ? { siteOff } : {}), ...(siteInfo ? { site: siteInfo } : {}) }, overlayRuns, isoRuns, previewWhy };
     }
     installPages();
     // tweak.every and tweak.toast (alarms listen from here on: an alarm can be what woke the service worker)
@@ -798,11 +851,15 @@ export function createPipeline(
     });
     setupOverlayLinks({
         toast: showToast,
-        overlayRuns: async (url) => (await hookBundle(url, true)).overlayRuns,
+        overlayRuns: async (url, tabId) => (await hookBundle(url, true, undefined, undefined, tabId)).overlayRuns,
         isoRuns: async (url, top) => (await hookBundle(url, top)).isoRuns,
         isoScripts: async (url, top) => {
             const { bundle } = await hookBundle(url, top);
             return new Set([...bundle.isoHandlers.map((h) => h.scriptId), ...shippedLibIds(bundle.isoLibs)]);
+        },
+        isoShadowScripts: async (url, top) => {
+            const { bundle } = await hookBundle(url, top);
+            return new Set(bundle.isoHandlers.filter((h) => h.shadowOverlay).map((h) => h.scriptId));
         },
         userScriptsOff: async () => (await userScriptsStatus()) !== "ok",
         storageGet: (s, key) => scriptStorageGet(s, key),
@@ -827,6 +884,10 @@ export function createPipeline(
             const run = overlayRuns.get(s);
             if (!run) throw new Error(previewWhy);
             return run;
+        },
+        showOriginal: async (tabId) => {
+            await siteRules.setTabMode(tabId, "original");
+            chrome.tabs.reload(tabId, {}, () => void (chrome.runtime as any).lastError);
         },
     });
 
@@ -1011,12 +1072,44 @@ export function createPipeline(
             );
             return true;
         }
+        if (msg && msg.type === "siteTabState") {
+            const tabId = typeof msg.tabId === "number" ? msg.tabId : sender.tab?.id;
+            if (typeof tabId !== "number") {
+                sendResponse(null);
+                return false;
+            }
+            void (async () => {
+                let url = typeof msg.url === "string" ? msg.url : tabId === sender.tab?.id ? sender.tab?.url || "" : "";
+                if (!url) {
+                    url = await new Promise<string>((r) => chrome.tabs.get(tabId, (t) => r((chrome.runtime as any).lastError ? "" : t?.url || "")));
+                }
+                if (!url) return sendResponse(null);
+                const s = await siteRules.tabState(tabId, url);
+                sendResponse(s.matched ? s : null);
+            })().catch(() => sendResponse(null));
+            return true;
+        }
+        if (msg && msg.type === "toggleSiteTab") {
+            const tabId = typeof msg.tabId === "number" ? msg.tabId : sender.tab?.id;
+            if (typeof tabId !== "number") {
+                sendResponse({});
+                return false;
+            }
+            const mode = msg.mode === "original" ? "original" : "custom";
+            siteRules.setTabMode(tabId, mode).then(
+                () => {
+                    chrome.tabs.reload(tabId, {}, () => void (chrome.runtime as any).lastError);
+                    sendResponse({ mode });
+                },
+                (e) => sendResponse({ error: String(e?.message || e) })
+            );
+            return true;
+        }
         if (msg && msg.type === "getHookBundle") {
             void (async () => {
                 const url = msg.url || "";
-                const { bundle } = await hookBundle(url, sender.frameId === 0 || sender.frameId === undefined);
-                // MV2: the bridge runs isolated onPage code — its stores' current state (this page's tweak.pageStore copies), so they read synchronously
                 const tabId = sender.tab?.id;
+                const { bundle } = await hookBundle(url, sender.frameId === 0 || sender.frameId === undefined, undefined, undefined, tabId);
                 const isoIds = !__MV3__ ? [...new Set([...bundle.isoHandlers.map((h) => h.scriptId), ...shippedLibIds(bundle.isoLibs)])] : [];
                 if (isoIds.length && typeof tabId === "number" && tabId >= 0) {
                     await pagesReady;
@@ -1202,7 +1295,7 @@ export function createPipeline(
         scripts = scripts.map((s) => ({ ...s, layers: layers.get(s.id) }));
         const isoScripts: IsoScript[] = scripts
             .filter((x) => x.enabled && x.meta.active)
-            .map((x) => ({ id: x.id, routes: (x.meta.routes || []).filter((r) => r.kind === "onDocument" && pageWorld(r) === "isolated") }))
+            .map((x) => ({ id: x.id, routes: (x.meta.routes || []).filter((r) => (r.kind === "onDocument" && pageWorld(r) === "isolated") || isDebuggerSafeOverlay(r)) }))
             .filter((x) => x.routes.length);
         // MV3 onSite code: user scripts in the page's world
         const site = __MV3__ && analyzed ? siteScripts(stored, analyzed, packagesSnapshot()) : [];
@@ -1214,7 +1307,7 @@ export function createPipeline(
         pageStrategy.reload(scripts, paramValues);
         cdp.reload(scripts, paramValues);
         helperStrategy.reload(scripts, paramValues);
-        rulesApplied = rulesStrategy.reload(scripts, paramValues);
+        rulesApplied = Promise.all([rulesStrategy.reload(scripts, paramValues), siteRules.reload(scripts)]);
         settledSeq = seq;
         // toasts of tweaks turned off or deleted go; the others take a changed toastStyle
         const wasOn = [...toastScripts.values()].filter((x) => x.enabled).map((x) => x.id);
@@ -1301,6 +1394,7 @@ export function createPipeline(
             offStores();
             offProcess();
             chrome.storage.onChanged.removeListener(onStorage);
+            chrome.tabs?.onRemoved?.removeListener(onSiteTabRemoved);
             if (!__MV3__) {
                 const onDone = (details: any) => {
                     extensionStrategy.pruneRequest?.(details.requestId);

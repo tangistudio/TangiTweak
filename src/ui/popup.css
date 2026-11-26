@@ -141,6 +141,52 @@ body.resizing * { pointer-events: none; }
     padding: 14px 12px;
     color: var(--fg-dim);
 }
+#site-mode-bar {
+    flex: none;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 6px 12px;
+    background: var(--bg-panel);
+    border-bottom: 1px solid var(--border);
+}
+.site-mode-name {
+    flex: 1;
+    min-width: 0;
+    font-size: 12px;
+    color: var(--fg);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.site-mode-toggle {
+    display: inline-flex;
+    flex-shrink: 0;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    overflow: hidden;
+}
+.site-mode-toggle button {
+    background: transparent;
+    border: none;
+    color: var(--fg-dim);
+    padding: 2px 8px;
+    font-size: 11px;
+    cursor: pointer;
+}
+.site-mode-toggle button + button {
+    border-left: 1px solid var(--border);
+}
+.site-mode-toggle button:hover:not(.active) {
+    background: var(--bg-hover);
+    color: var(--fg);
+}
+.site-mode-toggle button.active {
+    background: var(--accent);
+    color: #fff;
+}
+
 #tab-notice {
     flex: none;
     padding: 10px 12px;

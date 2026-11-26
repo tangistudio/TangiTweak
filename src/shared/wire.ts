@@ -480,6 +480,156 @@ export interface WireOps {
             url: string;
         };
     };
+    /** L3 (`tweak.site`): update the top-frame document title. */
+    "site.title": {
+        push: {
+            /** The new document title. */
+            title: string;
+        };
+    };
+    /** L3 (`tweak.site`): update the top-frame favicon link element. */
+    "site.favicon": {
+        push: {
+            /** The icon URL (`data:` or `https:`). */
+            href: string;
+        };
+    };
+    /** L3 (`tweak.site`): update the top-frame URL via history API or full navigation. */
+    "site.navigate": {
+        push: {
+            /** Target path or URL. */
+            to: string;
+            /** True to replace the current history entry instead of pushing. */
+            replace?: boolean;
+            /** True to force a full page navigation (`location.assign` / `location.replace`). */
+            full?: boolean;
+        };
+    };
+    /** L3 (`tweak.site`): move backward or forward in top-frame session history. */
+    "site.go": {
+        push: {
+            /** Relative delta passed to `history.go(delta)`. */
+            delta: number;
+        };
+    };
+    /** L3/L2 (`tweak.site`): switch the current tab back to the original site and reload it. */
+    "site.showOriginal": {
+        push: {};
+    };
+    /** L3 (`tweak.site`): report a startup or runtime error so the bridge can show a recovery bar. */
+    "site.error": {
+        push: {
+            /** Human-readable error summary. */
+            message: string;
+        };
+    };
+    /** L3 (`tweak.site`): read or write the replaced origin's `localStorage` or `sessionStorage`. */
+    "origin.storage": {
+        req: {
+            /** Which storage area to access. */
+            area: "local" | "session";
+            /** Storage operation to perform. */
+            op: "get" | "set" | "remove" | "keys" | "clear";
+            /** Key name (for `get`, `set`, `remove`). */
+            key?: string;
+            /** Value string (for `set`). */
+            value?: string;
+        };
+        res: {
+            /** Returned value for `get` (`string | null`). */
+            value?: string | null;
+            /** Returned key list for `keys`. */
+            keys?: string[];
+        };
+    };
+    /** L3 (`tweak.site`): read or write the replaced origin's non-HttpOnly `document.cookie`. */
+    "origin.cookie": {
+        req: {
+            /** Cookie operation to perform. */
+            op: "all" | "get" | "set" | "remove";
+            /** Cookie name (for `get`, `set`, `remove`). */
+            key?: string;
+            /** Cookie value (for `set`). */
+            value?: string;
+            /** Cookie attributes (for `set`, `remove`). */
+            opts?: {
+                /** Cookie `Path` attribute. */
+                path?: string;
+                /** Cookie `Domain` attribute. */
+                domain?: string;
+                /** Cookie `Max-Age` in seconds. */
+                maxAge?: number;
+                /** Cookie `Expires` UTC timestamp string. */
+                expires?: string;
+                /** Cookie `Secure` attribute. */
+                secure?: boolean;
+                /** Cookie `SameSite` attribute. */
+                sameSite?: "Strict" | "Lax" | "None";
+            };
+        };
+        res: {
+            /** Cookie value for `get`. */
+            value?: string | null;
+            /** All non-HttpOnly cookies as a map for `all`. */
+            all?: Record<string, string>;
+        };
+    };
+    /** L3 (`tweak.site`): read or write the replaced origin's IndexedDB stores. */
+    "origin.idb": {
+        req: {
+            /** IndexedDB operation to perform. */
+            op: "databases" | "stores" | "get" | "getAll" | "put" | "delete" | "clear" | "keys";
+            /** Database name (all ops except `databases`). */
+            db?: string;
+            /** Object store name (all ops except `databases` and `stores`). */
+            store?: string;
+            /** Key for `get`, `put`, `delete`. */
+            key?: any;
+            /** Value for `put`. */
+            value?: any;
+            /** Optional max count for `getAll`. */
+            limit?: number;
+        };
+        res: {
+            /** Operation result value. */
+            value?: any;
+            /** Database metadata list for `databases`. */
+            databases?: {
+                /** Database name. */
+                name: string;
+                /** Database schema version. */
+                version?: number;
+            }[];
+            /** Object store names for `stores`. */
+            stores?: string[];
+        };
+    };
+    /** L3 (`tweak.site`): fetch a URL as the replaced origin and return base64 bytes + MIME type. */
+    "origin.blob": {
+        req: {
+            /** URL to fetch as the page. */
+            url: string;
+        };
+        res: {
+            /** Response Content-Type MIME string. */
+            mime: string;
+            /** Base64-encoded response bytes. */
+            base64: string;
+        };
+    };
+    /** L2: fetch bundled extension asset source needed to bootstrap a `debuggerSafe` `tweak.site` `srcdoc` iframe. */
+    "builtin.siteHost": {
+        req: {
+            /** True to also include the built-in React chunk source. */
+            react: boolean;
+        };
+        res: {
+            /** Bundled `overlay.js` source text. */
+            overlayJs: string;
+            /** Bundled `builtins-react.js` source text when requested. */
+            reactJs?: string;
+        };
+    };
     /**
      * Reads script `s`'s `tweak.storage`. Sent by an overlay (L3, the bridge
      * answers through the background), MV3 isolated onPage code (L6) and the
@@ -708,11 +858,11 @@ export interface WireOps {
         /** The response, its body read in full. */
         res: WireResponse;
     };
-    /** L6: this world's onPage code ran on its document, once per document. The background tags the document's Network row. */
+    /** L6: this world's onPage or debugger-safe onOverlay code ran on its document, once per document. The background tags the document's Network row. */
     ran: {
         push: {
             /** The API that ran. */
-            api: "onPage";
+            api: "onPage" | "onOverlay";
             /** The script's name. */
             name: string;
         };
@@ -948,6 +1098,8 @@ export interface IsoInit {
     libStores?: { [scriptId: string]: { [name: string]: StoreSnapshot } };
     /** The page the frame is part of (its top frame's document): the only one whose `tweak.pageStore` copies it reaches. */
     page: string;
+    /** True when the script also has `onOverlay({ debuggerSafe: true })` handlers to render in a closed shadow root (top frame only). */
+    shadowOverlay?: boolean;
 }
 
 /**
@@ -1000,6 +1152,10 @@ export interface OverlayInit {
         /** The Editor's preview: draw the pane's `sample` instead of `toast.data`. */
         sample?: boolean;
     };
+    /** True when this frame hosts a `tweak.site` full-viewport replacement instead of a floating overlay. */
+    fullPage?: boolean;
+    /** True when this `tweak.site` runs in opt-in `debuggerSafe` (`srcdoc` + nonce) mode. */
+    debuggerSafe?: boolean;
 }
 
 /** The names of the ops that are calls (they have `req` and `res`). */

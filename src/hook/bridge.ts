@@ -43,7 +43,8 @@ import { siteBuiltin } from "../shared/siteBuiltin";
 import { SITE_DOWN_KINDS, SITE_UP_KINDS, type SiteDown, type SiteUp } from "../shared/siteStoreHost";
 import { Exposer, RpcClient, isRpcCall, isRpcResult, NOT_RUNNING, RPC_QUEUE_MAX, TOP_FRAME_ONLY, type RpcCall, type RpcResult } from "../shared/rpc";
 import { inertRemote } from "../shared/remote";
-import { followsNav, type DocumentWhen, type PlaceApi, type RouteMeta, type ScriptLayers } from "../shared/route";
+import { followsNav, isDebuggerSafeOverlay, routeMatches, type DocumentWhen, type PlaceApi, type RouteMeta, type ScriptLayers } from "../shared/route";
+import { handleOriginBlob, handleOriginCookie, handleOriginIdb, handleOriginStorage } from "../shared/originBridge";
 import { checkUrl, NavRoutes, watchUrl } from "../shared/navRoutes";
 import { clipPathFor, normalizeRects } from "../shared/overlayRects";
 import { fromWireRequest, toWireResponse } from "../shared/ttFetch";
@@ -281,7 +282,7 @@ import type { PaneToast } from "../shared/wire";
     // ---- onPage code in the isolated world: compiles the FULL script source
     // with a shim so top-level helpers/closures survive; the DOM is shared
     // with the page, window (page JS globals) is not ----
-    interface DocumentHandler { scriptId: string; name: string; src: string; params?: Record<string, any>; layers?: ScriptLayers }
+    interface DocumentHandler { scriptId: string; name: string; src: string; params?: Record<string, any>; layers?: ScriptLayers; shadowOverlay?: boolean }
 
     /** page-world messages toward trusted code: dropped, logged (a few per page) */
     let droppedN = 0;
@@ -323,6 +324,7 @@ import type { PaneToast } from "../shared/wire";
         bundleRev = resp.rev;
         if (resp.count > 0 || (resp.domHandlers || []).length || (resp.isoHandlers || []).length || (resp.overlays || []).length) openPort();
         pageScriptIds = new Set(((resp.domHandlers || []) as DocumentHandler[]).map((h) => h.scriptId));
+        if (window === top) syncSiteFouc(resp.site ?? null);
         syncOverlays(window === top ? resp.overlays || [] : [], hot);
         if (__MV3__) {
             // MV3 content scripts can't eval: isolated code runs in user-script worlds; this frame only relays the overlay's calls
@@ -556,20 +558,21 @@ import type { PaneToast } from "../shared/wire";
         const files = new Map<string, { id: string; name: string }>();
         // onPage code's handles: its onSite handlers (the page's world), its own (here), its overlay (top frame)
         // a compile's handles call with its signal: they abort once a reload replaced it and its runs ended
-        const handle = (scriptId: string, gen: Generation) => (api: PlaceApi, key: string) => {
+        const handle = (scriptId: string, gen: Generation) => (api: PlaceApi, key: string, route: RouteMeta) => {
             const sig = () => gen.signal;
             return api === "onSite"
                 ? pageClient(scriptId).remote(key, sig)
-                : api === "onPage"
+                : api === "onPage" || (api === "onOverlay" && isDebuggerSafeOverlay(route))
                   ? localClient(scriptId).remote(key, sig)
                   : window === top
                     ? overlayClient(scriptId).remote(key, sig)
                     : inertRemote(TOP_FRAME_ONLY);
         };
-        const shimFor = (scriptId: string | null, name: string, params: Record<string, any>, exposer?: Exposer, storesOf?: string, paramOwner?: string, gen?: Generation) =>
+        const shimFor = (scriptId: string | null, name: string, params: Record<string, any>, exposer?: Exposer, storesOf?: string, paramOwner?: string, gen?: Generation, debuggerSafeOverlays = false) =>
             makePageShim({
                 params,
                 world,
+                debuggerSafeOverlays,
                 exposer,
                 lib: scriptId ? undefined : name,
                 stores:
@@ -624,7 +627,8 @@ import type { PaneToast } from "../shared/wire";
             try {
                 // page-side require over the shipped library sources and data files
                 const codeOf = (importer: string) => (importer === h.name ? h.src : (libSources.find((l) => l.name === importer)?.src ?? ""));
-                const shim = shimFor(h.scriptId, h.name, h.params || {}, exposer, h.scriptId, h.scriptId, gen);
+                const allowShadow = world === "isolated" && window === top && !!h.shadowOverlay;
+                const shim = shimFor(h.scriptId, h.name, h.params || {}, exposer, h.scriptId, h.scriptId, gen, allowShadow);
                 // the tweak's modules run with its `tweak`: their handlers, params and stores are its own
                 const requireFrom = makeLibRequire(
                     libSources,
@@ -634,7 +638,7 @@ import type { PaneToast } from "../shared/wire";
                 );
                 const moduleObj = { exports: {} as any };
                 shim.top(() => scriptFunction(h.src, h.name)(shim.host, consoleProxy, requireFrom(h.name), moduleObj, moduleObj.exports));
-                dom = shim.dom;
+                dom = allowShadow ? [...shim.dom, ...shim.shadowOverlays] : shim.dom;
                 if (world === "isolated") reactDoms.set(h.scriptId, () => reactOf(requireFrom(h.name)));
                 for (const f of ran) if (!files.has(f)) files.set(f, owner);
             } catch (e: any) {
@@ -650,8 +654,9 @@ import type { PaneToast } from "../shared/wire";
             exposer.done();
             const nav = navsOf(world, h.scriptId);
             const fire = (d: PageDocumentHandler, url: string) => {
+                const ranApi: RanApi = isDebuggerSafeOverlay(d.route) ? "onOverlay" : api;
                 try {
-                    const report = (e: unknown) => scriptLog(h.scriptId, "error", formatScriptError(h.name, e, api), ctx);
+                    const report = (e: unknown) => scriptLog(h.scriptId, "error", formatScriptError(h.name, e, ranApi), ctx);
                     const keys = world === "isolated" ? pageKeys : null;
                     fireRun(
                         life,
@@ -665,9 +670,9 @@ import type { PaneToast } from "../shared/wire";
                         exposer,
                         report
                     );
-                    scriptRan(h.scriptId, h.name, api);
+                    scriptRan(h.scriptId, h.name, ranApi);
                 } catch (e: any) {
-                    scriptLog(h.scriptId, "error", formatScriptError(h.name, e, api), ctx);
+                    scriptLog(h.scriptId, "error", formatScriptError(h.name, e, ranApi), ctx);
                 }
             };
             for (const d of matching) if (!followsNav(d.route)) scheduleDocument(d.when, () => fire(d, location.href), hot);
@@ -883,11 +888,21 @@ import type { PaneToast } from "../shared/wire";
     // port it can't use. The frame covers the viewport and is clipped to
     // what it draws, so clicks elsewhere reach the page.
 
+    interface SiteBundleInfo {
+        scriptId: string;
+        name: string;
+        debuggerSafe: boolean;
+        cspNonce?: string;
+        exclude: string[];
+    }
     interface OverlayInfo {
         scriptId: string;
         name: string;
         routes: RouteMeta[];
         codeHash: string;
+        fullPage?: boolean;
+        debuggerSafe?: boolean;
+        react?: boolean;
     }
     interface Overlay {
         info: OverlayInfo;
@@ -902,6 +917,56 @@ import type { PaneToast } from "../shared/wire";
         closed: boolean;
     }
     const overlays = new Map<string, Overlay>();
+    /** active `tweak.site` takeover metadata for this top-frame document */
+    let siteConfig: SiteBundleInfo | null = null;
+    let siteFoucStyle: HTMLStyleElement | null = null;
+    let siteRecoveryBar: HTMLElement | null = null;
+
+    function syncSiteFouc(next: SiteBundleInfo | null): void {
+        siteConfig = next;
+        if (next) {
+            if (!siteFoucStyle || !siteFoucStyle.isConnected) {
+                siteFoucStyle = document.createElement("style");
+                siteFoucStyle.id = "__tt-site-fouc";
+                siteFoucStyle.textContent = "html{visibility:hidden!important;overflow:hidden!important;}";
+                (document.head || document.documentElement).appendChild(siteFoucStyle);
+            }
+        } else {
+            siteFoucStyle?.remove();
+            siteFoucStyle = null;
+            clearSiteRecoveryBar();
+        }
+    }
+
+    function isExcludedSiteUrl(url: string): boolean {
+        return !!siteConfig?.exclude?.length && routeMatches({ kind: "onOverlay", index: 0, url: siteConfig.exclude, exclude: [] }, url);
+    }
+
+    function clearSiteRecoveryBar(): void {
+        siteRecoveryBar?.remove();
+        siteRecoveryBar = null;
+    }
+
+    function showSiteRecoveryBar(o: Overlay, message: string): void {
+        if (!o.info.fullPage || o.closed || dead) return;
+        const root = ensureHost();
+        clearSiteRecoveryBar();
+        const bar = document.createElement("div");
+        bar.setAttribute("role", "alert");
+        bar.style.cssText = "all:initial;position:fixed;top:0;left:0;right:0;z-index:2147483647;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:10px 16px;background:#1f2328;color:#ffffff;font:13px/1.4 system-ui,-apple-system,sans-serif;border-bottom:1px solid #444c56;pointer-events:auto;";
+        const text = document.createElement("span");
+        text.style.cssText = "overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
+        text.textContent = `Custom site "${o.info.name}" failed: ${message}`;
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.textContent = "Show original site";
+        btn.style.cssText = "all:initial;cursor:pointer;padding:6px 12px;border-radius:6px;background:#ffffff;color:#1f2328;font:600 12px/1.2 system-ui,-apple-system,sans-serif;flex-shrink:0;";
+        btn.addEventListener("click", () => l2?.push("site.showOriginal", {}, o.info.scriptId));
+        bar.appendChild(text);
+        bar.appendChild(btn);
+        root.appendChild(bar);
+        siteRecoveryBar = bar;
+    }
     /** isolated-world `overlay.fn()` callers, per script */
     const overlayClients = new Map<string, RpcClient>();
     /** MV3: overlay → isolated-world calls waiting for the background's answer (L2), by cid */
@@ -962,12 +1027,13 @@ import type { PaneToast } from "../shared/wire";
         for (const info of list) {
             if (evicted.has(info.scriptId)) continue;
             const old = overlays.get(info.scriptId);
-            if (old && old.info.codeHash === info.codeHash) {
+            const sameHost = !!old && !!old.info.fullPage === !!info.fullPage && !!old.info.debuggerSafe === !!info.debuggerSafe;
+            if (sameHost && old.info.codeHash === info.codeHash) {
                 old.info = info;
                 continue;
             }
             // a running frame recompiles in place (its runs reconcile); one still starting starts over
-            if (old?.ep && !old.closed) {
+            if (sameHost && old.ep && !old.closed) {
                 old.info = info;
                 updateOverlay(old);
                 continue;
@@ -1166,17 +1232,44 @@ import type { PaneToast } from "../shared/wire";
         try {
             await l2call("overlay.open", { nonce: o.nonce, url: o.url }, s);
         } catch (e: any) {
-            scriptLog(s, "error", scriptLogLine(o.info.name, "overlay", `couldn't start: ${e?.message || e}`));
+            const msg = `couldn't start: ${e?.message || e}`;
+            scriptLog(s, "error", scriptLogLine(o.info.name, "overlay", msg));
+            if (o.info.fullPage) showSiteRecoveryBar(o, msg);
             return;
         }
         if (o.closed || dead) return;
         const frame = document.createElement("iframe");
         o.frame = frame;
-        frame.src = chrome.runtime.getURL("overlay.html") + "#" + o.nonce;
-        frame.setAttribute("allowtransparency", "true");
         frame.setAttribute("aria-label", `${o.info.name} (TangiTweak)`);
-        // same color-scheme inside and out, or Chromium paints the frame opaque
-        frame.style.cssText = `all:initial;position:fixed;inset:0;width:100%;height:100%;border:0;margin:0;padding:0;background:transparent;color-scheme:normal;pointer-events:auto;z-index:${++zTop};clip-path:${clipPathFor([])}`;
+        if (o.info.fullPage) {
+            frame.style.cssText = `all:initial;position:fixed;inset:0;width:100%;height:100%;border:0;margin:0;padding:0;background:#ffffff;color-scheme:normal;pointer-events:auto;z-index:${++zTop}`;
+            if (o.info.debuggerSafe) {
+                try {
+                    const hostCode = await l2call("builtin.siteHost", { react: true }, s);
+                    if (o.closed || dead) return;
+                    const cspNonce = siteConfig?.cspNonce || "";
+                    const safeScript = (js: string) => js.replace(/<\/(script)/gi, "<\\/$1");
+                    frame.srcdoc =
+                        `<!DOCTYPE html><html data-tt-overlay="1" data-tt-site="1"><head><meta charset="utf-8">` +
+                        `<style>html,body{margin:0;padding:0;width:100%;height:100%;background:#fff;color-scheme:normal;}</style></head><body>` +
+                        `<script nonce="${cspNonce}">window.__ttOverlayNonce=${JSON.stringify(o.nonce)};</script>` +
+                        (hostCode.reactJs ? `<script nonce="${cspNonce}">${safeScript(hostCode.reactJs)}</script>` : "") +
+                        `<script nonce="${cspNonce}">${safeScript(hostCode.overlayJs)}</script></body></html>`;
+                } catch (e: any) {
+                    const msg = `couldn't load debugger-safe host: ${e?.message || e}`;
+                    scriptLog(s, "error", scriptLogLine(o.info.name, "site", msg));
+                    showSiteRecoveryBar(o, msg);
+                    return;
+                }
+            } else {
+                frame.src = chrome.runtime.getURL("overlay.html") + "#" + o.nonce;
+            }
+        } else {
+            frame.src = chrome.runtime.getURL("overlay.html") + "#" + o.nonce;
+            frame.setAttribute("allowtransparency", "true");
+            // same color-scheme inside and out, or Chromium paints the frame opaque
+            frame.style.cssText = `all:initial;position:fixed;inset:0;width:100%;height:100%;border:0;margin:0;padding:0;background:transparent;color-scheme:normal;pointer-events:auto;z-index:${++zTop};clip-path:${clipPathFor([])}`;
+        }
         frame.addEventListener("load", () => guard(() => connectOverlay(o)), { once: true });
         ensureHost().appendChild(frame);
     }
@@ -1195,6 +1288,7 @@ import type { PaneToast } from "../shared/wire";
             }
             proven = true;
             o.ep = ep;
+            if (o.info.fullPage) clearSiteRecoveryBar();
             scriptRan(s, o.info.name, "onOverlay");
             const init = await l2call("overlay.init", {}, s);
             queueMicrotask(() => {
@@ -1218,8 +1312,53 @@ import type { PaneToast } from "../shared/wire";
         ep.handle("param.set", mine((a: ReqOf<"param.set">) => new Promise((r) => safeSend({ type: "scriptParamSet", scriptId: s, key: a.key, value: a.value, lib: a.lib }, () => r({})))));
         ep.on("log", (a) => proven && scriptLog(s, ["debug", "info", "warn", "error"].includes(a?.level) ? a.level : "info", String(a?.msg ?? ""), "overlay"));
         ep.on("rects", (a) => {
-            if (proven && o.frame && Array.isArray(a?.rects)) o.frame.style.clipPath = clipPathFor(normalizeRects(a.rects, window.innerWidth, window.innerHeight));
+            if (proven && !o.info.fullPage && o.frame && Array.isArray(a?.rects)) o.frame.style.clipPath = clipPathFor(normalizeRects(a.rects, window.innerWidth, window.innerHeight));
         });
+        if (o.info.fullPage) {
+            ep.on("site.title", (a) => {
+                if (proven && typeof a?.title === "string") document.title = a.title;
+            });
+            ep.on("site.favicon", (a) => {
+                if (!proven || typeof a?.href !== "string") return;
+                let link = document.querySelector<HTMLLinkElement>('link[rel~="icon"]');
+                if (!link) {
+                    link = document.createElement("link");
+                    link.rel = "icon";
+                    (document.head || document.documentElement).appendChild(link);
+                }
+                link.href = a.href;
+            });
+            ep.on("site.navigate", (a) => {
+                if (!proven || typeof a?.to !== "string") return;
+                try {
+                    const target = new URL(a.to, location.href);
+                    const excluded = isExcludedSiteUrl(target.href);
+                    if (target.origin !== location.origin || excluded) {
+                        if (a.replace) location.replace(target.href);
+                        else location.assign(target.href);
+                        return;
+                    }
+                    const rel = target.pathname + target.search + target.hash;
+                    if (a.replace) history.replaceState(null, "", rel);
+                    else history.pushState(null, "", rel);
+                    o.url = location.href;
+                    ep.push("nav", { url: location.href });
+                } catch {}
+            });
+            ep.on("site.go", (a) => {
+                if (proven && typeof a?.delta === "number" && Number.isFinite(a.delta)) history.go(a.delta);
+            });
+            ep.on("site.showOriginal", () => {
+                if (proven) l2?.push("site.showOriginal", {}, s);
+            });
+            ep.on("site.error", (a) => {
+                if (proven) showSiteRecoveryBar(o, String(a?.message || "startup error"));
+            });
+            ep.handle("origin.storage", mine((a: ReqOf<"origin.storage">) => handleOriginStorage(a)));
+            ep.handle("origin.cookie", mine((a: ReqOf<"origin.cookie">) => handleOriginCookie(a)));
+            ep.handle("origin.idb", mine((a: ReqOf<"origin.idb">) => handleOriginIdb(a)));
+            ep.handle("origin.blob", mine((a: ReqOf<"origin.blob">) => handleOriginBlob(a)));
+        }
         ep.on("focus", () => {
             if (proven && o.frame && o.frame.style.zIndex !== String(zTop)) o.frame.style.zIndex = String(++zTop);
         });
@@ -1269,7 +1408,9 @@ import type { PaneToast } from "../shared/wire";
         setTimeout(() => {
             if (!proven && !o.closed) {
                 ep.close("no hello");
-                log("warn", scriptLogLine(o.info.name, "overlay", "the overlay frame didn't start"));
+                const msg = o.info.fullPage ? "the custom site frame didn't start" : "the overlay frame didn't start";
+                log("warn", scriptLogLine(o.info.name, o.info.fullPage ? "site" : "overlay", msg));
+                if (o.info.fullPage) showSiteRecoveryBar(o, msg);
             }
         }, 15000);
     }
@@ -1303,6 +1444,9 @@ import type { PaneToast } from "../shared/wire";
         overlayClients.get(s)?.disconnect(`the overlay ${why}`);
         l2?.push("overlay.closed", {}, s);
         l2Holders = overlays.size;
+        if (o.info.fullPage && ![...overlays.values()].some((x) => x.info.fullPage)) {
+            syncSiteFouc(null);
+        }
     }
 
     /** the isolated world's caller into script `s`'s overlay */
@@ -1429,6 +1573,10 @@ import type { PaneToast } from "../shared/wire";
         // without the Navigation API this world can't see history.pushState: the hook nudges (`nav`)
         window.postMessage({ source: MAIN_SOURCE, kind: "watchNav" }, "/");
         watchUrl((url) => {
+            if (isExcludedSiteUrl(url)) {
+                location.reload();
+                return;
+            }
             for (const o of overlays.values()) o.ep?.push("nav", { url });
         });
     }

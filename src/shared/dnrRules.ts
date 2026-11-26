@@ -805,7 +805,11 @@ export function rulesForProbe(o: RuleProbe):
 /**
  * A rule's declarativeNetRequest priority from its handler's run order, so
  * the last handler wins as on the other strategies: a decision (block,
- * redirect, allow) gets `2 × rank` and a header edit `2 × rank + 1`.
+ * redirect, allow) gets `2 × rank + 2` and a header edit `2 × rank + 3`.
+ *
+ * Priorities 1 and 2 are reserved for `tweak.site` CSP silencing rules (1)
+ * and `tweak.site` `exclude` allow rules (2), so a `tweak.site` exclude rule
+ * never suppresses a user's `rules`-strategy handler (which starts at 4).
  *
  * - A later decision outranks an earlier one; an `allow` rule lets the
  *   request through when it is the top decision.
@@ -821,7 +825,7 @@ export function rulesForProbe(o: RuleProbe):
  * @param rank - The handler's position in run order (layer, then list order), 1-based.
  */
 export function rulePriority(spec: Pick<RuleSpec, "final">, rank: number): number {
-    return 2 * rank + (spec.final ? 0 : 1);
+    return 2 * rank + 2 + (spec.final ? 0 : 1);
 }
 
 /**

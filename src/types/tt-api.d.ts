@@ -338,6 +338,62 @@ declare namespace TangiTweak {
         onNavigate(fn: (url: string) => void): () => void;
     }
 
+    /** Route options for `tweak.onOverlay`. */
+    interface OverlayRouteOptions extends DocumentRouteOptions {
+        /**
+         * Opt-in debugger-safe mode: render the overlay into a fixed closed
+         * shadow root in the isolated world instead of an extension iframe so
+         * external debugger extensions (such as Playwriter) can attach without
+         * removing the overlay. Requires Chrome user scripts on MV3.
+         *
+         * @defaultValue `false`
+         */
+        debuggerSafe?: boolean;
+    }
+
+    /** Where an `onOverlay` handler runs: URL pattern(s) or {@link OverlayRouteOptions}. */
+    type OverlayRoute = UrlPatterns | OverlayRouteOptions;
+
+    /** Route options for `tweak.site`. */
+    interface SiteRouteOptions {
+        /** Top-frame page URLs to replace with your custom site. See {@link UrlPatterns}. */
+        url: UrlPatterns;
+        /**
+         * Top-frame page URLs to leave untouched (for example login or checkout
+         * paths), even when `url` matches.
+         */
+        exclude?: UrlPatterns;
+        /**
+         * Whether matching tabs start in custom-site mode or on the original
+         * site. Users can switch either way from the popup toggle.
+         *
+         * @defaultValue `"custom"`
+         */
+        defaultMode?: "custom" | "original";
+        /**
+         * Opt-in debugger-safe mode: host the custom site in a sandboxed
+         * `srcdoc` iframe unlocked by a per-session CSP nonce instead of an
+         * extension iframe so external debugger extensions (such as Playwriter)
+         * can attach without removing the site.
+         *
+         * @defaultValue `false`
+         */
+        debuggerSafe?: boolean;
+        /**
+         * When in the document load the site handler runs. Defaults to
+         * `"document_start"`.
+         */
+        when?: DocumentWhen;
+        /**
+         * What happens when the URL changes in place (`history.pushState`,
+         * back/forward, `#hash`). Defaults to `"load"`.
+         */
+        navigation?: "load" | "match" | "every";
+    }
+
+    /** Where a `tweak.site` handler runs: URL pattern(s) or {@link SiteRouteOptions}. */
+    type SiteRoute = UrlPatterns | SiteRouteOptions;
+
     /**
      * Where a page handler runs: URL pattern(s) or the full
      * {@link DocumentRouteOptions} form. The API says which world:
@@ -738,6 +794,152 @@ declare namespace TangiTweak {
 
     /** The context an `onOverlay` handler gets (`url` is the page's URL). */
     interface OverlayCtx extends RequestCtx, TrustedRunCtx, NavigateCtx, Pick<PageCtx, "shortcut"> {}
+
+    /** Current URL parts of the replaced page, matching React Router's location shape. */
+    interface SiteLocation {
+        /** Path portion starting with `"/"`. */
+        readonly pathname: string;
+        /** Query string including leading `"?"`, or `""`. */
+        readonly search: string;
+        /** Fragment including leading `"#"`, or `""`. */
+        readonly hash: string;
+        /** Full URL of the top-level page. */
+        readonly href: string;
+        /** Origin of the top-level page (e.g. `"https://www.costco.ca"`). */
+        readonly origin: string;
+        /** Hostname of the top-level page (e.g. `"www.costco.ca"`). */
+        readonly hostname: string;
+        /** Optional history state attached to the current navigation entry. */
+        readonly state: unknown;
+        /** Unique key for the current navigation entry. */
+        readonly key: string;
+    }
+
+    /** Target path or partial location accepted by {@link SiteNavigator}. */
+    type SiteTo =
+        | string
+        | {
+              /** Pathname to navigate to. */
+              pathname?: string;
+              /** Query string starting with `"?"` or `""`. */
+              search?: string;
+              /** Hash starting with `"#"` or `""`. */
+              hash?: string;
+          };
+
+    /**
+     * History navigator bridged to the real top-frame address bar. Compatible
+     * with React Router's `<Router location={loc} navigator={ctx.navigator}>`.
+     * Intercepted routes update the address bar in place with
+     * `history.pushState`; excluded or off-route paths perform a full
+     * navigation so the real website loads.
+     */
+    interface SiteNavigator {
+        /** Formats `to` as an `href` string for anchor links. */
+        createHref(to: SiteTo): string;
+        /** Navigates to `to`, pushing a history entry on the real address bar. */
+        push(to: SiteTo, state?: unknown): void;
+        /** Navigates to `to`, replacing the current history entry on the real address bar. */
+        replace(to: SiteTo, state?: unknown): void;
+        /** Moves backward or forward in session history by `delta` entries. */
+        go(delta: number): void;
+    }
+
+    /** Async bridge to the replaced origin's `localStorage` or `sessionStorage`. */
+    interface OriginStorage {
+        /** Reads a key from the replaced origin's storage. */
+        get(key: string): Promise<string | null>;
+        /** Writes a key in the replaced origin's storage. */
+        set(key: string, value: string): Promise<void>;
+        /** Removes a key from the replaced origin's storage. */
+        remove(key: string): Promise<void>;
+        /** Lists all keys in the replaced origin's storage. */
+        keys(): Promise<string[]>;
+        /** Clears all keys in the replaced origin's storage. */
+        clear(): Promise<void>;
+    }
+
+    /** Async bridge to the replaced origin's non-HttpOnly `document.cookie`. */
+    interface OriginCookie {
+        /** Returns the replaced origin's current `document.cookie` string. */
+        get(): Promise<string>;
+        /** Assigns a cookie assignment string to the replaced origin's `document.cookie`. */
+        set(cookie: string): Promise<void>;
+    }
+
+    /** Async bridge to the replaced origin's IndexedDB object stores. */
+    interface OriginIndexedDB {
+        /** Reads one value by key from `dbName` / `storeName`. */
+        get(dbName: string, storeName: string, key: IDBValidKey): Promise<unknown>;
+        /** Lists all values in `dbName` / `storeName` (optional range query or limit). */
+        getAll(dbName: string, storeName: string, count?: number): Promise<unknown[]>;
+        /** Lists all keys in `dbName` / `storeName`. */
+        keys(dbName: string, storeName: string): Promise<IDBValidKey[]>;
+        /** Puts a value into `dbName` / `storeName` (creates the store if absent). */
+        put(dbName: string, storeName: string, value: unknown, key?: IDBValidKey): Promise<IDBValidKey>;
+        /** Deletes one key from `dbName` / `storeName`. */
+        delete(dbName: string, storeName: string, key: IDBValidKey): Promise<void>;
+        /** Lists database names on the replaced origin when supported by the browser. */
+        databases(): Promise<{
+            /** Database name. */
+            name?: string;
+            /** Database schema version. */
+            version?: number;
+        }[]>;
+    }
+
+    /**
+     * Async bridge to the replaced origin's cookies, Web Storage, IndexedDB
+     * and same-origin media blobs.
+     */
+    interface OriginAccess {
+        /** Async access to the replaced origin's `localStorage`. */
+        readonly localStorage: OriginStorage;
+        /** Async access to the replaced origin's `sessionStorage`. */
+        readonly sessionStorage: OriginStorage;
+        /** Async access to the replaced origin's `document.cookie`. */
+        readonly cookie: OriginCookie;
+        /** Async access to the replaced origin's `indexedDB`. */
+        readonly indexedDB: OriginIndexedDB;
+        /**
+         * Fetches a URL as the replaced origin (sending its cookies) and
+         * returns a `data:` or `blob:` URL usable in `<img>`, `<video>` or CSS
+         * even when the custom site runs under a strict CSP.
+         */
+        blobUrl(url: string): Promise<string>;
+    }
+
+    /**
+     * The context a `tweak.site` handler receives. Extends {@link OverlayCtx}
+     * with full-page controls, real-address-bar routing and bridged access to
+     * the replaced origin's storage and cookies.
+     */
+    interface SiteAppCtx extends OverlayCtx {
+        /** Sets the browser tab title (`document.title` on the top frame). */
+        setTitle(title: string): void;
+        /** Sets the browser tab favicon on the top frame. */
+        setFavicon(url: string): void;
+        /**
+         * Updates the top-frame URL. Matching paths use `history.pushState` (or
+         * `replaceState` when `opts.replace` is true); excluded or off-route
+         * paths perform a full navigation to the real site.
+         */
+        navigate(path: string, opts?: {
+            /** Replace the current history entry instead of pushing a new one. */
+            replace?: boolean;
+        }): void;
+        /** Current location of the top-level page, kept in sync across navigations. */
+        readonly location: SiteLocation;
+        /**
+         * React Router compatible navigator (`<Router location={loc} navigator={ctx.navigator}>`)
+         * synced with the real address bar.
+         */
+        readonly navigator: SiteNavigator;
+        /** Switches the current tab back to the original website and reloads it. */
+        showOriginal(): void;
+        /** Bridged access to the replaced origin's storage, cookies, IndexedDB and media. */
+        readonly origin: OriginAccess;
+    }
 
     /** Header edits. */
     interface HeaderMod {
@@ -1723,17 +1925,15 @@ declare namespace TangiTweak {
          * script's matching overlay handlers run in it, sharing top-level
          * variables.
          *
-         * Warning: the frame is a TangiTweak extension page (that's what lets
-         * the script run on sites whose CSP blocks scripts and `eval`, and
-         * keeps the site out). Chrome won't let another extension attach its
-         * debugger to a tab with such a frame, so tools like Playwriter remove
-         * it: the GUI and its shortcuts stop, with a Log warning. A same-origin
-         * `about:blank` frame wouldn't be removed, but it's under the page's
-         * CSP and open to the page, so TangiTweak doesn't offer one. For a GUI
-         * that must survive those tools, use `tweak.onPage` with `ctx.mount` and
-         * `ctx.shortcut` instead.
+         * By default the frame is a TangiTweak extension page, which isolates
+         * the overlay from the site's CSP and scripts. Chrome blocks other
+         * debugger extensions (such as Playwriter) from attaching while a
+         * foreign extension iframe is in the tab. Pass `debuggerSafe: true` in
+         * the route options to opt into rendering inside a fixed closed shadow
+         * root in the isolated world so debugger extensions can attach without
+         * removing the overlay.
          *
-         * @param route Page URL pattern(s), or `{ url, exclude, when }`.
+         * @param route Page URL pattern(s), or `{ url, exclude, when, debuggerSafe }`.
          * @param handler Draws the GUI. May return functions for this script's
          * onPage code to call.
          *
@@ -1744,7 +1944,32 @@ declare namespace TangiTweak {
          *     b.style.cssText = "position:fixed;right:16px;bottom:16px";
          * });
          */
-        onOverlay<T = void>(route: TangiTweak.PageRoute, handler: (ctx: TangiTweak.OverlayCtx) => TangiTweak.Awaitable<T>): TangiTweak.Remote<T>;
+        onOverlay<T = void>(route: TangiTweak.OverlayRoute, handler: (ctx: TangiTweak.OverlayCtx) => TangiTweak.Awaitable<T>): TangiTweak.Remote<T>;
+
+        /**
+         * Replace a matching website in place with your own full-viewport app
+         * while keeping the real URL in the address bar and authenticated
+         * access to the origin's cookies, `fetch`, `localStorage`,
+         * `sessionStorage` and `indexedDB` via `ctx.origin` and `tweak.fetch`.
+         *
+         * Matching documents are silenced via a DNR `Content-Security-Policy`
+         * header so the original site's scripts, styles and media do not run.
+         * Users can switch any tab between the custom site and the original
+         * site in one click from the popup. Pass `debuggerSafe: true` to host
+         * the custom site in a sandboxed `srcdoc` iframe unlocked by a
+         * per-session CSP nonce so external debugger extensions (such as
+         * Playwriter) can attach without removing it.
+         *
+         * @param route Page URL pattern(s), or `{ url, exclude, defaultMode, debuggerSafe }`.
+         * @param handler Renders the custom site. Receives {@link TangiTweak.SiteAppCtx}.
+         *
+         * @example
+         * tweak.site({ url: "https://example.com/*", exclude: ["https://example.com/login*"] }, (ctx) => {
+         *     ctx.setTitle("My Custom Site");
+         *     ctx.mount(document.body, <h1>Hello from {ctx.location.pathname}</h1>);
+         * });
+         */
+        site<T = void>(route: TangiTweak.SiteRoute, handler: (ctx: TangiTweak.SiteAppCtx) => TangiTweak.Awaitable<T>): TangiTweak.Remote<T>;
 
         /**
          * Declare adjustable parameters, editable from the popup's ⚙ dialog,

@@ -50,6 +50,10 @@ export interface OverlayRun {
     react: boolean;
     /** Its `tweak.toastPane` names (pane runs only). */
     panes?: string[];
+    /** true when this run is a full-page `tweak.site` takeover */
+    fullPage?: boolean;
+    /** true when this run opts into debugger-safe (`srcdoc`) hosting */
+    debuggerSafe?: boolean;
 }
 
 interface Grant {
@@ -119,11 +123,13 @@ const BYPASS_TTL_MS = 10_000;
 export type IsoRun = Omit<IsoInit, "s" | "stores" | "libStores" | "page">;
 
 export interface OverlayLinkDeps {
-    overlayRuns(url: string): Promise<Map<string, OverlayRun>>;
-    /** MV3: the scripts with isolated onPage code for a frame's URL */
+    overlayRuns(url: string, tabId?: number): Promise<Map<string, OverlayRun>>;
+    /** MV3: the scripts with isolated onPage or debugger-safe overlay code for a frame's URL */
     isoRuns?(url: string, top: boolean): Promise<Map<string, IsoRun>>;
-    /** MV2: the scripts with isolated onPage code for a frame's URL (the bridge runs it) */
+    /** MV2: the scripts with isolated onPage or debugger-safe overlay code for a frame's URL (the bridge runs it) */
     isoScripts?(url: string, top: boolean): Promise<Set<string>>;
+    /** MV2: scripts running a debugger-safe shadow overlay on this page (full overlay `tweak.fetch`) */
+    isoShadowScripts?(url: string, top: boolean): Promise<Set<string>>;
     /** chrome.userScripts can't run (the overlay's calls into isolated code say so) */
     userScriptsOff?(): Promise<boolean>;
     storageGet?(s: string, key: string): Promise<any>;
@@ -141,15 +147,27 @@ export interface OverlayLinkDeps {
     previewPaneRun?(s: string): Promise<OverlayRun>;
     /** `tweak.toast` from page, overlay or preview code: the toast center checks and shows it */
     toast?(from: ToastFrom, spec: unknown): Promise<ToastResult>;
+    /** `tweak.site`: switch the tab back to the original website and reload it */
+    showOriginal?(tabId: number): Promise<void>;
 }
 
 /** `tweak.toast` where the toast center isn't set up (tests) */
 const noToast = (): Promise<ToastResult> => Promise.reject(new Error("tweak.toast isn't available here"));
 
-let overlayRuns: (url: string) => Promise<Map<string, OverlayRun>> = async () => new Map();
+let overlayRuns: (url: string, tabId?: number) => Promise<Map<string, OverlayRun>> = async () => new Map();
 let deps: OverlayLinkDeps = { overlayRuns };
 const grants = new Map<BridgeLink, Map<string, Grant>>();
 let installed = false;
+
+let overlayChunk: Promise<string> | null = null;
+function overlayChunkSource(): Promise<string> {
+    overlayChunk ??= fetch(chrome.runtime.getURL("overlay.js")).then((r) => {
+        if (!r.ok) throw new Error(`overlay.js: HTTP ${r.status}`);
+        return r.text();
+    });
+    overlayChunk.catch(() => (overlayChunk = null));
+    return overlayChunk;
+}
 
 export const USER_SCRIPT_PORT = "tt-user-script";
 /** how long a relayed call waits for the other side's link (a page still loading) */
@@ -166,6 +184,8 @@ interface IsoLink {
     page?: string;
     /** script ids of libraries imported by `s` */
     libs?: Set<string>;
+    /** true when this isolated link hosts a debugger-safe `tweak.onOverlay` */
+    shadowOverlay?: boolean;
     /** its link to the store owner (created on first use) */
     store?: Endpoint | null;
 }
@@ -251,11 +271,12 @@ export function confirmNonce(sender: chrome.runtime.MessageSender, nonce: unknow
 
 /** scripts changed: drop the grants of overlays that no longer match their page (the bridge closes them too) */
 export async function revalidateOverlayLinks(): Promise<void> {
-    const byUrl = new Map<string, Promise<Map<string, OverlayRun>>>();
+    const byKey = new Map<string, Promise<Map<string, OverlayRun>>>();
     for (const [link, mine] of grants)
         for (const [s, g] of [...mine]) {
-            if (!byUrl.has(g.url)) byUrl.set(g.url, overlayRuns(g.url).catch(() => new Map()));
-            if (!(await byUrl.get(g.url)!).has(s) && mine.get(s) === g && grants.get(link) === mine) {
+            const key = `${link.tabId}\u0000${g.url}`;
+            if (!byKey.has(key)) byKey.set(key, overlayRuns(g.url, link.tabId).catch(() => new Map()));
+            if (!(await byKey.get(key)!).has(s) && mine.get(s) === g && grants.get(link) === mine) {
                 g.store?.close("the overlay no longer runs here");
                 mine.delete(s);
             }
@@ -328,7 +349,9 @@ export function serveLink(link: BridgeLink): void {
     });
     link.ep.handle("iso.fetch", async ({ url, request, bypass }, s) => {
         if (__MV3__ || s === undefined || typeof url !== "string" || !sameOrigin(url, link.port.sender?.url)) throw new Error("iso.fetch: refused");
-        if (!(await deps.isoScripts?.(url, link.frameId === 0))?.has(s)) throw new Error("iso.fetch: this script has no isolated onPage code here");
+        const top = link.frameId === 0;
+        if (!(await deps.isoScripts?.(url, top))?.has(s)) throw new Error("iso.fetch: this script has no isolated onPage code here");
+        if (top && (await deps.isoShadowScripts?.(url, true))?.has(s)) return fetchFor(s, request, !!bypass);
         return pageFetchFor(s, request, !!bypass);
     });
     link.ep.handle("iso.toast", async ({ url, spec }, s) => {
@@ -340,7 +363,7 @@ export function serveLink(link: BridgeLink): void {
     link.ep.handle("overlay.open", async ({ nonce, url }, s) => {
         if (s === undefined || link.frameId !== 0) throw new Error("overlay.open: overlays are top-frame only");
         if (typeof nonce !== "string" || nonce.length < 16 || typeof url !== "string" || !sameOrigin(url, link.port.sender?.url)) throw new Error("overlay.open: refused");
-        const run = (await overlayRuns(url)).get(s);
+        const run = (await overlayRuns(url, link.tabId)).get(s);
         if (!run) throw new Error("overlay.open: this script has no overlay on this page");
         const old = mine.get(s);
         const page = pages.forRequest({ tabId: link.tabId, frameId: 0, documentId: docOf(link.port) }) ?? "";
@@ -350,7 +373,7 @@ export function serveLink(link: BridgeLink): void {
     });
     link.ep.handle("overlay.init", async (_a, s): Promise<OverlayInit> => {
         const g = granted("overlay.init", s);
-        const run = (await overlayRuns(g.url)).get(s!);
+        const run = (await overlayRuns(g.url, link.tabId)).get(s!);
         if (!run) throw new Error("overlay.init: this script has no overlay on this page");
         const libs = new Set(shippedLibIds(run.libs));
         g.libs = libs;
@@ -369,7 +392,18 @@ export function serveLink(link: BridgeLink): void {
             page: g.page,
             libs: run.libs,
             react: run.react,
+            ...(run.fullPage ? { fullPage: true } : {}),
+            ...(run.debuggerSafe ? { debuggerSafe: true } : {}),
         };
+    });
+    link.ep.handle("builtin.siteHost", async (a, s) => {
+        granted("builtin.siteHost", s);
+        const [overlayJs, reactJs] = await Promise.all([overlayChunkSource(), a?.react ? reactChunkSource() : Promise.resolve(undefined)]);
+        return { overlayJs, ...(reactJs ? { reactJs } : {}) };
+    });
+    link.ep.on("site.showOriginal", (_a, s) => {
+        if (s === undefined || !mine.has(s)) return;
+        void deps.showOriginal?.(link.tabId);
     });
     link.ep.on("overlay.closed", (_a, s) => {
         const g = s === undefined ? undefined : mine.get(s);
@@ -506,6 +540,7 @@ export function serveIsoLink(link: IsoLink): void {
         if (ep.closed) throw new Error("iso.load: closed");
         link.page = page;
         link.libs = libs;
+        link.shadowOverlay = !!run.shadowOverlay;
         if (link.s === null) {
             link.s = s;
             const key = isoKey(tabId, frameId, s);
@@ -542,7 +577,7 @@ export function serveIsoLink(link: IsoLink): void {
     });
     ep.handle("fetch", (a, s) => {
         if (!bound(s)) throw new Error("fetch: refused");
-        return pageFetchFor(s, a.request, !!a.bypass);
+        return link.shadowOverlay ? fetchFor(s, a.request, !!a.bypass) : pageFetchFor(s, a.request, !!a.bypass);
     });
     ep.handle("toast", (a, s) => {
         if (!bound(s)) throw new Error("toast: refused");
@@ -671,6 +706,7 @@ export function servePreviewLink(ep: Endpoint, tabId?: number): void {
             page: g.page,
             libs: run.libs,
             react: run.react,
+            ...(run.fullPage ? { fullPage: true } : {}),
         };
     });
     ep.on("store.declare", (a, s) => {

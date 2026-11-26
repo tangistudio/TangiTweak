@@ -32,7 +32,7 @@ import { hotRegistry } from "../shared/hotRefresh";
 import { portEndpoint, type Endpoint, type IsoInit } from "../shared/wire";
 import { Exposer, RpcClient, isRpcCall, TOP_FRAME_ONLY, type RpcResult } from "../shared/rpc";
 import { inertRemote } from "../shared/remote";
-import { followsNav, routeMayMatch, type PlaceApi, type RouteMeta } from "../shared/route";
+import { followsNav, isDebuggerSafeOverlay, routeMayMatch, type PlaceApi, type RouteMeta } from "../shared/route";
 import { NavRoutes, watchUrl } from "../shared/navRoutes";
 import { ReplicaHub } from "../shared/storeReplica";
 import { tabScopeOfPage } from "../shared/storeOps";
@@ -93,7 +93,13 @@ import { FrameKeyOffers } from "../shared/frameKeys";
     const handle = (gen: Generation) => (api: PlaceApi, key: string, route: RouteMeta) => {
         const sig = () => gen.signal;
         if (api === "onSite" && routeMayMatch(route, location.href)) siteHere.add(key);
-        return api === "onSite" ? pageClient.remote(key, sig) : api === "onPage" ? local.remote(key, sig) : top ? client.remote(key, sig) : inertRemote(TOP_FRAME_ONLY);
+        return api === "onSite"
+            ? pageClient.remote(key, sig)
+            : api === "onPage" || (api === "onOverlay" && isDebuggerSafeOverlay(route))
+              ? local.remote(key, sig)
+              : top
+                ? client.remote(key, sig)
+                : inertRemote(TOP_FRAME_ONLY);
     };
     let reactDom: () => ReactDomClient = () => {
         throw new Error("no React");
@@ -240,7 +246,7 @@ import { FrameKeyOffers } from "../shared/frameKeys";
 
     /** once per document: tags its Network row with this script */
     const ran = new Set<string>();
-    function noteRan(api: "onPage", name: string): void {
+    function noteRan(api: "onPage" | "onOverlay", name: string): void {
         if (ran.has(api)) return;
         ran.add(api);
         linkUp().then(
@@ -268,10 +274,12 @@ import { FrameKeyOffers } from "../shared/frameKeys";
 
     function exec(init: IsoInit, hot: boolean): void {
         const gen = life.begin();
+        const allowShadowOverlay = top && !!init.shadowOverlay;
         const makeShim = () =>
             makePageShim({
                 params: init.params || {},
                 world: "isolated",
+                debuggerSafeOverlays: allowShadowOverlay,
                 stores: { store: (n, initial, persist) => stores().store(s, n, initial, persist), tabStore: (n, initial) => stores().tabStore(s, n, initial, tabScopeOfPage(page)), pageStore: (n, initial) => stores().pageStore(s, n, initial, page) },
                 siteStore: (n, initial) => siteStores().store(s, n, initial),
                 exposer,
@@ -299,7 +307,7 @@ import { FrameKeyOffers } from "../shared/frameKeys";
             );
             const moduleObj = { exports: {} as any };
             shim.top(() => scriptFunction(init.src, init.name)(shim.host, consoleProxy, requireFrom(init.name), moduleObj, moduleObj.exports));
-            dom = shim.dom;
+            dom = allowShadowOverlay ? [...shim.dom, ...shim.shadowOverlays] : shim.dom;
             reactDom = () => reactOf(requireFrom(init.name));
             files = ran;
         } catch (e: any) {
@@ -313,8 +321,9 @@ import { FrameKeyOffers } from "../shared/frameKeys";
         const matching = domHandlersFor(dom, location.href, exposer);
         exposer.done();
         const fire = (d: PageDocumentHandler, url: string) => {
+            const api = isDebuggerSafeOverlay(d.route) ? "onOverlay" : "onPage";
             try {
-                const report = (e: unknown) => log("error", formatScriptError(init.name, e, "onPage"));
+                const report = (e: unknown) => log("error", formatScriptError(init.name, e, api));
                 fireRun(
                     life,
                     gen,
@@ -327,9 +336,9 @@ import { FrameKeyOffers } from "../shared/frameKeys";
                     exposer,
                     report
                 );
-                noteRan("onPage", init.name);
+                noteRan(api, init.name);
             } catch (e: any) {
-                log("error", formatScriptError(init.name, e, "onPage"));
+                log("error", formatScriptError(init.name, e, api));
             }
         };
         for (const d of matching) if (!followsNav(d.route)) scheduleDocument(d.when, () => fire(d, location.href), hot);

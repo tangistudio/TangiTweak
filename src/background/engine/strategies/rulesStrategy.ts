@@ -31,6 +31,7 @@ import { compileMv2, ownsAny } from "./strategyScripts";
 import { IS_FIREFOX } from "./helperState";
 import { wsNotApplied } from "../../../shared/websocketLimits";
 import { BYPASS_RULE_BASE } from "../bypass";
+import { SITE_RULE_BASE } from "../siteRules";
 import { backgroundHub, storeOwner } from "../stores";
 
 type ParamValues = { [scriptId: string]: Record<string, any> };
@@ -238,9 +239,9 @@ export class RulesStrategy {
         return out;
     }
 
-    /** remove every session rule (the extension owns them all, `tweak.fetch` bypass rules aside), then add `rules` */
+    /** remove every rules-strategy session rule (leaving `tweak.site` and `tweak.fetch` bypass rules alone), then add `rules` */
     private async replace(rules: any[]): Promise<void> {
-        const existing: any[] = ((await dnrCall("getSessionRules")) || []).filter((r: any) => r.id < BYPASS_RULE_BASE);
+        const existing: any[] = ((await dnrCall("getSessionRules")) || []).filter((r: any) => r.id < SITE_RULE_BASE);
         if (!existing.length && !rules.length) return;
         await dnrCall("updateSessionRules", { removeRuleIds: existing.map((r) => r.id), addRules: rules });
     }
@@ -252,7 +253,7 @@ export class RulesStrategy {
             const d = await chrome.storage.session.get(CACHE_KEY);
             const c = d?.[CACHE_KEY];
             if (!c || c.sig !== sig) return false;
-            const live: any[] = ((await dnrCall("getSessionRules")) || []).filter((r: any) => r.id < BYPASS_RULE_BASE);
+            const live: any[] = ((await dnrCall("getSessionRules")) || []).filter((r: any) => r.id < SITE_RULE_BASE);
             const ids = new Set(live.map((r) => r.id));
             if (live.length !== c.active.length || !c.active.every((r: ActiveRule) => ids.has(r.id))) return false;
             await setScriptRuleErrors(new Map(Object.entries(c.errors || {})), new Map(Object.entries(c.names || {})));

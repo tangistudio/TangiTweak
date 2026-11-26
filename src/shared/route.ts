@@ -47,16 +47,28 @@ export const isNetKind = (kind: RouteKind): kind is NetKind => kind !== "onDocum
 /** Where a page handler's JavaScript runs: a private (isolated) world (tweak.onPage) or the site's own JS world (tweak.onSite). */
 export type PageWorld = "isolated" | "page";
 
-/** The API for each of the three places a script's code runs in a tab: the site's JS world, the isolated world, the overlay frame. */
-export type PlaceApi = "onSite" | "onPage" | "onOverlay";
+/** The API for each place a script's code runs in a tab: the site's JS world, the isolated world, the overlay frame, or a full-page custom site. */
+export type PlaceApi = "onSite" | "onPage" | "onOverlay" | "site";
 /** Every {@link PlaceApi}. */
-export const PLACE_APIS: PlaceApi[] = ["onSite", "onPage", "onOverlay"];
-/** The route kind an API registers: `"onOverlay"` for tweak.onOverlay, else `"onDocument"`. */
-export const placeKind = (api: PlaceApi): DocKind => (api === "onOverlay" ? "onOverlay" : "onDocument");
-/** The world an API's code runs in: `"page"` for onSite, `"isolated"` for onPage, undefined for onOverlay (its own frame). */
+export const PLACE_APIS: PlaceApi[] = ["onSite", "onPage", "onOverlay", "site"];
+/** The route kind an API registers: `"onOverlay"` for tweak.onOverlay and tweak.site, else `"onDocument"`. */
+export const placeKind = (api: PlaceApi): DocKind => (api === "onOverlay" || api === "site" ? "onOverlay" : "onDocument");
+/** The world an API's code runs in: `"page"` for onSite, `"isolated"` for onPage, undefined for onOverlay / site. */
 export const placeWorld = (api: PlaceApi): PageWorld | undefined => (api === "onSite" ? "page" : api === "onPage" ? "isolated" : undefined);
-/** The API a page/overlay route was registered with (a route without `world` counts as onSite). */
-export const placeOf = (route: Pick<RouteMeta, "kind" | "world">): PlaceApi => (route.kind === "onOverlay" ? "onOverlay" : route.world === "isolated" ? "onPage" : "onSite");
+/** The API a page/overlay/site route was registered with (a route without `world` counts as onSite). */
+export const placeOf = (route: Pick<RouteMeta, "kind" | "world" | "api">): PlaceApi =>
+    route.kind === "onOverlay" ? (route.api === "site" ? "site" : "onOverlay") : route.world === "isolated" ? "onPage" : "onSite";
+
+/** Whether a route was registered with `tweak.site`. */
+export const isSiteRoute = (route: Pick<RouteMeta, "kind" | "api">): boolean => route.kind === "onOverlay" && route.api === "site";
+
+/** Whether a route is an opt-in debugger-safe `tweak.onOverlay` (runs in a closed shadow root in the isolated world). */
+export const isDebuggerSafeOverlay = (route: Pick<RouteMeta, "kind" | "api" | "debuggerSafe">): boolean =>
+    route.kind === "onOverlay" && route.api !== "site" && route.debuggerSafe === true;
+
+/** Default mode for a `tweak.site` route: `"custom"` (replace immediately) or `"original"` (stay on original until toggled). */
+export type SiteDefaultMode = "custom" | "original";
+const SITE_DEFAULT_MODES: SiteDefaultMode[] = ["custom", "original"];
 
 /**
  * Names a script's onSite / onPage / onOverlay handlers (RouteMeta.key) by
@@ -147,8 +159,12 @@ export interface RouteMeta {
     navigation?: Exclude<Navigation, "load">;
     /** onDocument: the JavaScript world, "isolated" (tweak.onPage) or "page" (tweak.onSite). */
     world?: PageWorld;
-    /** The API name it was registered with, when it differs from `kind` (tweak.onSite / tweak.onPage → kind "onDocument"). */
-    api?: "onSite" | "onPage";
+    /** The API name it was registered with, when it differs from `kind` (tweak.onSite / tweak.onPage → kind "onDocument"; tweak.site → kind "onOverlay"). */
+    api?: "onSite" | "onPage" | "site";
+    /** tweak.site only: whether matching tabs start in `"custom"` (default) or `"original"` mode. */
+    defaultMode?: SiteDefaultMode;
+    /** tweak.onOverlay / tweak.site: opt-in mode that avoids extension iframes so external debuggers can attach. */
+    debuggerSafe?: boolean;
     /** tweak.onSite / tweak.onPage: which of the script's calls to that API it is (0-based), when it differs from `index`. */
     n?: number;
     /** Set for a call in this library's code (a function it exports, called by the script): `n` counts that library's calls. */
@@ -336,9 +352,9 @@ export function normalizeRoute(kind: RouteKind, raw: unknown, index: number, api
     checkPatterns(url, "url", where);
     checkPatterns(exclude, "exclude", where);
     const route: RouteMeta = { kind, index, url, exclude };
-    if (api === "onSite" || api === "onPage") route.api = api;
+    if (api === "onSite" || api === "onPage" || api === "site") route.api = api;
     if (doc) {
-        const runs = kind === "onOverlay" ? "in the overlay" : api === "onSite" ? "in the site's world" : "in the page";
+        const runs = api === "site" ? "as a replacement site" : kind === "onOverlay" ? "in the overlay" : api === "onSite" ? "in the site's world" : "in the page";
         // onSite: `layer` orders its ctx.patch chains with other tweaks' patches
         for (const k of ["methods", "resourceTypes", "strategy", "binary", ...(api === "onSite" ? [] : ["layer"])]) {
             if (obj[k] !== undefined) throw new Error(`${where}: "${k}" doesn't apply to ${name} (it runs ${runs}, not on requests)`);
@@ -346,7 +362,7 @@ export function normalizeRoute(kind: RouteKind, raw: unknown, index: number, api
         if (obj.when !== undefined) {
             if (!DOCUMENT_WHENS.includes(obj.when)) throw new Error(`${where}: when must be one of ${DOCUMENT_WHENS.join(", ")}`);
             route.when = obj.when;
-        } else route.when = api === "onSite" ? "document_start" : "document_end"; // onSite: ahead of the site's own code
+        } else route.when = api === "onSite" || api === "site" ? "document_start" : "document_end"; // onSite/site: ahead of the site's own code
         if (obj.navigation !== undefined) {
             if (!NAVIGATIONS.includes(obj.navigation)) throw new Error(`${where}: navigation must be one of ${NAVIGATIONS.map((n) => JSON.stringify(n)).join(", ")}, got ${JSON.stringify(obj.navigation)}`);
             if (obj.navigation !== "load") route.navigation = obj.navigation;
@@ -355,11 +371,24 @@ export function normalizeRoute(kind: RouteKind, raw: unknown, index: number, api
             if (!isLayer(obj.layer)) throw new Error(`${where}: layer must be one of ${LAYER_ORDER.map((l) => JSON.stringify(l)).join(", ")}, got ${JSON.stringify(obj.layer)}`);
             route.layer = obj.layer;
         }
+        if (obj.defaultMode !== undefined) {
+            if (api !== "site") throw new Error(`${where}: "defaultMode" applies to tweak.site only`);
+            if (!SITE_DEFAULT_MODES.includes(obj.defaultMode))
+                throw new Error(`${where}: defaultMode must be one of ${SITE_DEFAULT_MODES.map((m) => JSON.stringify(m)).join(", ")}, got ${JSON.stringify(obj.defaultMode)}`);
+            if (obj.defaultMode !== "custom") route.defaultMode = obj.defaultMode;
+        }
+        if (obj.debuggerSafe !== undefined) {
+            if (kind !== "onOverlay") throw new Error(`${where}: "debuggerSafe" applies to onOverlay and site only`);
+            if (typeof obj.debuggerSafe !== "boolean") throw new Error(`${where}: debuggerSafe must be a boolean, got ${typeof obj.debuggerSafe}`);
+            if (obj.debuggerSafe) route.debuggerSafe = true;
+        }
         if (kind === "onDocument") route.world = api === "onSite" ? "page" : "isolated";
         return route;
     }
-    if (obj.when !== undefined) throw new Error(`${where}: "when" applies to onSite, onPage and onOverlay only`);
-    if (obj.navigation !== undefined) throw new Error(`${where}: "navigation" applies to onSite, onPage and onOverlay only`);
+    if (obj.when !== undefined) throw new Error(`${where}: "when" applies to onSite, onPage, onOverlay and site only`);
+    if (obj.navigation !== undefined) throw new Error(`${where}: "navigation" applies to onSite, onPage, onOverlay and site only`);
+    if (obj.defaultMode !== undefined) throw new Error(`${where}: "defaultMode" applies to tweak.site only`);
+    if (obj.debuggerSafe !== undefined) throw new Error(`${where}: "debuggerSafe" applies to onOverlay and site only`);
     if (obj.binary !== undefined) {
         if (kind !== "onResponseBody") throw new Error(`${where}: "binary" applies to onResponseBody only`);
         if (typeof obj.binary !== "boolean" && obj.binary !== "both") throw new Error(`${where}: binary must be true, false or "both", got ${JSON.stringify(obj.binary)}`);

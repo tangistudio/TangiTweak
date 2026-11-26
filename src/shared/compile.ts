@@ -1154,7 +1154,13 @@ function makeShim(owner: ReturnType<typeof createOwner>, overrides: ResApiOverri
         const list = top[kind];
         // Save-time compile with stubbed imports: the route is unknown until analyzed.
         const r: RouteMeta = mentionsStub(route)
-            ? { kind, index: list.length, url: [], exclude: [], ...(api === "onSite" || api === "onPage" ? { api, world: api === "onSite" ? "page" : "isolated" } : {}) }
+            ? {
+                  kind,
+                  index: list.length,
+                  url: [],
+                  exclude: [],
+                  ...(api === "onSite" || api === "onPage" ? { api, world: api === "onSite" ? "page" : "isolated" } : api === "site" ? { api } : {}),
+              }
             : normalizeRoute(kind, route, list.length, api);
         const line = callerLine();
         if (line) r.line = line;
@@ -1233,6 +1239,7 @@ function makeShim(owner: ReturnType<typeof createOwner>, overrides: ResApiOverri
         onSite: register(placeKind("onSite"), "onSite", file),
         onPage: register(placeKind("onPage"), "onPage", file),
         onOverlay: register(placeKind("onOverlay"), "onOverlay", file),
+        site: register(placeKind("site"), "site", file),
         params: (defs: ParamTree) => {
             const r = owner.declare(defs, "tweak.params");
             if (isStub(r)) return r;
