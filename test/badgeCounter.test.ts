@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { createBadgeCounter, badgeLook, BADGE_OK, BADGE_WARN, BADGE_ERROR } from "../src/background/badgeCounter";
+import { createBadgeCounter, badgeLook, withToastDot, BADGE_OK, BADGE_WARN, BADGE_ERROR } from "../src/background/badgeCounter";
 
 const net = (url: string, exclude: string[] = []) => ({ kind: "onRequest", url: [url], exclude });
 const page = (url: string, kind = "onDocument") => ({ kind, url: [url], exclude: [], when: "document_start" });
@@ -98,5 +98,14 @@ describe("badge look", () => {
         const look = badgeLook(["A", "B", "C"], ["error", "warning", undefined]);
         expect(look.color).toBe(BADGE_ERROR);
         expect(look.title).toBe("TangiTweak — 3 active scripts\n✖ A\n⚠ B\n• C\n1 with errors, 1 with warnings — see Problems in the Editor");
+    });
+});
+
+describe("withToastDot", () => {
+    it("adds a dot in the newest waiting toast's color and says where; nothing waiting leaves the badge alone", () => {
+        const b = { text: "2", color: BADGE_OK, title: "TangiTweak" };
+        expect(withToastDot(b, [])).toBe(b);
+        expect(withToastDot(b, ["#111", "#222"])).toEqual({ text: "2•", color: "#222", title: "TangiTweak\nA toast is waiting in 2 other tabs." });
+        expect(withToastDot({ ...b, text: "" }, ["#111"])).toMatchObject({ text: "•", title: "TangiTweak\nA toast is waiting in another tab." });
     });
 });

@@ -34,6 +34,17 @@ export function badgeLook(names: string[], problems: (ScriptProblem | undefined)
 }
 
 /**
+ * The badge while toasts wait in other tabs (`waiting`: their accent colors,
+ * oldest first): a dot after the count, in the newest toast's color, and a
+ * line in the tooltip. The tab itself is left out: its toasts show in it.
+ */
+export function withToastDot(badge: { text: string; color: string; title: string }, waiting: string[]): { text: string; color: string; title: string } {
+    if (!waiting.length) return badge;
+    const n = waiting.length;
+    return { text: `${badge.text}•`, color: waiting[n - 1], title: `${badge.title}\nA toast is waiting in ${n === 1 ? "another tab" : `${n} other tabs`}.` };
+}
+
+/**
  * Per-tab set of the scripts active on a tab since its last page load:
  * enabled scripts with a network route matching one of its requests, or
  * whose onPage code actually ran there (an onPage script saved while the

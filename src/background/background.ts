@@ -18,7 +18,8 @@ import { collectDiagnostics } from "./diagnostics";
 import { getSettingsText, applySettingsText, applySettingsDoc } from "./settingsFile";
 import { applyTweakDataFile, getDataFolder, setDataFolder, tweakDataFiles } from "./tweakDataFiles";
 import { badgeSetText, badgeSetColor, actionSetTitle, tabsQueryAll, tabsGet } from "../shared/chromeApi";
-import { createBadgeCounter, badgeLook, BADGE_WARN } from "./badgeCounter";
+import { createBadgeCounter, badgeLook, withToastDot, BADGE_WARN } from "./badgeCounter";
+import { onUnreadToastsChanged, unreadToastTabs } from "./engine/toastCenter";
 import { frameHasHook } from "../shared/missedTap";
 import { tabStatus, TAB_NOTICE, type TabStatus } from "../shared/tabStatus";
 import { actionIconView, createBusyIndicator } from "./busyIcon";
@@ -368,9 +369,11 @@ async function updateTabBadge(tabId: number, url: string | undefined): Promise<v
     const names = ids.map((id) => cachedScripts.find((s) => s.id === id)?.meta.name || id);
     const look = badgeLook(names, ids.map((id) => problems.get(id)));
     const notice = tabNotices.get(tabId);
-    await badgeSetColor(notice ? BADGE_WARN : look.color, tabId);
-    await badgeSetText(notice ? "!" : ids.length ? String(ids.length) : "", tabId);
-    await actionSetTitle(notice ? TAB_NOTICE[notice].lines.join("\n") : look.title, tabId);
+    const waiting = [...unreadToastTabs()].filter(([id]) => id !== tabId).map(([, accent]) => accent);
+    const shown = notice ? { text: "!", color: BADGE_WARN, title: TAB_NOTICE[notice].lines.join("\n") } : withToastDot({ text: ids.length ? String(ids.length) : "", color: look.color, title: look.title }, waiting);
+    await badgeSetColor(shown.color, tabId);
+    await badgeSetText(shown.text, tabId);
+    await actionSetTitle(shown.title, tabId);
 }
 
 /** `check`: ping every tab too (at startup: tabs open before TangiTweak started have no bridge) */
@@ -396,6 +399,7 @@ chrome.tabs.onUpdated.addListener((tabId, info, tab) => {
     else if (info.url !== undefined) void updateTabBadge(tabId, tab.url);
 });
 onScriptsChanged(() => void updateAllTabs());
+onUnreadToastsChanged(() => void updateAllTabs(false));
 void updateAllTabs(true, true);
 
 // opening a *.tangitweak.ts URL or any package URL marked with

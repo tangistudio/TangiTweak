@@ -1864,8 +1864,8 @@ schedule. Call it at top level, like the other handlers.
   fetch anywhere; the Log notes hosts a package would have to list.
 - Keep what you saw last in a [`tweak.globalStore`](#tweakglobalstore):
   it survives browser restarts, so a change is noticed only once.
-- The Editor's **Schedules** list shows each schedule with its next run,
-  **Run now** and **Pause**. A pause is the user's: the tweak can't undo
+- The Editor's **Schedules** view (⌥⇧S) shows each schedule with its next
+  run, its last run, **Run now** and **Pause**. A pause is the user's: the tweak can't undo
   it. Settings has **Pause all schedules**.
 
 #### Stopping a schedule
@@ -1930,7 +1930,8 @@ tweak.toast({
   and keeps up to 6; the rest wait.
 - **A tab in the background.** While a toast waits unseen, the tab's
   title flashes and its icon gets a dot until the user comes back, and its
-  timer waits too. `attention: "window"` also asks the browser window for
+  timer waits too. The TangiTweak button in the other tabs gets a dot in
+  the toast's color. `attention: "window"` also asks the browser window for
   attention; `attention: "none"` does neither.
 - **The user is in charge.** The popup can mute a tweak's toasts and shows
   the last 20. Settings can mute all, pick the corner, give every toast the
@@ -2068,7 +2069,8 @@ tweak.onToastAction(({ actionId, value }) => {
 - **Always fill `title` and `message` too.** They show when the pane can't
   be drawn (a page that blocks extension frames, a pane name that doesn't
   exist). Problems warns about a `pane` name the script doesn't register.
-- `sample` fills the pane in the Editor's **Preview › Toasts** list.
+- `sample` fills the pane in the Editor's **Preview**: pick **Toasts** and
+  a pane. What its `ui` calls would do goes to the Log.
 
 ### Testing
 
