@@ -1387,3 +1387,43 @@ export function siteProblems(code: string, routes: RouteMeta[]): string[] {
     for (const d of a.checks) out.push(lintLineWarning(d));
     return out;
 }
+
+const lineAt = (code: string, at: number) => code.slice(0, at).split("\n").length;
+
+/**
+ * Warnings for the Problems view about `tweak.every` and the toast setup, as
+ * `"line N (warning): …"` when the line is known: a fixed interval under the
+ * 1 minute floor (clamped), a bad interval, style keys set by more than one
+ * `tweak.toastStyle` call, and a `tweak.toast({ pane: "…" })` naming a pane
+ * the script doesn't register (that toast shows as a default one).
+ *
+ * @param code The saved source, to find the lines.
+ * @param meta The script's compiled `every` and `toast` meta.
+ */
+export function toastEveryProblems(
+    code: string,
+    meta: {
+        /** Its `tweak.every` schedules. */
+        every?: EveryMeta[];
+        /** Its toast setup. */
+        toast?: ToastMeta;
+    }
+): string[] {
+    const out: string[] = [];
+    const at = (line: number | undefined, msg: string) => out.push(line ? `line ${line} (warning): ${msg}` : msg);
+    for (const e of meta.every || []) {
+        if (e.clamped) at(e.line, `tweak.every #${e.index + 1}: schedules run at most once a minute, so this one runs every minute`);
+        if (e.error) at(e.line, `tweak.every #${e.index + 1}: ${e.error}`);
+    }
+    const repeated = meta.toast?.repeated;
+    if (repeated?.length) {
+        const calls = [...code.matchAll(/\.\s*toastStyle\s*\(/g)];
+        const second = calls[1] ?? calls[0];
+        at(second && lineAt(code, second.index!), `tweak.toastStyle: ${repeated.join(", ")} ${repeated.length > 1 ? "are" : "is"} set more than once; the last call wins`);
+    }
+    const panes = new Set(meta.toast?.panes || []);
+    for (const m of code.matchAll(/\.\s*toast\s*\(\s*\{[^{}]*?\bpane\s*:\s*(["'`])([^"'`\n]+)\1/g)) {
+        if (!panes.has(m[2])) at(lineAt(code, m.index! + m[0].indexOf("pane")), `tweak.toast: no tweak.toastPane named "${m[2]}" in this script; the toast shows as a default one`);
+    }
+    return out;
+}

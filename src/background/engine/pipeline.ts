@@ -26,7 +26,7 @@ import { isUrlSpec, packageClosure, type PackageModules } from "../../shared/pac
 import { packageUnit, scriptUnit, siteKey } from "../../shared/siteCode";
 import { serveStore } from "./strategies/extensionStrategy";
 import { dlog, dlogLevel } from "../../shared/debugLog";
-import { isThenable, rulesProblems, siteProblems, toRunnableJs } from "../../shared/compile";
+import { isThenable, rulesProblems, siteProblems, toastEveryProblems, toRunnableJs } from "../../shared/compile";
 import "../../shared/transpile";
 import { log, noteRan, getScriptErrors, getScriptTypeErrors, getScriptRuleErrors, getScriptRouteWarnings, setScriptRouteWarnings, bodyObservedSince, bodySkipSince, noteBodySkip } from "./logs";
 import { bypassed } from "./bypass";
@@ -349,6 +349,7 @@ export function createPipeline(
             const down: string[] = [];
             for (const msg of siteProblems(s.code, s.meta.routes || [])) problems.push({ id: s.id, msg });
             for (const msg of rulesProblems(s.code, s.meta.routes || [])) problems.push({ id: s.id, msg });
+            for (const msg of toastEveryProblems(s.code, s.meta)) problems.push({ id: s.id, msg });
             for (const r of s.meta.routes || []) {
                 // Chrome MV3: onPage and onSite code need chrome.userScripts (an error, see problems.ts)
                 if (userScripts !== "ok" && r.kind === "onDocument") problems.push({ id: s.id, msg: userScriptsProblem(routeLabel(r), userScripts, chrome.runtime.id) });

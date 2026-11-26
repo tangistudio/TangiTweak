@@ -46,6 +46,7 @@ import {
     makeModuleResolver,
     rulesProblems,
     siteProblems,
+    toastEveryProblems,
     toRunnableJs,
     type CompiledScript,
 } from "../shared/compile";
@@ -1445,6 +1446,7 @@ export async function loadTweak(source: TweakSource, options: LoadTweakOptions =
                 if (c.error) errs.push(`${s.name}: ${c.error}`);
                 for (const p of siteProblems(s.code, c.meta.routes || [])) errs.push(`${s.name}: ${p}`);
                 for (const w of rulesProblems(s.code, c.meta.routes || [])) warns.push(`${s.name}: ${w}`);
+                for (const w of toastEveryProblems(s.code, c.meta)) warns.push(`${s.name}: ${w}`);
             }
         }
 

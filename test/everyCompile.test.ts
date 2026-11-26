@@ -1,7 +1,7 @@
 // tweak.every, tweak.toast and friends as compileScript collects them.
 import { describe, it, expect, vi } from "vitest";
 import "../src/shared/transpile";
-import { compileScript } from "../src/shared/compile";
+import { compileScript, toastEveryProblems } from "../src/shared/compile";
 import { backoffPeriod, everyPeriod, EVERY_MAX_BACKOFF_MS } from "../src/shared/every";
 
 const T = `import { tweak } from "tangitweak";\n`;
@@ -60,5 +60,32 @@ describe("toast registrations in compile", () => {
         const c = compileScript(T + `export const show = () => tweak.toast({ id: "x", title: "hi", ttl: "1d" });`, { toast });
         await expect(c.exports.show()).resolves.toEqual({ id: "x", status: "shown" });
         expect(toast.mock.calls[0][0]).toMatchObject({ id: "x", title: "hi", ttl: 86_400_000, kind: "info", where: "active" });
+    });
+});
+
+describe("toastEveryProblems", () => {
+    it("warns about a clamped interval, repeated style keys and an unknown pane, on their lines", () => {
+        const code =
+            T +
+            [
+                `tweak.toastStyle({ accent: "#f80" });`,
+                `tweak.toastStyle({ accent: "#08f", radius: 4 });`,
+                `tweak.toastPane("card", () => null);`,
+                `tweak.every("20s", async () => {`,
+                `    await tweak.toast({ pane: "card", data: {} });`,
+                `    await tweak.toast({ title: "x", pane: "crad" });`,
+                `});`,
+            ].join("\n");
+        const c = compileScript(code);
+        expect(c.error).toBeNull();
+        expect(toastEveryProblems(code, c.meta)).toEqual([
+            "line 5 (warning): tweak.every #1: schedules run at most once a minute, so this one runs every minute",
+            `line 3 (warning): tweak.toastStyle: accent is set more than once; the last call wins`,
+            `line 7 (warning): tweak.toast: no tweak.toastPane named "crad" in this script; the toast shows as a default one`,
+        ]);
+    });
+    it("says nothing about a clean script", () => {
+        const code = T + `tweak.every("1h", () => tweak.toast({ message: "hi" }));`;
+        expect(toastEveryProblems(code, compileScript(code).meta)).toEqual([]);
     });
 });
