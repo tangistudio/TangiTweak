@@ -18,6 +18,11 @@ Handlers from several tweaks now stack predictably: they run from general to spe
 - **Handler stack** in the Network view: a request's **TangiTweak** tab lists the handlers that match it in run order, with strategy, layer and where it came from, and what each did (decided, overruled, skipped, ran on mock, ran).
 - **Overlap hints** in Problems: when two tweaks' handlers may match the same request in the same stage, the later one gets an info hint naming who runs after whom. Hints aren't counted as warnings.
 - **Log lines** when a decision is overruled by a later handler (with the layer reason) and when a response handler runs on a mock, throttled.
+- **[`tweak.every(interval, fn)`](docs/scripting.md#tweakevery)** runs code on a schedule in the background, also while no tab is open: `"30s"`, `"5m"`, `"1h"`, `"1d"` or a function that returns the interval, or `false` to stop. Runs that were due while the browser was closed run once at start. In a package, its `tweak.fetch` calls reach only the `"tangitweak.connect"` hosts.
+- **[`tweak.toast(...)`](docs/scripting.md#tweaktoast)** shows a small card inside the tab: a title, a message, a link and buttons that reach `tweak.onToastAction`. It shows in the tab in front, the calling tab or the tabs that match a URL pattern, and waits up to `ttl` for one. A tab in the background flashes its title and gets a dot on its icon until the user comes back.
+- **[`tweak.toastStyle(...)`](docs/scripting.md#toast-styles)** gives a tweak's toasts their own colors, size, corner and CSS, in light and dark mode. Toasts from every tweak share the corners and stack neatly. The user can drag them to another corner for a site.
+- **[`tweak.toastPane(name, render)`](docs/scripting.md#toast-panes)** lets a toast draw its own React layout.
+- `tangitweak/test`: `t.trigger("every")`, `t.trigger("toastAction", event)` and `t.toasts`.
 
 ### Changed
 

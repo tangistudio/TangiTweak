@@ -1810,6 +1810,287 @@ tweak.onOverlay("*://app.example.com/*", async () => {
 - **Per-tab switch (kept across reloads):** a `tweak.tabStore` field — works with `strategy: "rules"` too.
 - **Per-page switch (resets on reload):** a `tweak.pageStore` field, so turning it on affects only this document load.
 
+## Schedules and toasts
+
+A tweak can check something on a schedule with `tweak.every`, also while
+no tab is open, and tell the user with `tweak.toast`: a small card that
+pops up inside the tab, on top of the page. Toasts aren't system
+notifications and need no permission.
+
+```json
+{
+  "name": "release-watch",
+  "dependencies": { "tangitweak": "*" },
+  "tangitweak": { "connect": ["api.github.com"] }
+}
+```
+
+```ts
+import { tweak } from "tangitweak";
+
+const cfg = tweak.params({ repo: { type: "string", default: "tangistudio/TangiTweak" } });
+const last = tweak.globalStore("last", { tag: "" });
+
+tweak.every("1h", async () => {
+    const res = await tweak.fetch(`https://api.github.com/repos/${cfg.repo}/releases/latest`);
+    if (!res.ok) throw new Error(`GitHub said ${res.status}`);
+    const { tag_name, html_url } = await res.json();
+    if (last.tag && tag_name !== last.tag) {
+        tweak.toast({ kind: "success", title: `${cfg.repo} ${tag_name}`, message: "A new release is out.", url: html_url });
+    }
+    last.tag = tag_name;
+});
+```
+
+### `tweak.every`
+
+`tweak.every(interval, handler)` runs `handler` in the background on a
+schedule. Call it at top level, like the other handlers.
+
+- `interval` is a duration: `"30s"`, `"5m"`, `"1h"`, `"1d"`, `"1h30m"`
+  or a number of milliseconds. Schedules run at most once a minute: a
+  shorter interval runs every minute, with a warning in Problems.
+- The handler gets `ctx`: `ctx.reason` (`"alarm"`, `"startup"` or
+  `"manual"`), `ctx.lastRun` (ms since epoch, none on the first run),
+  `ctx.signal` (aborts when the run's time is up) and `ctx.stop()`.
+- A run gets 60 s and up to 20 `tweak.fetch` calls. Runs never overlap.
+  After 5 failures in a row the interval doubles, up to 1 day, until a
+  run works again. Failures go to the Log.
+- A run that was due while the browser was closed runs once at start,
+  with `ctx.reason` `"startup"`.
+- **In a packaged tweak, `tweak.fetch` in `tweak.every` reaches only the
+  hosts in `package.json`'s `"tangitweak.connect"`** (and their
+  subdomains), like [`onPage` code](#tweakfetch). A local script may
+  fetch anywhere; the Log notes hosts a package would have to list.
+- Keep what you saw last in a [`tweak.globalStore`](#tweakglobalstore):
+  it survives browser restarts, so a change is noticed only once.
+- The Editor's **Schedules** list shows each schedule with its next run,
+  **Run now** and **Pause**. A pause is the user's: the tweak can't undo
+  it. Settings has **Pause all schedules**.
+
+#### Stopping a schedule
+
+There are three ways, from the shortest to the longest lasting:
+
+```ts
+// 1. until the tweak is saved, turned off and on, or run by hand
+tweak.every("10m", async (ctx) => {
+    if (await isDone()) ctx.stop();
+});
+
+// 2. a function as the interval: it is read again whenever a store it read changes
+const watch = tweak.globalStore("watch", { on: true, every: "15m" });
+tweak.every(() => (watch.on ? watch.every : false), check);
+
+// 3. off from the page: flip the store from onPage or overlay code
+tweak.onPage("https://shop.example.com/*", () => {
+    document.querySelector("#bought")?.addEventListener("click", () => (watch.on = false));
+});
+```
+
+The function form must return right away (not a promise). `false`,
+`null`, `undefined` and `0` mean off.
+
+### `tweak.toast`
+
+`tweak.toast(message)` or `tweak.toast(options)` shows a toast and
+resolves to `{ id, status, reason? }`. `status` is `"shown"`, `"queued"`
+(no tab can show it yet: it shows when one does) or `"dropped"` (muted,
+rate limited or too many).
+
+```ts
+tweak.toast("Saved your filters.");
+
+tweak.toast({
+    kind: "warning",           // "info" (default), "success", "warning" or "error"
+    icon: "🏷️",               // an emoji, an image URL or false (the kind's icon otherwise)
+    title: "Price dropped",
+    message: "Now 59, was 89.",
+    url: "https://shop.example.com/item/42",   // a click on the card opens it
+    actions: [{ id: "buy", label: "Buy now" }, "Later"],
+    duration: "10s",           // default "6s"; errors default to "sticky"
+    id: "price",               // a toast with the same id replaces this one in place
+    where: "*://shop.example.com/*",
+    ttl: "1d",                 // how long it waits for a tab (default "1h", at most "7d")
+});
+```
+
+- **Where it shows.** `where: "active"` is the tab in front (the default
+  in background code), `"this"` the calling page's tab (the default in
+  `onPage` and `onOverlay` code) and a URL pattern or list every open tab
+  that matches. From a network handler `"this"` is the tab that made the
+  request. With no tab to show it, it waits up to `ttl`.
+- **Where it's called from.** An `every`, a network handler, `onPage` or
+  `onOverlay` code, or `tweak.onToastAction`. Not at top level, and not in
+  `onSite` code (it rejects: the site's scripts could call it).
+- **Text only.** `title` and `message` are plain text, never HTML. For
+  your own layout, use a [pane](#toast-panes).
+- **Limits.** Each tweak may show 1 new toast every 10 s and 20 an hour;
+  updating one with the same `id` doesn't count. A tab shows 3 at a time
+  and keeps up to 6; the rest wait.
+- **A tab in the background.** While a toast waits unseen, the tab's
+  title flashes and its icon gets a dot until the user comes back, and its
+  timer waits too. `attention: "window"` also asks the browser window for
+  attention; `attention: "none"` does neither.
+- **The user is in charge.** The popup can mute a tweak's toasts and shows
+  the last 20. Settings can mute all, pick the corner, give every toast the
+  same look and turn the title flash, the icon dot and the window flash
+  off.
+
+#### Clicks: `tweak.onToastAction`
+
+```ts
+const s = tweak.globalStore("uptime", { down: false, snoozedUntil: 0 });
+
+tweak.every("5m", async () => {
+    const ok = await tweak.fetch("https://status.example.com/health").then((r) => r.ok, () => false);
+    if (!ok && !s.down && Date.now() > s.snoozedUntil) {
+        tweak.toast({
+            id: "uptime", kind: "error", title: "example.com is down", message: "The health check failed.",
+            actions: [{ id: "status", label: "Open status", url: "https://status.example.com" }, { id: "snooze", label: "Snooze 1 h" }],
+        });
+    }
+    if (ok && s.down) tweak.toast({ id: "uptime", kind: "success", message: "example.com is back." });
+    s.down = !ok;
+});
+
+tweak.onToastAction(({ toastId, actionId }) => {
+    if (actionId === "snooze") s.snoozedUntil = Date.now() + 60 * 60 * 1000;
+});
+```
+
+The handler gets `{ toastId, actionId, value? }`. `actionId` is a
+button's `id`, `"click"` (the card, when it has a `url`) or `"close"`
+(the user closed it). A button with a `url` opens it and still reports the
+action. The handler runs in the background, also after the browser
+restarted the extension.
+
+### Toast styles
+
+Toasts have a finished look by default: a card with a stripe and icon in
+the kind's color that follows the system's light or dark mode. A tweak can
+give its toasts its own look with `tweak.toastStyle` at top level:
+
+```ts
+tweak.toastStyle({
+    position: "top-right",
+    accent: "#f97316",
+    background: "#fffaf5",
+    text: "#3b2414",
+    border: "#fed7aa",
+    radius: 16,
+    width: 400,                // 280 to 480, default 360
+    font: "'Inter', system-ui, sans-serif",
+    dark: { background: "#1c1410", text: "#fde7d4", border: "#7c2d12" },
+    css: `
+        [part=title] { letter-spacing: .01em; }
+        [part=action] { border-radius: 999px; }
+    `,
+});
+```
+
+- It affects only this tweak's toasts. Each toast sits in its own shadow
+  root, so one tweak's `css` can't reach another's.
+- Several calls merge and later keys win (Problems warns about a key set
+  twice). A toast's own `style` goes on top:
+  `tweak.toast({ message: "Mocking is on.", style: { width: 480 } })`.
+- `css` (up to 8 KB) can target the parts `[part=toast]`, `icon`, `title`,
+  `message`, `actions`, `action`, `close`, `source` and `progress`, and the
+  variables `--tt-accent`, `--tt-bg`, `--tt-text`, `--tt-border`,
+  `--tt-radius` and `--tt-font`.
+- `titleFlash: false` and `iconDot: false` turn the background tab
+  signals off for this tweak.
+
+**Stacking.** Toasts from all tweaks share the tab's corners. Each keeps
+its own look, has a "from <tweak>" line and stacks newest nearest the
+corner, so tweaks with different styles still line up. With **Same look
+for all toasts** in Settings every toast uses the default look.
+
+**Position.** The first of these that is set wins:
+
+1. the corner the user picked for this site (drag a toast to another
+   corner),
+2. the corner picked in Settings,
+3. the toast's `style.position`,
+4. the tweak's `toastStyle({ position })`,
+5. `"bottom-right"`.
+
+### Toast panes
+
+For a layout of your own, register a pane: a React component that draws
+the inside of a toast. Background code can't send JSX, so the pane is
+registered by name at top level and each toast picks one and passes data:
+
+```tsx
+import { useState } from "react";
+
+tweak.toastPane<{ title: string; before: number; after: number; img: string }>("price", (t, ui) => (
+    <div className="price">
+        <img src={t.data.img} width={64} />
+        <b>{t.data.title}</b>
+        <p><s>{t.data.before}</s> <strong>{t.data.after}</strong></p>
+        <button onClick={() => ui.action("buy")}>Buy now</button>
+        <button onClick={() => ui.action("snooze", "1d")}>Remind me tomorrow</button>
+    </div>
+), { sample: { title: "Desk lamp", before: 89, after: 59, img: "https://shop.example.com/lamp.jpg" } });
+
+tweak.toastPane<{ build: string }>("deploy", (t, ui) => {
+    const [note, setNote] = useState("");
+    return (
+        <form onSubmit={(e) => { e.preventDefault(); ui.action("approve", note); }}>
+            <b>Build {t.data.build} is waiting for approval</b>
+            <input placeholder="Note" value={note} onFocus={ui.keepOpen} onChange={(e) => setNote(e.target.value)} />
+            <button>Approve</button>
+        </form>
+    );
+});
+
+tweak.every("30m", async () => {
+    const p = await (await tweak.fetch("https://shop.example.com/api/item/42")).json();
+    tweak.toast({ id: "price-42", pane: "price", data: { title: p.name, before: p.was, after: p.price, img: p.image },
+                  title: `${p.name} is now ${p.price}`, message: "Price drop" });
+});
+
+tweak.onToastAction(({ actionId, value }) => {
+    if (actionId === "approve") tweak.log("approved with", value);
+});
+```
+
+- The pane gets `t` (`id`, `data`, `title`, `message`, `kind`) and `ui`:
+  `ui.action(id, value)` reaches `tweak.onToastAction` and leaves the
+  toast open, `ui.close()`, `ui.keepOpen()` stops the timer and
+  `ui.update(data)` draws it again.
+- It runs in its own extension frame, like an [overlay](#overlays--tweakonoverlay),
+  up to 480 × 480 px; the frame grows with its content. TangiTweak keeps
+  the corner, the stacking, the timer, the close button and the "from
+  <tweak>" line.
+- `data` must be JSON, up to 32 KB.
+- **Always fill `title` and `message` too.** They show when the pane can't
+  be drawn (a page that blocks extension frames, a pane name that doesn't
+  exist). Problems warns about a `pane` name the script doesn't register.
+- `sample` fills the pane in the Editor's **Preview › Toasts** list.
+
+### Testing
+
+`tangitweak/test` records toasts and runs schedules by hand:
+
+```ts
+import { expect, test } from "vitest";
+import { loadTweak } from "tangitweak/test";
+
+test("toasts on a new tag", async () => {
+    const t = await loadTweak("./index.ts", {
+        fetch: async () => Response.json({ tag_name: "v2", html_url: "https://x" }),
+    });
+    t.store("last").tag = "v1";
+    await t.trigger("every");             // the first tweak.every; trigger("every", 1) for the second
+    expect(t.toasts).toMatchObject([{ kind: "success", title: "tangistudio/TangiTweak v2", url: "https://x" }]);
+    await t.trigger("toastAction", { toastId: t.toasts[0].id, actionId: "click" });
+});
+```
+
+The `tweak` fixture of `test` has the same `toasts` and `trigger`.
+
 ## Multiple handlers — how they stack
 
 One rule, the same on every strategy: **handlers run from general to
