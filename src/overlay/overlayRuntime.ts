@@ -372,6 +372,7 @@ export async function startOverlay(ep: Endpoint, init: OverlayInit, env: Overlay
     const drawPane = (entries: ToastPaneEntry[]) => {
         paneEntry = entries.find((p) => p.name === init.pane!.name);
         if (!paneEntry) return failPane(`the script has no tweak.toastPane named "${init.pane!.name}"`);
+        if (init.pane!.sample && paneToast) paneToast = { ...paneToast, data: paneEntry.sample };
         renderPane();
     };
     ep.on("pane.update", ({ toast }) => {

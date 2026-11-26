@@ -8,6 +8,9 @@
  * live interception. There's no page: page fetches run from the
  * background (counted for the toolbar's badge) and calls to onPage code
  * fail. It reloads when the script (or what it imports) changes.
+ *
+ * Preview › Toasts shows one of the script's `tweak.toastPane` panes the
+ * same way, in a toast-sized frame, drawn with the pane's `sample` data.
  */
 import { SiteStoreHost, SITE_UP_KINDS } from "../../shared/siteStoreHost";
 import { shippedLibIds } from "../../shared/scriptImports";
@@ -22,8 +25,13 @@ export const PREVIEW_PORT = "tt-preview";
 /** the "page" sizes: fit = the panel's */
 export const VIEWPORTS = ["fit", "1280×800", "1024×768", "390×844"] as const;
 
-/** the URL per script and the viewport (localStorage) */
-export const previewPrefs = persistedProxy<{ urls?: Record<string, string>; viewport?: string }>("resPreview");
+export type PreviewMode = "overlay" | "toasts";
+
+/** the URL and pane per script, the viewport and the mode (localStorage) */
+export const previewPrefs = persistedProxy<{ urls?: Record<string, string>; viewport?: string; mode?: PreviewMode; panes?: Record<string, string> }>("resPreview");
+
+/** the tallest a pane gets, as in a page's toasts */
+const PANE_MAX_HEIGHT = 480;
 
 export type PreviewStatus = "idle" | "loading" | "ready" | "error";
 
@@ -45,7 +53,15 @@ export const preview = proxy({
     nonce: "",
     /** bumped to make a new frame */
     frameKey: 0,
+    /** Toasts mode: the script's panes, the one shown and its height */
+    panes: [] as string[],
+    pane: "",
+    paneHeight: 0,
+    /** Toasts mode: why the pane can't draw ("" while it can) */
+    paneFailed: "",
 });
+
+const modeOf = (): PreviewMode => previewPrefs.mode ?? "overlay";
 
 const RETRY_MIN_MS = 500;
 const RETRY_MAX_MS = 5000;
@@ -54,6 +70,8 @@ let connect: () => Endpoint = () => portEndpoint(chrome.runtime.connect({ name: 
 let l5: Endpoint | null = null;
 let frame: Endpoint | null = null;
 let codeHash = "";
+/** Toasts mode: pane runs have no code hash, so the code itself */
+let paneCode = "";
 let previewLibs = new Set<string>();
 /** the latest `reloadPreview` (an older one's answer is dropped) */
 let gen = 0;
@@ -123,20 +141,45 @@ export async function reloadPreview(): Promise<void> {
     const my = ++gen;
     clearTimeout(retryTimer);
     closeFrame("reloaded");
-    Object.assign(preview, { status: "loading", message: "", bgFetches: 0 });
+    Object.assign(preview, { status: "loading", message: "", bgFetches: 0, paneHeight: 0, paneFailed: "" });
     const nonce = newNonce();
     let ep: Endpoint | undefined;
     try {
         ep = link();
-        const r = await ep.call("preview.open", { nonce, url: previewPrefs.urls?.[s] ?? "" }, s);
+        let pane: string | undefined;
+        if (modeOf() === "toasts") {
+            const { panes } = await ep.call("preview.panes", {}, s);
+            if (my !== gen) return;
+            const want = previewPrefs.panes?.[s];
+            pane = want && panes.includes(want) ? want : panes[0];
+            Object.assign(preview, { panes, pane: pane ?? "" });
+            if (pane === undefined) throw new Error("This script has no tweak.toastPane. Add one to draw its toasts yourself.");
+        }
+        const r = await ep.call("preview.open", { nonce, url: pane === undefined ? (previewPrefs.urls?.[s] ?? "") : "", ...(pane !== undefined ? { pane } : {}) }, s);
         if (my !== gen) return;
         retryMs = RETRY_MIN_MS;
         Object.assign(preview, { name: r.name, url: r.url, handlers: r.handlers, matching: r.matching, nonce, frameKey: preview.frameKey + 1 });
     } catch (e: any) {
         // a link that closed tries again by itself
         if (my !== gen || ep?.closed) return;
-        Object.assign(preview, { status: "error", message: String(e?.message ?? e).replace(/^preview\.open: /, "") });
+        Object.assign(preview, { status: "error", message: String(e?.message ?? e).replace(/^preview\.(open|panes): /, "") });
     }
+}
+
+/** Overlay or Toasts */
+export function setPreviewMode(mode: PreviewMode): void {
+    if (mode === modeOf()) return;
+    previewPrefs.mode = mode;
+    Object.assign(preview, { panes: [], pane: "" });
+    void reloadPreview();
+}
+
+/** Toasts mode: show this pane */
+export function setPreviewPane(name: string): void {
+    const s = preview.scriptId;
+    if (!s || name === preview.pane) return;
+    previewPrefs.panes = { ...(previewPrefs.panes ?? {}), [s]: name };
+    void reloadPreview();
 }
 
 /** the URL the overlay sees ("": its routes' first) */
@@ -158,6 +201,12 @@ async function scriptsChanged(): Promise<void> {
     if (!s || !l5) return;
     if (preview.status !== "ready") return void reloadPreview();
     const my = gen;
+    if (modeOf() === "toasts") {
+        // a pane frame starts over (its sample, its size)
+        const init = await l5.call("overlay.init", {}, s).catch(() => null);
+        if (my === gen && init?.code !== paneCode) void reloadPreview();
+        return;
+    }
     const init = await l5.call("overlay.init", {}, s).catch(() => null);
     if (my !== gen || init?.codeHash === codeHash) return;
     // a running frame recompiles in place
@@ -192,6 +241,7 @@ export function attachFrame(win: Window | null | undefined): void {
         proven = true;
         const init = await up.call("overlay.init", {}, s);
         codeHash = init.codeHash;
+        paneCode = init.code;
         previewLibs = new Set(shippedLibIds(init.libs ?? []));
         if (frame === ep) preview.status = "ready";
         // there's no page to wait for
@@ -219,6 +269,13 @@ export function attachFrame(win: Window | null | undefined): void {
     ep.on("site.up", (m) => proven && SITE_UP_KINDS.has(m?.kind) && (m.kind === "site.disconnect" || m.s === s) && site.receive(m));
     // the frame fills the "page"; keys pressed in it are matched in it
     for (const op of ["rects", "focus", "shortcut.add", "shortcut.remove", "rpc.result"] as const) ep.on(op, () => {});
+    // a pane: what the bridge would do to its toast, told in the Log
+    const said = (msg: string) => up.push("log", { level: "info", msg: `[preview] toastPane "${preview.pane}": ${msg}` }, s);
+    ep.on("pane.size", ({ height }) => proven && frame === ep && (preview.paneHeight = Math.max(0, Math.min(PANE_MAX_HEIGHT, Math.ceil(Number(height) || 0)))));
+    ep.on("pane.failed", ({ why }) => proven && frame === ep && (preview.paneFailed = String(why)));
+    ep.on("pane.action", ({ actionId, value }) => proven && said(`ui.action("${actionId}"${value === undefined ? "" : `, ${JSON.stringify(value)}`}): the toast's onAction gets it`));
+    ep.on("pane.close", () => proven && said("ui.close(): the toast closes"));
+    ep.on("pane.keepOpen", () => proven && said("ui.keepOpen(): the toast's timer stops"));
     ep.onClose(() => {
         if (frame === ep) frame = null;
     });

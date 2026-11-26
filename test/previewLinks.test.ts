@@ -48,6 +48,10 @@ describe("the Editor preview link (L5)", () => {
                 if (!scripts[s]) throw new Error("no such script");
                 return scripts[s];
             },
+            previewPaneRun: async (s) => {
+                if (s !== "s1") throw new Error("the script has no tweak.toastPane");
+                return { ...scripts.s1, routes: [], panes: ["deal", "build"] };
+            },
             storageGet: async (s, key) => storage.get(`${s}/${key}`),
             storageSet: async (s, key, value) => void storage.set(`${s}/${key}`, value),
             log: (tabId, s, level, msg, ctx) => logs.push({ tabId, s, level, msg, ctx }),
@@ -82,6 +86,20 @@ describe("the Editor preview link (L5)", () => {
         await expect(e.call("preview.open", { nonce: "short", url: "" }, "s1")).rejects.toThrow(/refused/);
         await expect(e.call("preview.open", { nonce: NONCE, url: "" }, "broken")).rejects.toThrow(/doesn't compile/);
         await expect(e.call("preview.open", { nonce: NONCE, url: "" }, "nope")).rejects.toThrow(/no such script/);
+    });
+
+    it("Preview › Toasts: lists the panes, opens one, and its frame gets the pane with sample data and no routes", async () => {
+        const e = editor();
+        expect(await e.call("preview.panes", {}, "s1")).toEqual({ panes: ["deal", "build"] });
+        await expect(e.call("preview.panes", {}, "s2")).rejects.toThrow(/no tweak.toastPane/);
+        await expect(e.call("preview.open", { nonce: NONCE, url: "", pane: "nope" }, "s1")).rejects.toThrow(/no tweak.toastPane named "nope"/);
+        await e.call("preview.open", { nonce: NONCE, url: "", pane: "build" }, "s1");
+        const init = await e.call("overlay.init", {}, "s1");
+        expect(init.routes).toEqual([]);
+        expect(init.pane).toMatchObject({ name: "build", sample: true, toast: { title: "One", kind: "info" } });
+        // back to the overlay: no pane
+        await e.call("preview.open", { nonce: NONCE, url: "" }, "s1");
+        expect((await e.call("overlay.init", {}, "s1")).pane).toBeUndefined();
     });
 
     it("everything is for the previewed script only, and only once it's open", async () => {

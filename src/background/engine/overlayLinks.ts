@@ -48,6 +48,8 @@ export interface OverlayRun {
     params: Record<string, any>;
     libs: ShippedLib[];
     react: boolean;
+    /** Its `tweak.toastPane` names (pane runs only). */
+    panes?: string[];
 }
 
 interface Grant {
@@ -135,6 +137,8 @@ export interface OverlayLinkDeps {
     previewRun?(s: string): Promise<OverlayRun>;
     /** script `s`'s code for its toast panes' frames (throws when it's off or has no `tweak.toastPane`) */
     paneRun?(s: string): Promise<OverlayRun>;
+    /** like `paneRun`, for the Editor's Preview › Toasts: on or off */
+    previewPaneRun?(s: string): Promise<OverlayRun>;
     /** `tweak.toast` from page, overlay or preview code: the toast center checks and shows it */
     toast?(from: ToastFrom, spec: unknown): Promise<ToastResult>;
 }
@@ -575,7 +579,7 @@ interface PreviewLink {
     ep: Endpoint;
     /** the Editor's tab (Firefox: the frame's nonce check) */
     tabId?: number;
-    grant: (Grant & { s: string }) | null;
+    grant: (Grant & { s: string; pane?: string }) | null;
 }
 const previews = new Set<PreviewLink>();
 
@@ -605,14 +609,15 @@ export function servePreviewLink(ep: Endpoint, tabId?: number): void {
         drop("the preview closed");
         previews.delete(link);
     });
-    const granted = (op: string, s: string | undefined): Grant & { s: string } => {
+    const granted = (op: string, s: string | undefined): Grant & { s: string; pane?: string } => {
         const g = link.grant;
         if (!g || s === undefined || g.s !== s) throw new Error(`${op}: this script isn't previewed`);
         return g;
     };
-    const runOf = async (op: string, s: string): Promise<OverlayRun> => {
+    const runOf = async (op: string, s: string, pane?: boolean): Promise<OverlayRun> => {
+        const get = pane ? deps.previewPaneRun : deps.previewRun;
         try {
-            if (deps.previewRun) return await deps.previewRun(s);
+            if (get) return await get(s);
         } catch (e) {
             throw new Error(`${op}: ${(e as Error)?.message ?? e}`);
         }
@@ -624,10 +629,15 @@ export function servePreviewLink(ep: Endpoint, tabId?: number): void {
     };
     const previewStoreAllowed = (g: (Grant & { s: string }) | null, s: string | undefined): s is string => !!g && s !== undefined && (g.s === s || g.libs.has(s));
 
-    ep.handle("preview.open", async ({ nonce, url }, s) => {
-        if (typeof s !== "string" || typeof nonce !== "string" || nonce.length < 16 || typeof url !== "string") throw new Error("preview.open: refused");
-        const run = await runOf("preview.open", s);
-        const at = url || sampleUrl(run.routes);
+    ep.handle("preview.panes", async (_a, s) => {
+        if (typeof s !== "string") throw new Error("preview.panes: refused");
+        return { panes: (await runOf("preview.panes", s, true)).panes ?? [] };
+    });
+    ep.handle("preview.open", async ({ nonce, url, pane }, s) => {
+        if (typeof s !== "string" || typeof nonce !== "string" || nonce.length < 16 || typeof url !== "string" || (pane !== undefined && typeof pane !== "string")) throw new Error("preview.open: refused");
+        const run = await runOf("preview.open", s, pane !== undefined);
+        if (pane !== undefined && !run.panes?.includes(pane)) throw new Error(`preview.open: the script has no tweak.toastPane named "${pane}"`);
+        const at = url || (pane !== undefined ? "https://example.com/" : sampleUrl(run.routes));
         try {
             new URL(at);
         } catch {
@@ -637,12 +647,12 @@ export function servePreviewLink(ep: Endpoint, tabId?: number): void {
         if (old && old.s !== s) drop("the preview moved to another script");
         // the preview is a page of its own
         const keep = old?.s === s ? old : null;
-        link.grant = { s, url: at, name: run.name, nonce, seen: false, expires: Date.now() + NONCE_TTL_MS, store: keep?.store ?? null, page: keep?.page ?? pages.openVirtual(), libs: new Set(shippedLibIds(run.libs ?? [])) };
+        link.grant = { s, url: at, name: run.name, nonce, seen: false, expires: Date.now() + NONCE_TTL_MS, store: keep?.store ?? null, page: keep?.page ?? pages.openVirtual(), libs: new Set(shippedLibIds(run.libs ?? [])), ...(pane !== undefined ? { pane } : {}) };
         return { url: at, name: run.name, handlers: run.routes.length, matching: run.routes.filter((r) => routeMatches(r, at)).length };
     });
     ep.handle("overlay.init", async (_a, s): Promise<OverlayInit> => {
         const g = granted("overlay.init", s);
-        const run = await runOf("overlay.init", g.s);
+        const run = await runOf("overlay.init", g.s, g.pane !== undefined);
         const libs = new Set(shippedLibIds(run.libs ?? []));
         g.libs = libs;
         const initAll = await storeOwner.init([g.s, ...libs], { page: g.page });
@@ -652,7 +662,8 @@ export function servePreviewLink(ep: Endpoint, tabId?: number): void {
             name: run.name,
             code: run.code,
             codeHash: run.codeHash,
-            routes: run.routes,
+            routes: g.pane !== undefined ? [] : run.routes,
+            ...(g.pane !== undefined ? { pane: { name: g.pane, toast: { id: "preview", data: undefined, title: run.name, kind: "info" as const }, sample: true } } : {}),
             url: g.url,
             params: run.params,
             stores: initAll[g.s] ?? {},

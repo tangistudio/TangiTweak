@@ -34,7 +34,8 @@ function background() {
             if (failOpen) throw new Error(`preview.open: ${failOpen}`);
             return { url: a.url || "https://app.example/", name: "Switch", handlers: 2, matching: a.url.includes("nowhere") ? 0 : 1 };
         });
-        bg.handle("overlay.init", (_a, s) => ({ s: s!, name: "Switch", code: "", codeHash: hash, routes: [], url: "https://app.example/", params: {}, stores: {}, page: "p1", libs: [], react: false }));
+        bg.handle("preview.panes", (_a, s) => (calls.push({ op: "preview.panes", a: {}, s }), { panes: ["deal", "build"] }));
+        bg.handle("overlay.init", (_a, s) => ({ s: s!, name: "Switch", code: hash, codeHash: hash, routes: [], url: "https://app.example/", params: {}, stores: {}, page: "p1", libs: [], react: false }));
         bg.handle("store.sub", (a, s) => (calls.push({ op: "store.sub", a, s }), { rev: 1, data: { on: false }, ops: [] }));
         bg.handle("fetch", (a, s) => (calls.push({ op: "fetch", a, s }), { status: 200, statusText: "", headers: [], body: "ok", url: a.request.url }) as any);
         bg.on("store.set", (a, s) => calls.push({ op: "store.set", a, s }));
@@ -162,6 +163,35 @@ describe("preview host (state/preview.ts)", () => {
         mod.setPreviewUrl("");
         await tick();
         expect(bg.opens().slice(-1)[0].a.url).toBe("");
+    });
+
+    it("Toasts mode: opens a pane (remembered per script), sizes it, says what its ui calls would do, and reloads on save", async () => {
+        mod.setPreviewMode("toasts");
+        mod.showPreview("s1");
+        await tick();
+        expect(bg.opens().map((c) => c.a.pane)).toEqual(["deal"]);
+        expect(mod.preview).toMatchObject({ panes: ["deal", "build"], pane: "deal" });
+        mod.setPreviewPane("build");
+        await tick();
+        expect(bg.opens().map((c) => c.a.pane)).toEqual(["deal", "build"]);
+        expect(mod.previewPrefs.panes).toEqual({ s1: "build" });
+
+        const f = fakeFrame();
+        mod.attachFrame(f.win);
+        const frame = f.ep();
+        await frame.call("hello", { nonce: mod.preview.nonce });
+        frame.push("pane.size", { height: 900 });
+        frame.push("pane.action", { actionId: "snooze", value: 2 });
+        frame.push("pane.failed", { why: "it threw" });
+        await tick();
+        expect(mod.preview).toMatchObject({ paneHeight: 480, paneFailed: "it threw" });
+        expect(bg.calls.filter((c) => c.op === "log").map((c) => c.a.msg)).toEqual(['[preview] toastPane "build": ui.action("snooze", 2): the toast\'s onAction gets it']);
+
+        bg.setHash("h2");
+        bg.links[0].push("bundle.update", {} as any);
+        await tick();
+        expect(bg.opens()).toHaveLength(3);
+        expect(mod.preview.paneFailed).toBe("");
     });
 
     it("says why there's nothing to preview, and opens again when the link drops", async () => {

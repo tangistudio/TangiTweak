@@ -751,6 +751,8 @@ export interface WireOps {
             nonce: string;
             /** The page URL to preview. `""`: the first URL its onOverlay routes name. */
             url: string;
+            /** Preview this `tweak.toastPane` instead of the overlay (Preview › Toasts). */
+            pane?: string;
         };
         res: {
             /** The URL used. */
@@ -761,6 +763,14 @@ export interface WireOps {
             handlers: number;
             /** How many of them match `url`. */
             matching: number;
+        };
+    };
+    /** L5: the names of script `s`'s `tweak.toastPane` panes, for Preview › Toasts. Refused (with why) when it has none or doesn't compile. */
+    "preview.panes": {
+        req: {};
+        res: {
+            /** In the order the script registers them. */
+            panes: string[];
         };
     };
     /**
@@ -987,6 +997,8 @@ export interface OverlayInit {
         name: string;
         /** The toast. */
         toast: PaneToast;
+        /** The Editor's preview: draw the pane's `sample` instead of `toast.data`. */
+        sample?: boolean;
     };
 }
 

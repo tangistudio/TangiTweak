@@ -670,7 +670,7 @@ export function createPipeline(
      * `pane`: only that script's overlay run, for its toast panes' frames
      * (it must be enabled and have a `tweak.toastPane`; onOverlay routes don't matter).
      */
-    async function hookBundle(url: string, top: boolean, preview?: string, pane?: boolean) {
+    async function hookBundle(url: string, top: boolean, preview?: string, pane?: boolean | "preview") {
         const t0 = performance.now();
         // onSite scripts (hook.ts; the bridge when CSP blocks eval)
         // `v`: the onSite code's version — onPage code tags its calls with it, and the hook waits for that version (hook.ts answerCall)
@@ -702,7 +702,7 @@ export function createPipeline(
             if (preview !== undefined) {
                 if (s.id !== preview) continue;
                 previewWhy = !a || a.error ? "the script doesn't compile" : pane ? "the script has no tweak.toastPane" : "the script has no overlay handler (tweak.onOverlay)";
-                if (pane && !s.enabled) {
+                if (pane === true && !s.enabled) {
                     previewWhy = "the script is off";
                     continue;
                 }
@@ -710,7 +710,7 @@ export function createPipeline(
             if (pane) {
                 if (a && !a.error && a.meta.toast?.panes?.length) {
                     overlays.push({ scriptId: s.id, name: s.meta.name, routes: [], codeHash: "" });
-                    overlayRuns.set(s.id, { name: s.meta.name, code: toRunnableJs(s.code), routes: [], params: resolveParamValues(a.paramDefs || {}, paramValues[s.id]), libs: [], react: false, codeHash: "" });
+                    overlayRuns.set(s.id, { name: s.meta.name, code: toRunnableJs(s.code), routes: [], params: resolveParamValues(a.paramDefs || {}, paramValues[s.id]), libs: [], react: false, codeHash: "", panes: [...a.meta.toast.panes] });
                     overlayDeps.set(s.id, new Set(a.deps));
                 }
                 continue;
@@ -818,6 +818,12 @@ export function createPipeline(
         },
         paneRun: async (s) => {
             const { overlayRuns, previewWhy } = await hookBundle("", true, s, true);
+            const run = overlayRuns.get(s);
+            if (!run) throw new Error(previewWhy);
+            return run;
+        },
+        previewPaneRun: async (s) => {
+            const { overlayRuns, previewWhy } = await hookBundle("", true, s, "preview");
             const run = overlayRuns.get(s);
             if (!run) throw new Error(previewWhy);
             return run;
