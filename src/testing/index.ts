@@ -68,6 +68,8 @@ import { resolveParamValues, type ParamTree } from "../shared/scriptDef";
 import { bytesToImageDataUrl, isDataSpec, isImageDataPath, makeLibRequire, type ShippedLib } from "../shared/scriptImports";
 import { formatLogArgs, makeScriptConsole, scriptLogLine, type ScriptLogLevel } from "../shared/scriptLog";
 import { scriptFunction } from "../shared/scriptFn";
+import { runEvery, runToastAction } from "../shared/everyRun";
+import type { ToastEvent, ToastSpec } from "../shared/toast";
 import { parseShortcut, runShortcut, ShortcutRegistry, shortcutPriority, watchShortcuts } from "../shared/shortcut";
 import { siteBuiltin } from "../shared/siteBuiltin";
 import { SiteStoreHost, type SiteDown, type SiteUp } from "../shared/siteStoreHost";
@@ -684,6 +686,21 @@ export interface LoaderAccess {
 }
 
 /**
+ * A toast the tweak asked for, as {@link LoadedTweak.toasts} records it.
+ *
+ * @example
+ * ```ts
+ * expect(t.toasts).toMatchObject([{ script: "index.ts", kind: "success", title: "Done" }]);
+ * ```
+ */
+export interface TestToast extends ToastSpec {
+    /** The script that called `tweak.toast`. */
+    script: string;
+    /** The tab of the page whose `onPage` code called it; absent for background code. */
+    tabId?: number;
+}
+
+/**
  * A tweak loaded by {@link loadTweak}: its compiled scripts and background
  * side (network handlers, stores, storage, params), with
  * {@link LoadedTweak.simulate} for requests and {@link LoadedTweak.openPage}
@@ -730,6 +747,37 @@ export interface LoadedTweak {
     readonly warnings: string[];
     /** Everything the tweak logged so far, in order. The array is live: it grows as the tweak logs. */
     readonly logs: TweakLogEntry[];
+    /**
+     * Every `tweak.toast` call so far, checked and with its defaults filled
+     * in, in order. Each is reported as `"shown"`. The array is live.
+     *
+     * @example
+     * await t.trigger("every");
+     * expect(t.toasts).toMatchObject([{ kind: "success", title: "New release" }]);
+     */
+    readonly toasts: TestToast[];
+    /**
+     * Runs a `tweak.every` handler now (as "Run now" does, with
+     * `ctx.reason` `"manual"`), in the background world.
+     *
+     * @param index Which `tweak.every` of the script, in registration order (default `0`).
+     * @param scriptName The script (default: the entry script).
+     * @throws Error when there is no such schedule or the handler fails.
+     * @example
+     * await t.trigger("every");
+     */
+    trigger(what: "every", index?: number, scriptName?: string): Promise<void>;
+    /**
+     * Sends a toast event to the script's `tweak.onToastAction` handlers, as
+     * a click on a toast's button would.
+     *
+     * @param event The toast, the action and the tab.
+     * @param scriptName The script (default: the entry script).
+     * @throws Error when a handler fails.
+     * @example
+     * await t.trigger("toastAction", { toastId: "release", actionId: "open" });
+     */
+    trigger(what: "toastAction", event: ToastEvent, scriptName?: string): Promise<void>;
     /**
      * Each script's `tweak.storage`, read and written directly. Values are
      * copied with `structuredClone` both ways.
@@ -1166,6 +1214,11 @@ export async function loadTweak(source: TweakSource, options: LoadTweakOptions =
     if (!primaryScript) throw new Error("loadTweak: no script found");
 
     const logs: TweakLogEntry[] = [];
+    const toasts: TestToast[] = [];
+    const recordToast = (script: string, tabId?: number) => async (spec: ToastSpec) => {
+        toasts.push({ ...structuredClone(spec), script, ...(tabId !== undefined ? { tabId } : {}) });
+        return { id: spec.id, status: "shown" as const };
+    };
     const logSink = (scriptName: string, level: ScriptLogLevel | "debug", sourceLabel: string, text: string, kind?: string) => {
         logs.push({ script: scriptName, level, message: sourceLabel ? `[${sourceLabel}] ${text}` : text, ...(kind ? { kind } : {}) });
     };
@@ -1356,6 +1409,8 @@ export async function loadTweak(source: TweakSource, options: LoadTweakOptions =
             tabStore: (name: string, initial: object) => bgHub.tabStore(s.id, name, initial),
             pageStore: (name: string, initial: object) => bgHub.pageStore(s.id, name, initial),
             fetch: bgWireFetch,
+            toast: recordToast(s.name),
+            toastWhere: "active",
             setParam: async (key: string, value: any) => {
                 paramOverrides.set(s.id, { ...(paramOverrides.get(s.id) || {}), [key]: value });
             },
@@ -2078,6 +2133,7 @@ export async function loadTweak(source: TweakSource, options: LoadTweakOptions =
                             siteStore: mine ? (n, initial) => isoSiteMirrors.store(s.id, n, initial) : undefined,
                             exposer: mine ? st.isoExposer : undefined,
                             call: mine ? callHandle : undefined,
+                            toast: recordToast(s.name, tabId),
                             log: (source, ...args) => logSink(s.name, "info", source, scriptLogLine(name, source, formatLogArgs(args))),
                             storage: {
                                 get: async (key: string) => structuredClone(storageData.get(s.id)?.[key]),
@@ -2287,6 +2343,22 @@ export async function loadTweak(source: TweakSource, options: LoadTweakOptions =
             return [...currentWarnings, ...pageWarnings];
         },
         logs,
+        toasts,
+        async trigger(what: "every" | "toastAction", arg?: any, scriptName?: string): Promise<void> {
+            const s = resolveScript(scriptName);
+            const h = compiledMap.get(s.id)?.handlers;
+            if (!h) throw new Error(`trigger: ${s.name} has no handlers (it didn't compile)`);
+            if (what === "toastAction") {
+                await inScope(bgScope, () => runToastAction(h, arg as ToastEvent));
+                return;
+            }
+            if (what !== "every") throw new Error(`trigger: unknown "${String(what)}"`);
+            const index = (arg as number | undefined) ?? 0;
+            if (!h.every.some((e) => e.index === index)) throw new Error(`trigger: ${s.name} has no tweak.every #${index}`);
+            const out = await inScope(bgScope, () => runEvery(h, index, { reason: "manual" }));
+            await flushAsync(4);
+            if (!out.ok) throw new Error(out.error);
+        },
         storage: {
             get(key: string, scriptName?: string) {
                 const s = resolveScript(scriptName);

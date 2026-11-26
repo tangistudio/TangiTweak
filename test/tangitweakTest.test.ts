@@ -183,3 +183,42 @@ describe("plain tests: the tweak from Node", () => {
         expect(tweak.params({ n: { type: "number", default: 3 } }).n).toBe(3);
     });
 });
+
+describe("toasts and schedules", () => {
+    it("trigger runs an every handler and toasts records what it showed", async () => {
+        const t = await loadTweak(
+            {
+                name: "n",
+                code: src(`
+tweak.every("1h", async (ctx) => {
+    const r = await tweak.fetch("https://api.example.com/latest");
+    const { tag } = await r.json();
+    await tweak.toast({ kind: "success", title: "New " + tag, url: "https://example.com/" + tag, ttl: "1d" });
+});
+tweak.every("1d", () => { throw new Error("boom"); });`),
+            },
+            { fetch: async () => new Response(JSON.stringify({ tag: "v2" })) }
+        );
+        await t.trigger("every");
+        expect(t.toasts).toMatchObject([{ script: "n", kind: "success", title: "New v2", url: "https://example.com/v2", where: "active", ttl: 86_400_000 }]);
+        await expect(t.trigger("every", 1)).rejects.toThrow("boom");
+        await expect(t.trigger("every", 2)).rejects.toThrow(/no tweak.every #2/);
+        await t.dispose();
+    });
+
+    it("onPage toasts go to their own tab and toast actions reach onToastAction", async () => {
+        const t = await loadTweak({
+            name: "n",
+            code: src(`
+export const seen = [];
+tweak.onToastAction((e) => { seen.push(e.actionId); });
+tweak.onPage("https://app.example.com/*", () => { tweak.toast({ message: "hi" }); });`),
+        });
+        await using page = await t.openPage("https://app.example.com/", { tabId: 3 });
+        await page.flush();
+        expect(t.toasts).toMatchObject([{ message: "hi", where: "this", tabId: 3 }]);
+        await t.trigger("toastAction", { toastId: t.toasts[0].id, actionId: "ok" });
+        expect(t.exports.seen).toEqual(["ok"]);
+        await t.dispose();
+    });
+});

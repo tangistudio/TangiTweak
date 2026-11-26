@@ -48,7 +48,8 @@ import { onTestFinished, test as base, type TestAPI } from "vitest";
 import { buildQueries, createEvent, queries } from "@testing-library/dom";
 import type { RenderOptions, RenderResult } from "@testing-library/react";
 import type { ReactElement } from "react";
-import { listDirFiles, loadTweak, LOADER, type BrowserName, type LoadedTweak, type LoaderAccess, type OpenPageOptions, type SimulatedResponse, type SimulateRequestInit, type TestPage, type TweakLogEntry } from "./index";
+import { listDirFiles, loadTweak, LOADER, type BrowserName, type LoadedTweak, type LoaderAccess, type OpenPageOptions, type SimulatedResponse, type SimulateRequestInit, type TestPage, type TestToast, type TweakLogEntry } from "./index";
+import type { ToastEvent } from "../shared/toast";
 import { bundleDirOf, resetStores, setStore, stackFiles, storeRegistry } from "./standalone";
 import type { DocumentWhen } from "../shared/route";
 import type { RuleSpec } from "../shared/dnrRules";
@@ -365,6 +366,20 @@ export interface TweakHandle {
      * sending `onSite` to the isolated world.
      */
     readonly problems: string[];
+    /** Every copy's `tweak.toast` calls, copy by copy in load order (see {@link LoadedTweak.toasts}). */
+    readonly toasts: TestToast[];
+    /**
+     * Runs a `tweak.every` handler of the main copy now (see {@link LoadedTweak.trigger}).
+     *
+     * @throws When there is no such schedule or the handler fails.
+     */
+    trigger(what: "every", index?: number, scriptName?: string): Promise<void>;
+    /**
+     * Sends a toast event to the main copy's `tweak.onToastAction` handlers.
+     *
+     * @throws When a handler fails.
+     */
+    trigger(what: "toastAction", event: ToastEvent, scriptName?: string): Promise<void>;
     /**
      * This test's copy of an imported store. The imported object only names
      * which store is meant.
@@ -685,6 +700,11 @@ class Session {
         return this.loaders.flatMap((t) => t.logs);
     }
 
+    /** Every copy's toasts, copy by copy in load order. */
+    get toasts(): TestToast[] {
+        return this.loaders.flatMap((t) => t.toasts);
+    }
+
     /** Every copy's errors and warnings, without duplicates. */
     get problems(): string[] {
         const all = this.loaders.flatMap((t) => [...t.errors, ...t.warnings]);
@@ -877,6 +897,10 @@ export function createTweakTest(options: TweakTestOptions = {}): TestAPI<TweakFi
                 get problems() {
                     return _tangitweak.problems;
                 },
+                get toasts() {
+                    return _tangitweak.toasts;
+                },
+                trigger: async (what: any, arg?: any, scriptName?: string) => (await _tangitweak.ready("tweak.trigger")).trigger(what, arg, scriptName),
                 store: <T extends object>(store: T, page?: TweakPage | MountedUi) => _tangitweak.store(store, page) as T,
             });
         },
