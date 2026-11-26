@@ -127,7 +127,7 @@ export interface ToastOptionsInput {
     ttl?: number | string;
     /** Its own look, over the tweak's `tweak.toastStyle`. */
     style?: ToastStyle;
-    /** What its tab does while it waits unseen: `"normal"` or `"none"`. */
+    /** What its tab does while it waits unseen: `"tab"`, `"window"` or `"none"`. */
     attention?: ToastAttention;
     /** The `tweak.toastPane` that draws it. */
     pane?: string;

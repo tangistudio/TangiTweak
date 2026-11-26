@@ -1081,6 +1081,172 @@ declare namespace TangiTweak {
     // ---- tweak.params: typed, user-adjustable parameters ----
 
     /**
+     * A length of time: a string of numbers with units `s`, `m`, `h` and `d`
+     * (`"30s"`, `"5m"`, `"1h"`, `"1d"`, `"1h30m"`), or a number of
+     * milliseconds.
+     */
+    type Duration = number | `${number}${"s" | "m" | "h" | "d"}` | (string & {});
+
+    /** What a `tweak.every` handler receives. */
+    interface EveryCtx {
+        /** Aborts when the run's 60 s are up: check it between steps of a long run. */
+        signal: AbortSignal;
+        /** Why it runs: on schedule (`"alarm"`), overdue at browser start (`"startup"`) or **Run now** in the Editor (`"manual"`). */
+        reason: "alarm" | "startup" | "manual";
+        /** When it last ran, in ms since epoch (none on the first run). */
+        lastRun?: number;
+        /**
+         * Unschedule it until the tweak is saved, turned off and on again or
+         * the user clicks **Run now**. For a stop that lasts across saves,
+         * pass a function as the interval and keep the state in a store.
+         */
+        stop(): void;
+    }
+
+    /** A toast's kind: it picks the accent color and the icon. */
+    type ToastKind = "info" | "success" | "warning" | "error";
+
+    /** A corner (or edge center) of the tab where toasts stack. */
+    type ToastPosition = "top-left" | "top-center" | "top-right" | "bottom-left" | "bottom-center" | "bottom-right";
+
+    /** A button on a toast. */
+    interface ToastAction {
+        /** What `tweak.onToastAction` receives as `actionId`. */
+        id: string;
+        /** The button's text. */
+        label: string;
+        /** An http(s) URL the button opens in a new tab (the action still reaches `tweak.onToastAction`). */
+        url?: string;
+    }
+
+    /**
+     * How a tweak's toasts look. Every key is optional: the default look is
+     * finished without any. Colors are CSS colors.
+     *
+     * @see https://github.com/tangistudio/TangiTweak/blob/master/docs/scripting.md#toast-styles
+     */
+    interface ToastStyle {
+        /** The corner the toasts go to, unless the user picked one (default `"bottom-right"`). */
+        position?: ToastPosition;
+        /** The accent: the stripe, the icon and the buttons (by default it follows the kind). */
+        accent?: string;
+        /** The card's background. */
+        background?: string;
+        /** The text color. */
+        text?: string;
+        /** The border color. */
+        border?: string;
+        /** Corner radius, in pixels or any CSS length. */
+        radius?: number | string;
+        /** Width in pixels, 280 to 480 (default 360). */
+        width?: number;
+        /** The CSS font family. */
+        font?: string;
+        /** Used while the system is in dark mode: colors, radius, width and font. */
+        dark?: Omit<ToastStyle, "dark" | "position" | "css" | "titleFlash" | "iconDot">;
+        /**
+         * Extra CSS (up to 8 KB) inside each toast's own shadow root, so it
+         * styles only this tweak's toasts. Target the parts: `[part=toast]`,
+         * `icon`, `title`, `message`, `actions`, `action`, `close`, `source`
+         * and `progress`, and the variables `--tt-accent`, `--tt-bg`,
+         * `--tt-text`, `--tt-border`, `--tt-radius` and `--tt-font`.
+         */
+        css?: string;
+        /** Flash the tab title while a toast waits in a background tab (default true). */
+        titleFlash?: boolean;
+        /** Put a dot on the tab icon while a toast waits in a background tab (default true). */
+        iconDot?: boolean;
+    }
+
+    /** What `tweak.toast` takes besides a plain message. */
+    interface ToastOptions {
+        /** The bold first line. */
+        title?: string;
+        /** The text under it. Plain text, never HTML. */
+        message?: string;
+        /** Default `"info"`. */
+        kind?: ToastKind;
+        /** An emoji or short text, an image URL (http(s), `data:image` or an imported image) or `false` for none. */
+        icon?: string | false;
+        /** What a click on the toast opens in a new tab: http(s) only. */
+        url?: string;
+        /** Up to 2 buttons. A string is a button whose label is its id. */
+        actions?: (ToastAction | string)[];
+        /** How long it stays on screen (default `"6s"`; errors default to `"sticky"`). Its timer pauses while the tab is hidden or hovered. */
+        duration?: Duration | "sticky";
+        /** Unique in the tweak: a toast with the same id replaces it in place. */
+        id?: string;
+        /**
+         * Which tab shows it:
+         * - `"active"`: the tab in front (the default in background code);
+         * - `"this"`: the calling page's tab (the default in `onPage` and `onOverlay` code);
+         * - a URL pattern or list: every open tab that matches.
+         */
+        where?: "active" | "this" | UrlPatterns;
+        /** How long it waits for a tab that can show it (default `"1h"`, at most `"7d"`). */
+        ttl?: Duration;
+        /** Its own look, over the tweak's {@link Tweak.toastStyle}. */
+        style?: ToastStyle;
+        /**
+         * What its tab does while it waits unseen in the background:
+         * `"tab"` (the default) flashes the title and dots the icon,
+         * `"window"` also asks the browser window for attention and `"none"`
+         * does neither (and lets the timer run while the tab is hidden).
+         */
+        attention?: "none" | "tab" | "window";
+        /** The {@link Tweak.toastPane} that draws it. Fill `title` and `message` too: they show if the pane can't. */
+        pane?: string;
+        /** What the pane gets as `toast.data`: JSON, up to 32 KB. */
+        data?: unknown;
+    }
+
+    /** What became of a toast. */
+    interface ToastResult {
+        /** The toast's id (made up when it had none). */
+        id: string;
+        /** `"shown"` on a tab, `"queued"` until a tab can show it, or `"dropped"` (muted, rate-limited or too many). */
+        status: "shown" | "queued" | "dropped";
+        /** Why it was dropped. */
+        reason?: string;
+    }
+
+    /** What a user did to a toast, as `tweak.onToastAction` receives it. */
+    interface ToastEvent {
+        /** The toast's id. */
+        toastId: string;
+        /** The button's id, `"click"` (the card, when it has a `url`) or `"close"` (closed by the user). */
+        actionId: string;
+        /** What a pane passed to `ui.action(id, value)`. */
+        value?: unknown;
+    }
+
+    /** The toast a pane draws. */
+    interface PaneToast<T> {
+        /** The toast's id. */
+        id: string;
+        /** What `tweak.toast` passed as `data`. */
+        data: T;
+        /** The toast's title, if any. */
+        title?: string;
+        /** The toast's message, if any. */
+        message?: string;
+        /** The toast's kind. */
+        kind: ToastKind;
+    }
+
+    /** What a pane can do to its toast. */
+    interface PaneUi {
+        /** Report an action: it reaches `tweak.onToastAction` with `value`. The toast stays. */
+        action(id: string, value?: unknown): void;
+        /** Close the toast. */
+        close(): void;
+        /** Stop its timer, e.g. once the user starts typing. */
+        keepOpen(): void;
+        /** Draw it again with new data. */
+        update(data: unknown): void;
+    }
+
+    /**
      * A tweak's package.json fields as TangiTweak reads them: the npm
      * fields (`name`, `version`, `description`, `author`, `license`,
      * `homepage`) and the `"tangitweak"` block (`displayName`, `icon`,
@@ -1779,6 +1945,107 @@ declare namespace TangiTweak {
          * const real = await (await tweak.fetch("https://api.example.com/user", { bypass: true })).json();
          */
         fetch(input: string | URL | Request, init?: TangiTweak.FetchInit): Promise<Response>;
+
+        /**
+         * Run `handler` on a schedule, in the background, also while no tab
+         * is open: usually to `tweak.fetch` something and compare it with
+         * last time (kept in a {@link globalStore}). Call at top level.
+         *
+         * - `interval` is a {@link TangiTweak.Duration}, at least `"1m"`
+         *   (shorter is raised to 1 minute with a warning in Problems).
+         * - Or a function that returns one, or `false` to unschedule. It
+         *   runs again whenever a store it read changes, so the UI or page
+         *   code can turn polling on and off by changing a store.
+         * - A run that's overdue when the browser starts runs once, with
+         *   `ctx.reason` `"startup"`. Runs never overlap.
+         * - A run gets 60 s and up to 20 `tweak.fetch` calls. After 5
+         *   failures in a row the interval doubles, up to 1 day, until a run
+         *   works again.
+         * - In a packaged tweak `tweak.fetch` reaches only the hosts in
+         *   package.json's `"tangitweak.connect"`.
+         * - The Editor's **Schedules** list shows each one with **Run now**
+         *   and **Pause**. A pause is the user's: the tweak can't undo it.
+         *
+         * @see https://github.com/tangistudio/TangiTweak/blob/master/docs/scripting.md#tweakevery
+         * @example
+         * const seen = tweak.globalStore("seen", { tag: "" });
+         * tweak.every("1h", async (ctx) => {
+         *     const r = await tweak.fetch("https://api.github.com/repos/owner/repo/releases/latest");
+         *     const { tag_name, html_url } = await r.json();
+         *     if (seen.tag && tag_name !== seen.tag) tweak.toast({ title: `${tag_name} is out`, url: html_url });
+         *     seen.tag = tag_name;
+         * });
+         */
+        every(interval: TangiTweak.Duration | (() => TangiTweak.Duration | false | null | undefined), handler: (ctx: TangiTweak.EveryCtx) => TangiTweak.Awaitable<void>): void;
+
+        /**
+         * Show a toast: a small card that pops up inside the tab, on top of
+         * the page. It isn't a system notification and needs no permission.
+         * Toasts from all tweaks stack in the corners of the tab, each with
+         * its own look and a "from <tweak>" line.
+         *
+         * - Call it from a handler: an `every`, a network handler, `onPage`
+         *   or `onOverlay` code (not at top level; in `onSite` it rejects).
+         * - With no tab to show it, it waits up to `ttl` and shows when one
+         *   connects. In a background tab the title flashes and the icon
+         *   gets a dot until the user comes back.
+         * - Each tweak may show 1 new toast every 10 s and 20 an hour;
+         *   updating one with the same `id` doesn't count. The user can mute
+         *   a tweak's toasts from the popup.
+         *
+         * @see https://github.com/tangistudio/TangiTweak/blob/master/docs/scripting.md#tweaktoast
+         * @example
+         * tweak.toast("Saved");
+         * tweak.toast({ kind: "success", title: "Back in stock", url: "https://shop.example.com/item/42", actions: [{ id: "buy", label: "Buy now" }] });
+         */
+        toast(message: string | TangiTweak.ToastOptions): Promise<TangiTweak.ToastResult>;
+
+        /**
+         * Set the look of this tweak's toasts (only this tweak's). Call at
+         * top level. Several calls merge, later keys win; each toast's own
+         * `style` goes on top.
+         *
+         * @see https://github.com/tangistudio/TangiTweak/blob/master/docs/scripting.md#toast-styles
+         * @example
+         * tweak.toastStyle({ accent: "#e8590c", radius: 4, dark: { background: "#1b1b1f" } });
+         */
+        toastStyle(style: TangiTweak.ToastStyle): void;
+
+        /**
+         * Handle clicks on this tweak's toasts: a button (its `id`), the card
+         * itself (`"click"`, when it has a `url`) or the close button
+         * (`"close"`). Call at top level. It runs in the background, also
+         * after the browser restarted the extension.
+         *
+         * @example
+         * tweak.onToastAction(({ toastId, actionId }) => {
+         *     if (actionId === "snooze") snoozed.until = Date.now() + 3_600_000;
+         * });
+         */
+        onToastAction(handler: (event: TangiTweak.ToastEvent) => TangiTweak.Awaitable<void>): void;
+
+        /**
+         * Register a pane: a React component that draws the inside of a
+         * toast, picked per toast with `tweak.toast({ pane: name, data })`.
+         * Call at top level. TangiTweak keeps the corner, the stacking, the
+         * timer and the "from <tweak>" line; the pane gets up to 480 × 480
+         * px. When it can't be drawn the toast shows its `title` and
+         * `message` instead.
+         *
+         * @see https://github.com/tangistudio/TangiTweak/blob/master/docs/scripting.md#toast-panes
+         * @example
+         * tweak.toastPane<{ price: number }>("price", (t, ui) => (
+         *     <div>Now {t.data.price} € <button onClick={() => ui.action("buy")}>Buy</button></div>
+         * ), { sample: { price: 12 } });
+         */
+        toastPane<T = unknown>(
+            name: string,
+            render: (toast: TangiTweak.PaneToast<T>, ui: TangiTweak.PaneUi) => unknown,
+            opts?: {
+                /** Data for the Editor's Preview > Toasts list. */
+                sample?: T;
+            },
+        ): void;
 
         /**
          * Write an info line to the Editor's Log view, tagged with this

@@ -12,7 +12,7 @@ const view = (o: Partial<ToastView> = {}): ToastView => ({
     duration: 6000,
     where: "active",
     ttl: 3_600_000,
-    attention: "normal",
+    attention: "tab",
     source: "Price watch",
     look: {},
     position: "bottom-right",
