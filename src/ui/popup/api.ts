@@ -4,6 +4,15 @@ import type { ParamTree } from "../../shared/scriptDef";
 import type { ScriptHealthInput } from "../../shared/scriptHealth";
 import type { ScriptRole } from "../../shared/tweakBundle";
 import type { TabStatus } from "../../shared/tabStatus";
+import { toastsApi, type ScheduleRow, type ToastHistoryEntry } from "../lib/toastsApi";
+
+/** A tweak's toasts and schedules, for its row. */
+export interface ToastActivity {
+    muted: boolean;
+    /** Newest first. */
+    history: ToastHistoryEntry[];
+    schedules: ScheduleRow[];
+}
 
 export interface ScriptInfo {
     id: string;
@@ -55,6 +64,11 @@ export interface PopupApi {
     openManager(scriptId?: string): void;
     loadSize(): Promise<{ w: number; h: number } | null>;
     saveSize(size: { w: number; h: number }): void;
+    /** each tweak's toasts and schedules, by script id (tweaks with none are left out) */
+    toastActivity?(): Promise<Record<string, ToastActivity>>;
+    muteToasts?(scriptId: string, muted: boolean): Promise<void>;
+    /** pauses or resumes all of a tweak's schedules */
+    pauseSchedules?(scriptId: string, paused: boolean): Promise<void>;
     /** scripts or params changed elsewhere (manager, import, folder sync) — returns an unsubscribe */
     onChange?(fn: () => void): () => void;
 }
@@ -107,6 +121,17 @@ export const chromePopupApi: PopupApi = {
             })
         ),
     saveSize: (size) => void chrome.storage.local.set({ resPopupSize: size }),
+    toastActivity: async () => {
+        const [prefs, history, rows] = await Promise.all([toastsApi.prefs(), toastsApi.history(), toastsApi.schedules()]);
+        const out: Record<string, ToastActivity> = {};
+        const at = (s: string) => (out[s] ??= { muted: false, history: [], schedules: [] });
+        for (const s of prefs.muted ?? []) at(s).muted = true;
+        for (const [s, list] of Object.entries(history)) if (list.length) at(s).history = [...list].sort((a, b) => b.at - a.at);
+        for (const r of rows) at(r.scriptId).schedules.push(r);
+        return out;
+    },
+    muteToasts: (scriptId, muted) => toastsApi.mute(scriptId, muted),
+    pauseSchedules: (scriptId, paused) => toastsApi.pause(scriptId, undefined, paused),
     onChange(fn) {
         const l = (c: Record<string, chrome.storage.StorageChange>, area: string) => {
             if (area === "local" && (c.resScripts || c.resScriptOrder || c.resParams || c.resScriptLayers || c.resDataFiles || c[PACKAGES_KEY])) fn();

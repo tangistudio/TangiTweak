@@ -316,3 +316,31 @@ describe("Popup", () => {
         ]);
     });
 });
+
+describe("Popup toasts", () => {
+    it("mutes a tweak's toasts and lists its recent toasts and schedules", async () => {
+        const api = fakeApi([script("s1", "Price watch"), script("s2", "Quiet")]);
+        let muted = false;
+        let paused = false;
+        api.toastActivity = vi.fn(async () => ({
+            s1: {
+                muted,
+                history: [{ id: "drop", title: "Price dropped", kind: "success" as const, at: Date.now(), status: "dropped" as const, reason: "muted" }],
+                schedules: [{ scriptId: "s1", name: "Price watch", index: 0, running: false, failures: 0, rev: 1, paused }],
+            },
+        }));
+        api.muteToasts = vi.fn(async (_s: string, m: boolean) => void (muted = m));
+        api.pauseSchedules = vi.fn(async (_s: string, p: boolean) => void (paused = p));
+        render(<Popup api={api} />);
+        fireEvent.click(await screen.findByLabelText("Mute toasts"));
+        await waitFor(() => expect(api.muteToasts).toHaveBeenCalledWith("s1", true));
+        await screen.findByLabelText("Unmute toasts");
+        expect(screen.getAllByLabelText(/mute toasts/i).length).toBe(1);
+        fireEvent.click(screen.getByLabelText("Toggle details"));
+        expect(await screen.findByText("Price dropped")).toBeTruthy();
+        expect(screen.getByText(/not shown: muted/)).toBeTruthy();
+        fireEvent.click(screen.getByText("Pause"));
+        await waitFor(() => expect(api.pauseSchedules).toHaveBeenCalledWith("s1", true));
+        expect(await screen.findByText("Resume")).toBeTruthy();
+    });
+});

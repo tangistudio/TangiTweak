@@ -337,3 +337,19 @@ body::-webkit-scrollbar { width: 8px; height: 8px; }
 body::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
 .param-row textarea::-webkit-scrollbar-thumb:hover,
 body::-webkit-scrollbar-thumb:hover { background: var(--scroll-hover); }
+
+.btn-mute.muted { color: var(--accent); border-color: var(--accent); }
+.toast-fold { font-size: 12px; }
+.toast-fold-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; color: var(--fg-dim); }
+.toast-none { color: var(--fg-dim); margin-bottom: 4px; }
+.toast-history { list-style: none; margin: 0 0 4px; padding: 0; }
+.toast-history li { margin-bottom: 6px; }
+.toast-history li > a,
+.toast-history li { display: flex; align-items: baseline; gap: 6px; color: var(--fg); text-decoration: none; min-width: 0; }
+.toast-history li > a:hover .toast-text { text-decoration: underline; }
+.toast-kind { flex: none; width: 6px; height: 6px; border-radius: 50%; background: #0969da; }
+.toast-kind.success { background: #1a7f37; }
+.toast-kind.warning { background: #9a6700; }
+.toast-kind.error { background: #cf222e; }
+.toast-text { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.toast-when { flex: none; color: var(--fg-dim); font-size: 11px; }

@@ -7,8 +7,8 @@ import { setParamAtPath } from "../../shared/scriptDef";
 import { useEffect, useState, type MouseEvent } from "react";
 import { Switch } from "../components/Switch";
 import { ParamTreeFields } from "../components/ParamField";
-import { IconPen } from "../components/icons";
-import type { PopupApi, ScriptInfo, ScriptLayer, ScriptParams } from "./api";
+import { IconBell, IconPen } from "../components/icons";
+import type { PopupApi, ScriptInfo, ScriptLayer, ScriptParams, ToastActivity } from "./api";
 import { TAB_NOTICE, type TabStatus } from "../../shared/tabStatus";
 
 type Load = { state: "loading" } | { state: "ready"; scripts: ScriptInfo[] } | { state: "error" };
@@ -17,6 +17,8 @@ export function Popup({ api }: { api: PopupApi }) {
     const [load, setLoad] = useState<Load>({ state: "loading" });
     // scripts counted in the toolbar badge for the current tab
     const [active, setActive] = useState<ReadonlySet<string>>(new Set());
+    const [toasts, setToasts] = useState<Record<string, ToastActivity>>({});
+    const refreshToasts = () => api.toastActivity?.().then(setToasts, () => {});
     const refreshActive = () =>
         api.activeOnTab().then(
             (ids) => setActive((prev) => (sameIds(prev, ids) ? prev : new Set(ids))),
@@ -25,6 +27,7 @@ export function Popup({ api }: { api: PopupApi }) {
 
     const refresh = async () => {
         void refreshActive();
+        void refreshToasts();
         try {
             setLoad({ state: "ready", scripts: await api.listScripts() });
         } catch {
@@ -46,7 +49,7 @@ export function Popup({ api }: { api: PopupApi }) {
             }, 150);
         });
         // the page keeps making requests while the popup is open
-        const poll = setInterval(refreshActive, 1500);
+        const poll = setInterval(() => (refreshActive(), refreshToasts()), 1500);
         return () => {
             clearTimeout(t);
             clearInterval(poll);
@@ -84,7 +87,7 @@ export function Popup({ api }: { api: PopupApi }) {
             )}
             <ul id="script-list">
                 {visible.map((s) => (
-                    <ScriptRow key={s.id} script={s} api={api} onChanged={refresh} version={version} activeHere={active.has(s.id)} />
+                    <ScriptRow key={s.id} script={s} api={api} onChanged={refresh} version={version} activeHere={active.has(s.id)} toasts={toasts[s.id]} />
                 ))}
             </ul>
             {load.state === "error" && <div id="empty">Could not reach the extension — close and reopen the popup.</div>}
@@ -103,7 +106,7 @@ const NET_KINDS = new Set(["onRequest", "onResponseHeaders", "onResponseBody"]);
 /** network handlers run in a layer the user can set */
 const hasLayer = (s: ScriptInfo) => !!s.meta.routes?.some((r) => NET_KINDS.has(r.kind));
 
-function ScriptRow({ script, api, onChanged, version, activeHere }: { script: ScriptInfo; api: PopupApi; onChanged: () => void; version: number; activeHere: boolean }) {
+function ScriptRow({ script, api, onChanged, version, activeHere, toasts }: { script: ScriptInfo; api: PopupApi; onChanged: () => void; version: number; activeHere: boolean; toasts?: ToastActivity }) {
     const [open, setOpen] = useState(false);
     const [iconBroken, setIconBroken] = useState(false);
     useEffect(() => setIconBroken(false), [script.iconUrl]);
@@ -152,11 +155,25 @@ function ScriptRow({ script, api, onChanged, version, activeHere }: { script: Sc
                 <button className="btn-icon" title="Open in the Editor" aria-label="Edit" onClick={() => api.openManager(script.id)}>
                     <IconPen />
                 </button>
-                {(hasParams(script) || hasLayer(script)) && (
+                {toasts && api.muteToasts && (
+                    <button
+                        className={"btn-icon btn-mute" + (toasts.muted ? " muted" : "")}
+                        title={toasts.muted ? "Toasts are muted. Click to unmute" : "Mute this tweak's toasts"}
+                        aria-label={toasts.muted ? "Unmute toasts" : "Mute toasts"}
+                        aria-pressed={toasts.muted}
+                        onClick={async () => {
+                            await api.muteToasts!(script.id, !toasts.muted);
+                            onChanged();
+                        }}
+                    >
+                        <IconBell off={toasts.muted} />
+                    </button>
+                )}
+                {(hasParams(script) || hasLayer(script) || !!toasts) && (
                     <button
                         className="btn-fold"
                         title={open ? "Hide settings" : "Show settings"}
-                        aria-label="Toggle parameters"
+                        aria-label={toasts ? "Toggle details" : "Toggle parameters"}
                         aria-expanded={open}
                         onClick={() => setOpen(!open)}
                     >
@@ -164,7 +181,8 @@ function ScriptRow({ script, api, onChanged, version, activeHere }: { script: Sc
                     </button>
                 )}
             </li>
-            {open && <ParamFold scriptId={script.id} api={api} version={version} layered={hasLayer(script)} />}
+            {open && (hasParams(script) || hasLayer(script)) && <ParamFold scriptId={script.id} api={api} version={version} layered={hasLayer(script)} />}
+            {open && toasts && <ToastFold scriptId={script.id} toasts={toasts} api={api} onChanged={onChanged} />}
         </>
     );
 }
@@ -216,6 +234,63 @@ function ParamFold({ scriptId, api, version, layered }: { scriptId: string; api:
                         <option value="override">override</option>
                     </select>
                 </div>
+            )}
+        </li>
+    );
+}
+
+const ago = (t: number): string => {
+    const s = Math.max(0, Math.round((Date.now() - t) / 1000));
+    if (s < 60) return "just now";
+    if (s < 3600) return `${Math.floor(s / 60)} min ago`;
+    if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
+    return `${Math.floor(s / 86400)} d ago`;
+};
+
+const STATUS: Record<string, string> = { shown: "", queued: "waiting for a tab", expired: "expired", dropped: "not shown" };
+
+/** A tweak's recent toasts and its schedules. */
+function ToastFold({ scriptId, toasts, api, onChanged }: { scriptId: string; toasts: ToastActivity; api: PopupApi; onChanged: () => void }) {
+    const { history, schedules } = toasts;
+    const allPaused = schedules.length > 0 && schedules.every((r) => r.paused);
+    return (
+        <li className="param-fold toast-fold">
+            {schedules.length > 0 && (
+                <div className="toast-fold-head">
+                    <span>{schedules.length === 1 ? "1 schedule" : `${schedules.length} schedules`}{allPaused ? ", paused" : ""}</span>
+                    {api.pauseSchedules && (
+                        <button
+                            className="btn-fold"
+                            onClick={async () => {
+                                await api.pauseSchedules!(scriptId, !allPaused);
+                                onChanged();
+                            }}
+                        >
+                            {allPaused ? "Resume" : "Pause"}
+                        </button>
+                    )}
+                </div>
+            )}
+            {history.length === 0 ? (
+                <div className="toast-none">No toasts yet.</div>
+            ) : (
+                <ul className="toast-history">
+                    {history.map((h, i) => {
+                        const why = h.status === "dropped" && h.reason ? `not shown: ${h.reason}` : STATUS[h.status];
+                        const text = (
+                            <>
+                                <span className={`toast-kind ${h.kind ?? "info"}`} />
+                                <span className="toast-text">{h.title || h.message || h.id}</span>
+                                <span className="toast-when">{why ? `${ago(h.at)}, ${why}` : ago(h.at)}</span>
+                            </>
+                        );
+                        return (
+                            <li key={`${h.id}:${i}`} title={h.title && h.message ? h.message : undefined}>
+                                {h.url ? <a href={h.url} target="_blank" rel="noreferrer">{text}</a> : text}
+                            </li>
+                        );
+                    })}
+                </ul>
             )}
         </li>
     );

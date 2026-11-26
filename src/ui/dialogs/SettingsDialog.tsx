@@ -11,11 +11,14 @@ import { cleanFolderPath, copyPathHint, hostOs, type LaunchMode } from "../bundl
 import { BODY_CAP_KEY, BODY_CAP_MAX, BODY_CAP_MIN, DEFAULT_BODY_CAP } from "../../shared/settingsJson";
 import { DEFAULT_DATA_FOLDER } from "../../shared/tweakData";
 import { Overlay, useControl, useFlash } from "./controls";
+import { toastsApi, type ToastPrefs, type ToastPrefsPatch } from "../lib/toastsApi";
+import { TOAST_POSITIONS } from "../../shared/toast";
 
 const SECTIONS: [string, string][] = [
     ["settings-sec-appearance", "Appearance"],
     ["settings-sec-folder", "Synced folder"],
     ["settings-sec-tweaks", "Tweaks"],
+    ["settings-sec-toasts", "Toasts"],
     ["settings-sec-io", "Import / Export"],
     ["settings-sec-helper", "Local helper"],
     ["settings-sec-logging", "Logging"],
@@ -66,6 +69,7 @@ export function SettingsDialog() {
                         <Appearance />
                         <SyncedFolder />
                         <Tweaks />
+                        <Toasts open={snap.settings} />
                         <section id="settings-sec-io" className="settings-section">
                             <h3>Import / Export</h3>
                             <div className="setting">
@@ -325,6 +329,93 @@ function Tweaks() {
                     <input id="settings-data-folder" ref={input} type="text" spellCheck={false} placeholder={DEFAULT_DATA_FOLDER} />
                     {error && <p id="settings-data-folder-error" className="setting-help error">{error}</p>}
                     <p className="setting-help">The folder inside each tweak that holds its settings (enable switch, changed params) and saved stores. It isn't code: builds, tests and exports leave it out. Renaming it renames it in every tweak.</p>
+                </div>
+            </div>
+        </section>
+    );
+}
+
+const CORNER_NAMES: Record<string, string> = {
+    "top-left": "Top left",
+    "top-center": "Top center",
+    "top-right": "Top right",
+    "bottom-left": "Bottom left",
+    "bottom-center": "Bottom center",
+    "bottom-right": "Bottom right",
+};
+
+/** Toasts and schedules: the user's say over every tweak's toasts and polling. */
+function Toasts({ open }: { open: boolean }) {
+    const [prefs, setPrefs] = useState<ToastPrefs | null>(null);
+    const [paused, setPaused] = useState(false);
+    const [error, setError] = useState("");
+    useEffect(() => {
+        if (!open) return;
+        toastsApi.prefs().then(setPrefs, (e) => setError(String(e?.message ?? e)));
+        toastsApi.pausedAll().then(setPaused, () => {});
+    }, [open]);
+    const patch = (p: ToastPrefsPatch): void =>
+        void toastsApi.setPrefs(p).then(
+            (next) => (setPrefs(next), setError("")),
+            (e) => setError(String(e?.message ?? e))
+        );
+    const pauseAll = (on: boolean): void =>
+        void toastsApi.pauseAll(on).then(
+            () => setPaused(on),
+            (e) => setError(String(e?.message ?? e))
+        );
+    const p = prefs ?? {};
+    const sites = Object.keys(p.sites ?? {}).length;
+    const check = (id: string, key: "muteAll" | "sameLook" | "titleFlash" | "iconDot" | "flashWindow", on: boolean, label: string) => (
+        <label className="setting-check">
+            <input id={id} type="checkbox" checked={on} disabled={!prefs} onChange={(e) => patch({ [key]: e.target.checked })} /> {label}
+        </label>
+    );
+    return (
+        <section id="settings-sec-toasts" className="settings-section">
+            <h3>Toasts</h3>
+            {error && <p className="setting-help error">{error}</p>}
+            <div className="setting">
+                <span className="setting-label">Toasts</span>
+                <div className="setting-control">
+                    {check("settings-toasts-mute", "muteAll", !!p.muteAll, "Mute all toasts")}
+                    {check("settings-toasts-same-look", "sameLook", !!p.sameLook, "Use the same look for all toasts")}
+                    <p className="setting-help">Muted toasts aren't shown; the popup still lists them. The same look keeps each tweak's accent color only. To mute one tweak, use the bell in the popup.</p>
+                </div>
+            </div>
+            <div className="setting">
+                <label className="setting-label" htmlFor="settings-toasts-corner">Corner</label>
+                <div className="setting-control">
+                    <select id="settings-toasts-corner" value={p.corner ?? ""} disabled={!prefs} onChange={(e) => patch({ corner: (e.target.value || null) as ToastPrefs["corner"] | null })}>
+                        <option value="">Each tweak chooses</option>
+                        {TOAST_POSITIONS.map((c) => (
+                            <option key={c} value={c}>{CORNER_NAMES[c]}</option>
+                        ))}
+                    </select>
+                    {sites > 0 && (
+                        <div className="setting-inline">
+                            <button id="settings-toasts-forget-sites" onClick={() => patch({ sites: null })}>Forget dragged corners</button>{" "}
+                            <span className="muted">{sites === 1 ? "1 site" : `${sites} sites`}</span>
+                        </div>
+                    )}
+                    <p className="setting-help">Dragging toasts to another corner on a site keeps them there on that site.</p>
+                </div>
+            </div>
+            <div className="setting">
+                <span className="setting-label">While a toast waits</span>
+                <div className="setting-control">
+                    {check("settings-toasts-title-flash", "titleFlash", p.titleFlash !== false, "Flash the tab title")}
+                    {check("settings-toasts-icon-dot", "iconDot", p.iconDot !== false, "Put a dot on the tab icon")}
+                    {check("settings-toasts-flash-window", "flashWindow", !!p.flashWindow, "Flash the browser window when a tweak asks for it")}
+                </div>
+            </div>
+            <div className="setting">
+                <span className="setting-label">Schedules</span>
+                <div className="setting-control">
+                    <label className="setting-check">
+                        <input id="settings-schedules-pause" type="checkbox" checked={paused} onChange={(e) => pauseAll(e.target.checked)} /> Pause all schedules
+                    </label>
+                    <p className="setting-help">No tweak.every runs until you turn this off. The Schedules view in the Editor pauses one at a time.</p>
                 </div>
             </div>
         </section>
