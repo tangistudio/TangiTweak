@@ -589,6 +589,7 @@ import type { RanApi } from "../shared/netTypes";
                 // isolated code (MV2: here) saves params for its script (`paramOwner`) or that script's library
                 setParam: world === "isolated" && paramOwner ? (key, value, lib) => new Promise((r) => safeSend({ type: "scriptParamSet", scriptId: paramOwner, key, value, lib }, () => r())) : undefined,
                 fetch: world === "isolated" && scriptId ? (request, bypass) => l2call("iso.fetch", { url: location.href, request, bypass }, scriptId) : undefined,
+                toast: world === "isolated" && scriptId ? (spec) => l2call("iso.toast", { url: location.href, spec }, scriptId) : undefined,
             });
         for (const [order, h] of handlers.entries()) {
             let exposer = exposers.get(h.scriptId);

@@ -11,7 +11,8 @@ import { log } from "../logs";
 import { scriptStorageGet, scriptStorageSet, setParamFromCode } from "../scriptStore";
 import { dataFilesSnapshot } from "../dataFiles";
 import { packagesSnapshot } from "../packageImports";
-import { backgroundHub } from "../stores";
+import { backgroundHub, gateBackgroundFetch } from "../stores";
+import { showToast } from "../toastCenter";
 import { backgroundFetch } from "../ttFetch";
 
 export interface ScriptLike {
@@ -63,7 +64,11 @@ export function compileMv2(scripts: ScriptLike[], paramValues: { [scriptId: stri
             store: (name, initial, persist) => backgroundHub().store(s.id, name, initial, persist),
             tabStore: (name, initial) => backgroundHub().tabStore(s.id, name, initial),
             pageStore: (name, initial) => backgroundHub().pageStore(s.id, name, initial),
-            fetch: (request, bypass) => backgroundFetch(request, { bypass, scriptId: s.id, scriptName: s.name }),
+            fetch: async (request, bypass) => {
+                await gateBackgroundFetch(s.id, request.url);
+                return backgroundFetch(request, { bypass, scriptId: s.id, scriptName: s.name });
+            },
+            toast: (spec) => showToast({ s: s.id }, spec),
             setParam: (key, value) => setParamFromCode(s.id, key, value),
         });
     resolveFrom = makeModuleResolver(

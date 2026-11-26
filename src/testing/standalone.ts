@@ -16,6 +16,7 @@ import { proxy } from "valtio/vanilla";
 import { resolveParamValues, type ParamTree } from "../shared/scriptDef";
 import { scriptEnv } from "../shared/scriptEnv";
 import { checkStoreId, removedReplaceResponse } from "../shared/tweakApi";
+import { normalizeToastStyle, toastCaller, type ToastSpec } from "../shared/toast";
 import type { StoreIdentity } from "./index";
 
 export interface StoreRecord {
@@ -35,6 +36,8 @@ interface Registry {
     /** every store made, in order (resets) */
     all: object[];
     handlers: RecordedHandler[];
+    /** what `tweak.toast` showed, checked, in order (resets) */
+    toasts: ToastSpec[];
 }
 
 const REGISTRY = Symbol.for("tangitweak.stores");
@@ -42,7 +45,9 @@ const REGISTRY = Symbol.for("tangitweak.stores");
 /** the stores made by this package in this test file (one Vitest module graph) */
 export function storeRegistry(): Registry {
     const g = globalThis as any;
-    return (g[REGISTRY] ??= { stores: new WeakMap(), all: [], handlers: [] });
+    const reg = (g[REGISTRY] ??= { stores: new WeakMap(), all: [], handlers: [], toasts: [] });
+    reg.toasts ??= [];
+    return reg;
 }
 
 function clone<T>(v: T): T {
@@ -56,6 +61,7 @@ function clone<T>(v: T): T {
 /** put every store made here back to its starting value */
 export function resetStores(): void {
     const reg = storeRegistry();
+    reg.toasts.length = 0;
     for (const s of reg.all) {
         const rec = reg.stores.get(s)!;
         setStore(s, clone(rec.initial));
@@ -163,6 +169,16 @@ export const tweak: any = {
     onSite: record("onSite"),
     onPage: record("onPage"),
     onOverlay: record("onOverlay"),
+    every: (interval: unknown, handler: unknown) => void storeRegistry().handlers.push({ api: "every", route: interval, handler }),
+    onToastAction: (handler: unknown) => void storeRegistry().handlers.push({ api: "onToastAction", route: undefined, handler }),
+    toastPane: (name: unknown, handler: unknown) => void storeRegistry().handlers.push({ api: "toastPane", route: name, handler }),
+    toastStyle: (style: unknown) => void normalizeToastStyle(style),
+    toast: toastCaller({
+        send: async (spec) => {
+            storeRegistry().toasts.push(spec);
+            return { id: spec.id, status: "shown" };
+        },
+    }),
     params: (defs: ParamTree) => Object.freeze(resolveParamValues(defs, undefined)),
     storage: {
         get: async (key: string) => clone(storage.get(key)),

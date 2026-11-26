@@ -283,6 +283,7 @@ import { FrameKeyOffers } from "../shared/frameKeys";
                 },
                 setParam: (key, value, lib) => linkUp().then((ep) => ep.call("param.set", { key, value, lib }, s)).then(() => undefined),
                 fetch: (request, bypass) => linkUp().then((ep) => ep.call("fetch", { request, bypass }, s)),
+                toast: (spec) => linkUp().then((ep) => ep.call("toast", { spec }, s)),
             });
         const consoleProxy = makeScriptConsole((level, source, text) => log(level, scriptLogLine(init.name, source, text)));
         let dom: PageDocumentHandler[];

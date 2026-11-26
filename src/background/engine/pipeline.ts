@@ -57,6 +57,9 @@ import { onUserScriptsStatus, runSiteUnits, syncUserScripts, userScriptsStatus, 
 import { USER_SCRIPTS_OFF, userScriptsProblem, type UserScriptsStatus } from "../../shared/userScriptsStatus";
 import { contentHash } from "../../shared/folderSync";
 import { reactChunkSource } from "../reactChunk";
+import { createSchedules } from "./schedules";
+import { inProcessRunner, sandboxRunner } from "./scheduleRunners";
+import { dismissToasts, getToastPrefs, muteToasts, restyleToasts, setToastPrefs, showToast, startToastCenter, toastHistory } from "./toastCenter";
 
 const FILTER: chrome.webRequest.RequestFilter = { urls: ["<all_urls>"] };
 
@@ -768,7 +771,18 @@ export function createPipeline(
         return { bundle: { count: routes.length, routes, textTypes: getTextTypes(), domHandlers, isoHandlers, overlays, libs, isoLibs, rev, ...(isoOff ? { isoOff } : {}), ...(siteOff ? { siteOff } : {}) }, overlayRuns, isoRuns, previewWhy };
     }
     installPages();
+    // tweak.every and tweak.toast (alarms listen from here on: an alarm can be what woke the service worker)
+    const schedules = createSchedules(__MV3__ ? sandboxRunner() : inProcessRunner());
+    let toastScripts = new Map<string, Script>();
+    startToastCenter({
+        script: async (s) => {
+            const x = toastScripts.get(s) ?? (await getScript(s));
+            return x && { name: x.meta.name, enabled: x.enabled, meta: x.meta };
+        },
+        runAction: (s, event) => schedules.toastAction(s, event),
+    });
     setupOverlayLinks({
+        toast: showToast,
         overlayRuns: async (url) => (await hookBundle(url, true)).overlayRuns,
         isoRuns: async (url, top) => (await hookBundle(url, top)).isoRuns,
         isoScripts: async (url, top) => {
@@ -1175,6 +1189,12 @@ export function createPipeline(
         helperStrategy.reload(scripts, paramValues);
         rulesApplied = rulesStrategy.reload(scripts, paramValues);
         settledSeq = seq;
+        // toasts of tweaks turned off or deleted go; the others take a changed toastStyle
+        const wasOn = [...toastScripts.values()].filter((x) => x.enabled).map((x) => x.id);
+        toastScripts = new Map(scripts.map((x) => [x.id, x]));
+        for (const id of wasOn) if (!toastScripts.get(id)?.enabled) dismissToasts(id);
+        for (const x of scripts) if (x.enabled) restyleToasts(x.id, x.meta.toast?.style);
+        void schedules.reload(scripts, paramValues).catch((e: any) => dlogLevel("pipeline", "warn", `schedules: ${e?.message || e}`));
         dlogLevel("compile", "debug", `timing: reload — ${Math.round(performance.now() - t0)} ms (load ${Math.round(t1 - t0)}, analyze ${Math.round(t2 - t1)}, strategies ${Math.round(performance.now() - t2)})`);
         refreshBodyWatch(scripts);
         setSkipRoutes(scripts);
@@ -1208,7 +1228,35 @@ export function createPipeline(
         chrome.permissions?.onRemoved?.addListener(recheck);
     }
     // rules handlers may read a global or tab store: a change re-probes
-    const offStores = storeOwner.onChange((s, _name, page) => (page === undefined || isTabScope(page)) && rulesStrategy.storeChanged(s));
+    const offStores = storeOwner.onChange((s, _name, page) => {
+        if (page === undefined) schedules.storeChanged(s);
+        if (page === undefined || isTabScope(page)) rulesStrategy.storeChanged(s);
+    });
+    // the Editor, popup and Settings: schedules and toasts
+    const onToastMessage = (msg: any, _sender: chrome.runtime.MessageSender, sendResponse: (r: any) => void): boolean => {
+        const t = msg?.type;
+        if (typeof t !== "string" || !(t.startsWith("schedules.") || t.startsWith("toasts."))) return false;
+        const s = typeof msg.scriptId === "string" ? msg.scriptId : undefined;
+        const index = typeof msg.index === "number" ? msg.index : undefined;
+        const answer: Promise<unknown> | undefined =
+            t === "schedules.list" ? schedules.list(s)
+            : t === "schedules.runNow" && s && index !== undefined ? schedules.runNow(s, index)
+            : t === "schedules.pause" && s ? schedules.setPaused(s, index, !!msg.paused)
+            : t === "schedules.pauseAll" ? schedules.setPauseAll(!!msg.paused)
+            : t === "schedules.pausedAll" ? schedules.pausedAll()
+            : t === "toasts.prefs" ? getToastPrefs()
+            : t === "toasts.setPrefs" ? setToastPrefs(msg.prefs ?? {})
+            : t === "toasts.mute" && s ? muteToasts(s, !!msg.muted)
+            : t === "toasts.history" ? Promise.resolve(toastHistory(s))
+            : undefined;
+        if (!answer) return false;
+        answer.then(
+            (result) => sendResponse({ result: result ?? null }),
+            (e) => sendResponse({ error: String(e?.message ?? e) })
+        );
+        return true;
+    };
+    chrome.runtime.onMessage.addListener(onToastMessage);
     // ownership moves between the helper strategy and the other strategies
     const offProcess = onHelperActiveChange(() => void reload());
     const onStorage = (changes: Record<string, unknown>, area: string) => {

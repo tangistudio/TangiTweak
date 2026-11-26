@@ -36,6 +36,8 @@ import { fetchFor, pageFetchFor, storeOwner } from "./stores";
 import { reactChunkSource } from "../reactChunk";
 import { pages, pagesReady } from "./pages";
 import { addBypass, addBypassRule } from "./bypass";
+import type { ToastResult } from "../../shared/toast";
+import type { ToastFrom } from "./toastCenter";
 
 /** a script's overlay as its frame runs it (pipeline.ts `hookBundle`) */
 export interface OverlayRun {
@@ -129,7 +131,12 @@ export interface OverlayLinkDeps {
     ran?(tabId: number, s: string, name: string, api: string, url: string): void;
     /** the Editor preview: script `s`'s overlay with every onOverlay route, whether or not it matches (throws why there's none) */
     previewRun?(s: string): Promise<OverlayRun>;
+    /** `tweak.toast` from page, overlay or preview code: the toast center checks and shows it */
+    toast?(from: ToastFrom, spec: unknown): Promise<ToastResult>;
 }
+
+/** `tweak.toast` where the toast center isn't set up (tests) */
+const noToast = (): Promise<ToastResult> => Promise.reject(new Error("tweak.toast isn't available here"));
 
 let overlayRuns: (url: string) => Promise<Map<string, OverlayRun>> = async () => new Map();
 let deps: OverlayLinkDeps = { overlayRuns };
@@ -308,6 +315,11 @@ export function serveLink(link: BridgeLink): void {
         if (!(await deps.isoScripts?.(url, link.frameId === 0))?.has(s)) throw new Error("iso.fetch: this script has no isolated onPage code here");
         return pageFetchFor(s, request, !!bypass);
     });
+    link.ep.handle("iso.toast", async ({ url, spec }, s) => {
+        if (__MV3__ || s === undefined || typeof url !== "string" || !sameOrigin(url, link.port.sender?.url)) throw new Error("iso.toast: refused");
+        if (!(await deps.isoScripts?.(url, link.frameId === 0))?.has(s)) throw new Error("iso.toast: this script has no isolated onPage code here");
+        return (deps.toast ?? noToast)({ s, tabId: link.tabId }, spec);
+    });
 
     link.ep.handle("overlay.open", async ({ nonce, url }, s) => {
         if (s === undefined || link.frameId !== 0) throw new Error("overlay.open: overlays are top-frame only");
@@ -353,6 +365,10 @@ export function serveLink(link: BridgeLink): void {
     link.ep.handle("fetch", (a, s) => {
         granted("fetch", s);
         return fetchFor(s!, a.request, !!a.bypass);
+    });
+    link.ep.handle("toast", (a, s) => {
+        granted("toast", s);
+        return (deps.toast ?? noToast)({ s: s!, tabId: link.tabId }, a?.spec);
     });
     // a page fetch the bridge is about to make for the overlay: no script's handlers touch it
     link.ep.handle("bypass.add", async (a, s) => {
@@ -480,6 +496,10 @@ export function serveIsoLink(link: IsoLink): void {
     ep.handle("fetch", (a, s) => {
         if (!bound(s)) throw new Error("fetch: refused");
         return pageFetchFor(s, a.request, !!a.bypass);
+    });
+    ep.handle("toast", (a, s) => {
+        if (!bound(s)) throw new Error("toast: refused");
+        return (deps.toast ?? noToast)({ s, tabId }, a?.spec);
     });
     // isolated code calls its overlay (top frame only)
     ep.on("rpc.call", (call, s) => {
@@ -611,6 +631,7 @@ export function servePreviewLink(ep: Endpoint, tabId?: number): void {
         return storeOf(link.grant!).call("store.sub", a, s);
     });
     ep.handle("fetch", (a, s) => fetchFor(granted("fetch", s).s, a.request, !!a.bypass));
+    ep.handle("toast", (a, s) => (deps.toast ?? noToast)({ s: granted("toast", s).s, preview: true }, a?.spec));
     ep.handle("storage.get", async ({ key }, s) => {
         const g = granted("storage.get", s);
         if (typeof key !== "string") throw new Error("storage.get: refused");

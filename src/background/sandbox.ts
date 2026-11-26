@@ -38,6 +38,7 @@ import type { Strategy } from "../shared/route";
 import { Endpoint } from "../shared/wire";
 import { ReplicaHub } from "../shared/storeReplica";
 import { ensureBuiltins } from "../shared/builtins";
+import { readInterval, runEvery, runToastAction } from "../shared/everyRun";
 
 /**
  * Environment parity with the MV2 background page: sandboxed pages get NO
@@ -189,13 +190,14 @@ function compileSignature(scripts: PlainScript[], paramValues: Record<string, an
  * the param values change (runs are per-request — reuse the handlers).
  */
 /** a script's tweak.globalStore / tweak.pageStore (hub replicas) and tweak.fetch (run by the SW) */
-function liveApis(sid: string): Pick<ResApiOverrides, "store" | "tabStore" | "pageStore" | "fetch" | "setParam"> {
+function liveApis(sid: string): Pick<ResApiOverrides, "store" | "tabStore" | "pageStore" | "fetch" | "setParam" | "toast"> {
     return {
         setParam: (key, value) => reverseCall({ op: "paramSet", scriptId: sid, key, value }).then(() => undefined),
         store: (name, initial, persist) => hub.store(sid, name, initial, persist),
         tabStore: (name, initial) => hub.tabStore(sid, name, initial),
         pageStore: (name, initial) => hub.pageStore(sid, name, initial),
         fetch: (request, bypass) => link.call("fetch", { request, bypass }, sid),
+        toast: (spec) => link.call("toast", { spec }, sid),
     };
 }
 
@@ -321,6 +323,24 @@ function run(scripts: PlainScript[], paramValues: Record<string, any>, op: BodyO
     return runOp(list, op, args, { log, debug: (m) => sandboxLog(m, "debug") });
 }
 
+// ---- tweak.every and tweak.onToastAction (src/shared/everyRun.ts) ----
+
+/** One background hook of one script: an `every` run, an interval read or an `onToastAction`. */
+async function hook(scripts: PlainScript[], paramValues: Record<string, any>, a: any): Promise<any> {
+    ensureCompiled(scripts, paramValues ?? {});
+    const c = cache.get(a?.scriptId);
+    if (!c || !c.s.enabled) return { error: "this tweak is off or gone" };
+    if (c.compiled.error) return { error: c.compiled.error.split("\n")[0] };
+    const h = c.compiled.handlers;
+    if (a.hook === "every") return { outcome: await runEvery(h, a.index, { reason: a.reason, lastRun: a.lastRun }) };
+    if (a.hook === "interval") return { period: readInterval(h, a.index) };
+    if (a.hook === "toastAction") {
+        await runToastAction(h, a.event);
+        return { ok: true };
+    }
+    return { error: `unknown hook ${a.hook}` };
+}
+
 // ---- rules strategy: run each rules handler once (src/shared/rulesProbe.ts) ----
 
 async function rules(scripts: PlainScript[], paramValues: Record<string, any>, tabIds?: number[], storeSnaps?: Record<string, any>): Promise<{ results: Record<string, ScriptRules> }> {
@@ -393,7 +413,10 @@ window.addEventListener("message", async (event) => {
         noteEpoch(data.payload.epoch);
         if (typeof data.payload.dataSig === "string" && data.payload.dataSig !== dataSig) result = { needDataFiles: true };
         else if (op === "ping") result = { pong: true };
-        else if (op === "analyze" || op === "run" || op === "rules") {
+        else if (op === "hook") {
+            await prepare(scripts, paramValues);
+            result = await hook(scripts, paramValues, args);
+        } else if (op === "analyze" || op === "run" || op === "rules") {
             await prepare(scripts, paramValues);
             if (op === "analyze") result = analyze(scripts, paramValues);
             else if (op === "run") result = await run(scripts, paramValues, bodyOp, args);

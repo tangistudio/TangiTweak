@@ -201,6 +201,7 @@ export function attachFrame(win: Window | null | undefined): void {
     ep.on("store.set", (a, targetS) => proven && up.push("store.set", a, targetS ?? s));
     ep.handle("store.sub", mine((a: ReqOf<"store.sub">, targetS) => up.call("store.sub", a, targetS ?? s)));
     ep.handle("fetch", mine((a: ReqOf<"fetch">) => up.call("fetch", { request: a.request, bypass: !!a.bypass }, s)));
+    ep.handle("toast", mine((a: ReqOf<"toast">) => up.call("toast", { spec: a.spec }, s)));
     ep.handle(
         "pagefetch",
         mine((a: ReqOf<"pagefetch">) => {

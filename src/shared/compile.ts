@@ -26,7 +26,7 @@
 
 import { defaultMeta, finishMeta, type EveryMeta, type ResMeta, type ToastMeta } from "./metaParser";
 import { EVERY_MAX, everyPeriod } from "./every";
-import { mergeToastStyle, normalizeToast, normalizeToastStyle, repeatedStyleKeys, type ToastInput, type ToastResult, type ToastSpec, type ToastStyle } from "./toast";
+import { mergeToastStyle, normalizeToastStyle, repeatedStyleKeys, toastCaller, TOAST_AT_TOP, type ToastResult, type ToastSpec, type ToastStyle } from "./toast";
 import { PARAM_TYPES, resolveParamValues, serializableParamTree, type ParamDef, type ParamTree } from "./scriptDef";
 import { paramsProxy, PARAM_AT_TOP, PARAM_NOT_HERE } from "./paramsProxy";
 import { parseShortcut } from "./shortcut";
@@ -234,6 +234,8 @@ export interface ResApiOverrides {
      * (this context can't show toasts).
      */
     toast?: (spec: ToastSpec) => Promise<ToastResult>;
+    /** Which tab a toast goes to when it doesn't say (`where`): `"this"` in page and overlay code. Default `"active"`. */
+    toastWhere?: string;
 }
 
 /**
@@ -255,7 +257,7 @@ export function makeScriptOverrides(
     logSink: (scriptId: string, level: ScriptLogLevel, source: string, text: string) => void,
     paramValues?: Record<string, any>,
     importModule?: (spec: string) => any,
-    extra?: Pick<ResApiOverrides, "store" | "tabStore" | "pageStore" | "fetch" | "setParam">
+    extra?: Pick<ResApiOverrides, "store" | "tabStore" | "pageStore" | "fetch" | "setParam" | "toast">
 ): ResApiOverrides {
     return {
         ...extra,
@@ -1211,17 +1213,7 @@ function makeShim(owner: ReturnType<typeof createOwner>, overrides: ResApiOverri
         }
         top.toastStyle = mergeToastStyle(top.toastStyle, next);
     };
-    const toast = (input: ToastInput): Promise<ToastResult> => {
-        if (collectors.length) return Promise.reject(new Error("tweak.toast: call it from a handler (tweak.every, onRequest, onToastAction, …), not at the tweak's top level, which runs on every save and reload"));
-        let spec: ToastSpec;
-        try {
-            spec = normalizeToast(input);
-        } catch (e) {
-            return Promise.reject(e);
-        }
-        if (!overrides?.toast) return Promise.reject(new Error("tweak.toast isn't available here"));
-        return overrides.toast(spec);
-    };
+    const toast = toastCaller({ send: overrides?.toast, defaultWhere: overrides?.toastWhere, blocked: () => (collectors.length ? TOAST_AT_TOP : undefined) });
     const run = storeRun(makeStores(overrides));
     const host = tweakHost((file) => ({
         every,

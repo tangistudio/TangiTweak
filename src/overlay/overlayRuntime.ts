@@ -159,6 +159,8 @@ export async function startOverlay(ep: Endpoint, init: OverlayInit, env: Overlay
         pageStore: (name, initial) => hub.pageStore(s, name, initial, init.page),
         siteStore: (name, initial) => site.store(s, name, initial),
         fetch: (request, bypass) => ep.call("fetch", { request, bypass }),
+        toast: (spec) => ep.call("toast", { spec }),
+        toastWhere: "this",
         pageFetch: page,
     };
     if (env.patchFetch !== false) {

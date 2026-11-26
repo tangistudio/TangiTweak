@@ -445,6 +445,19 @@ export async function runBodyOp(
 }
 
 /**
+ * MV3: one background hook of one script in the sandbox: a `tweak.every`
+ * run, an interval read or the `tweak.onToastAction` handlers
+ * (src/shared/everyRun.ts). Throws when the sandbox can't run it.
+ */
+export async function runHookOp(scripts: PlainScript[], paramValues: Record<string, any>, args: Record<string, any>): Promise<any> {
+    await ensureOffscreen();
+    const out = await sandboxCallWithData({ op: "hook", scripts, paramValues, args });
+    if (!out) throw new Error("the sandbox didn't answer");
+    if (out.error) throw new Error(out.error);
+    return out;
+}
+
+/**
  * MV3: run every enabled script's `rules` handlers once in the sandbox and
  * translate them (src/shared/rulesProbe.ts). null on failure.
  */

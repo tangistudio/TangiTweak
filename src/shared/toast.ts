@@ -195,7 +195,7 @@ export function isWebUrl(url: string): boolean {
  *
  * @throws When an option is wrong: an unknown kind, a non-http(s) `url`, too many actions, a bad duration, `data` over {@link TOAST_MAX_DATA_BYTES}.
  */
-export function normalizeToast(input: ToastInput): ToastSpec {
+export function normalizeToast(input: ToastInput, defaultWhere = "active"): ToastSpec {
     const o: ToastOptionsInput = isStr(input) ? { message: input } : input;
     if (!o || typeof o !== "object" || Array.isArray(o)) throw new Error("tweak.toast: pass a message or { title, message, … }");
     const kind = o.kind ?? "info";
@@ -207,7 +207,7 @@ export function normalizeToast(input: ToastInput): ToastSpec {
         id: o.id === undefined ? newToastId() : String(text(o.id, "id", 100)),
         kind,
         duration: "sticky",
-        where: "active",
+        where: defaultWhere,
         ttl: TOAST_DEFAULT_TTL_MS,
         attention: "tab",
     };
@@ -359,4 +359,28 @@ export function resolveToastPosition(o: { site?: ToastPosition; global?: ToastPo
     const user = o.site ?? o.global;
     if (user) return { position: user, userCorner: true };
     return { position: o.toast ?? o.tweak ?? "bottom-right", userCorner: false };
+}
+
+/** Why `tweak.toast` refuses at a tweak's top level. */
+export const TOAST_AT_TOP = "tweak.toast: call it from a handler (tweak.every, onRequest, onPage, onToastAction and so on), not at the tweak's top level, which runs on every save and reload";
+/** Why `tweak.toast` refuses where no context can show one. */
+export const TOAST_NOT_HERE = "tweak.toast isn't available here";
+
+/**
+ * `tweak.toast` for a context: checks the input, then hands it to `send`.
+ * `blocked()` says why it can't run now (at top level, say), if it can't.
+ */
+export function toastCaller(o: { send?: (spec: ToastSpec) => Promise<ToastResult>; blocked?: () => string | undefined; defaultWhere?: string }): (input: ToastInput) => Promise<ToastResult> {
+    return (input) => {
+        const why = o.blocked?.();
+        if (why) return Promise.reject(new Error(why));
+        let spec: ToastSpec;
+        try {
+            spec = normalizeToast(input, o.defaultWhere);
+        } catch (e) {
+            return Promise.reject(e);
+        }
+        if (!o.send) return Promise.reject(new Error(TOAST_NOT_HERE));
+        return o.send(spec);
+    };
 }

@@ -27,6 +27,7 @@ import { libBodyRunning } from "./scriptImports";
 import { paramsProxy, PARAM_AT_TOP, PARAM_NOT_HERE, PARAM_ON_SITE } from "./paramsProxy";
 import { scriptEnv } from "./scriptEnv";
 import { claimStoreName, storePersist } from "./storeOps";
+import { toastCaller, TOAST_AT_TOP, type ToastResult, type ToastSpec } from "./toast";
 import { removedReplaceResponse, storeRun, tweakHost, tweakStores, type NamedStores, type StoreRun, type TweakHost } from "./tweakApi";
 
 export interface PageDocumentHandler {
@@ -72,6 +73,8 @@ export interface PageShimOptions {
     setParam?: (key: string, value: any, lib?: string) => Promise<void>;
     /** `tweak.fetch` in onPage code: the background fetches, to the tweak's `"tangitweak.connect"` hosts only (absent: it rejects) */
     fetch?: (request: WireRequest, bypass: boolean) => Promise<WireResponse>;
+    /** `tweak.toast` in onPage code: the background's toast center shows it (absent: it rejects; onSite code never has it) */
+    toast?: (spec: ToastSpec) => Promise<ToastResult>;
 }
 
 /** onPage's `tweak.fetch`: from the background (relative URLs resolve against the page) */
@@ -95,6 +98,7 @@ export interface PageStores {
 
 const noStore = unusableStore(SITE_NO_STORES);
 const libSiteStore = unusableStore(LIB_SITE_STORE);
+const NO_TOAST = "tweak.toast isn't available in onSite code (the page's own scripts could use it); call it from onPage code";
 const NO_FETCH = "tweak.fetch isn't available in onSite code (the page's own scripts could use it) — fetch from onPage code, or use the page's fetch";
 /** a library's handles: its handlers don't run */
 const LIB_HANDLE = "handles from an imported library don't connect; register the handler in the script itself";
@@ -177,6 +181,16 @@ export function makePageShim(o: PageShimOptions): PageShim {
         replaceResponse: removedReplaceResponse,
         onResponseBody: inert,
         fetch: o.fetch ? pageTweakFetch(o.fetch) : () => Promise.reject(new Error(NO_FETCH)),
+        // background-only registrations: the background's compile collects them
+        every: inert,
+        onToastAction: inert,
+        toastPane: inert,
+        toastStyle: inert,
+        toast: toastCaller({
+            send: world === "page" ? undefined : o.toast,
+            blocked: () => (world === "page" ? NO_TOAST : running || libBodyRunning() ? TOAST_AT_TOP : undefined),
+            defaultWhere: "this",
+        }),
         onSite: register("onSite"),
         onPage: register("onPage"),
         onOverlay: register("onOverlay"),

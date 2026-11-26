@@ -20,6 +20,7 @@ import { ensureDataFiles } from "./dataFiles";
 import { bundleOf, dataReader } from "../../shared/tweakBundle";
 import { connectAllows, connectOf } from "../../shared/packageMetadata";
 import { pages, pagesReady } from "./pages";
+import { showToast } from "./toastCenter";
 
 const ownerLog = (s: string, msg: string, level: "info" | "warn" | "error") => log(-1, msg, level, s);
 
@@ -111,8 +112,34 @@ async function nameOf(scriptId: string): Promise<string> {
     return (await getScript(scriptId).catch(() => undefined))?.meta.name ?? scriptId;
 }
 
+/** Checks a background `tweak.fetch` before it goes out (schedules.ts: limits for `tweak.every` runs). */
+type FetchGate = (scriptId: string, url: string) => Promise<void>;
+let fetchGate: FetchGate | null = null;
+
+/** Sets the check every background `tweak.fetch` passes first. */
+export function setBackgroundFetchGate(fn: FetchGate | null): void {
+    fetchGate = fn;
+}
+
+/** Runs the background fetch check (MV2 calls it before its in-process fetch). */
+export function gateBackgroundFetch(scriptId: string, url: string): Promise<void> {
+    return fetchGate ? fetchGate(scriptId, url) : Promise.resolve();
+}
+
+/**
+ * The hosts a script's package.json lets it reach (`"tangitweak.connect"`),
+ * or undefined when the script isn't in a package (a local Editor script).
+ */
+export async function connectOfScript(scriptId: string): Promise<string[] | undefined> {
+    const script = await getScript(scriptId);
+    if (!script) return [];
+    const bundle = bundleOf(script.meta.name, dataReader(await ensureDataFiles()));
+    return bundle ? connectOf(bundle.pkg) : undefined;
+}
+
 /** `tweak.fetch(..., { from: "background" })` for a script */
 export async function fetchFor(scriptId: string, request: WireRequest, bypass: boolean): Promise<WireResponse> {
+    await gateBackgroundFetch(scriptId, request.url);
     return backgroundFetch(request, { bypass, scriptId, scriptName: await nameOf(scriptId) });
 }
 
@@ -177,6 +204,10 @@ if (__MV3__) {
     l1.handle("fetch", (a, s) => {
         if (!s) throw new Error("fetch: no script");
         return fetchFor(s, a.request, !!a.bypass);
+    });
+    l1.handle("toast", (a, s) => {
+        if (!s) throw new Error("toast: no script");
+        return showToast({ s }, a?.spec);
     });
     chrome.runtime.onMessage.addListener((msg: any) => {
         if (msg?.type === "__resWire") l1.receive(unpackBytes(msg.msg));

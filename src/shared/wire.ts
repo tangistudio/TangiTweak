@@ -765,17 +765,25 @@ export interface WireOps {
     };
     /**
      * `tweak.toast` from code that isn't the background's: L1 (the MV3
-     * sandbox), L6 (MV3 isolated onPage code) and L2 (an overlay, and
-     * MV2/Firefox isolated onPage code). The background's toast center
-     * checks that script `s` runs there, then routes, rate-limits and
-     * queues the toast like one from background code.
+     * sandbox), L6 (MV3 isolated onPage code) and L2 (an overlay). The
+     * background's toast center checks that script `s` runs there, checks
+     * the toast again, then routes, rate-limits and queues it like one from
+     * background code.
      */
     toast: {
         req: {
-            /** The checked toast. */
+            /** The toast, checked by the caller's shim. */
             spec: ToastSpec;
-            /** L2 (MV2/Firefox isolated code): the frame's URL, checked like `iso.fetch`. */
-            url?: string;
+        };
+        res: ToastResult;
+    };
+    /** L2: `tweak.toast` from MV2/Firefox isolated onPage code, which the bridge runs. Checked like `iso.fetch`. */
+    "iso.toast": {
+        req: {
+            /** The frame's URL. */
+            url: string;
+            /** The toast, checked by the caller's shim. */
+            spec: ToastSpec;
         };
         res: ToastResult;
     };
