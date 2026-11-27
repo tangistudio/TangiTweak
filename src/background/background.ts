@@ -302,7 +302,8 @@ function saveBadge(): void {
     if (badgeSaveTimer || !chrome.storage?.session) return;
     badgeSaveTimer = setTimeout(() => {
         badgeSaveTimer = null;
-        chrome.storage.session.set({ [BADGE_KEY]: badge.save() }).catch(() => {});
+        // Firefox MV2's chrome.* returns no promise: its browser.* does
+        ((globalThis as any).browser ?? chrome).storage.session.set({ [BADGE_KEY]: badge.save() }).catch(() => {});
     }, 300);
 }
 

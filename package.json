@@ -17,6 +17,7 @@
     "build:helper": "cargo build --release --manifest-path helper/Cargo.toml",
     "test:helper": "cargo test --manifest-path helper/Cargo.toml",
     "test:e2e": "tsx test/mv3.e2e.ts",
+    "test:smoke": "tsx test/smoke.e2e.ts",
     "test:e2e:samples": "tsx test/samples.e2e.ts",
     "screenshots": "tsx scripts/screenshots.ts"
   },
@@ -29,6 +30,7 @@
     "@types/react-dom": "^19.3.0",
     "happy-dom": "^21.0.3",
     "playwright-core": "^1.64.0",
+    "puppeteer-core": "^24.43.1",
     "rolldown": "^1.0.0-beta.3",
     "tsx": "^4.23.15",
     "typescript": "^6.0.3",

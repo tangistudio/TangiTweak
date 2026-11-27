@@ -9,6 +9,7 @@ npm run watch        # rebuild on change
 npm test             # vitest unit tests
 npm run typecheck
 npm run test:e2e     # the main browser e2e suite (test/mv3.e2e.ts, see below)
+npm run test:smoke   # the same few checks on Chrome and Firefox (test/smoke.e2e.ts)
 ```
 
 The e2e suites (`test/*.e2e.ts`) launch a fresh Chromium, load `dist-mv3/`
@@ -19,6 +20,19 @@ or set `E2E_CHROMIUM`:
 
 ```bash
 E2E_CHROMIUM="/path/to/Chromium" npm run test:e2e
+```
+
+`test/smoke.e2e.ts` is the cross-browser suite. It runs one set of checks on
+Chrome (`dist-mv3/`, over CDP) and on Firefox (`dist-firefox/`, over WebDriver
+BiDi): the background answers, a tweak saves and is listed, the `page`
+strategy, the browser's network strategy (`debugger` on Chrome, `extension` on
+Firefox) and onPage code after the user scripts grant. `test/e2eBrowsers.ts`
+launches either browser through puppeteer and keeps what differs per browser
+in one place, so a check written once runs on both. Firefox is the installed
+one, or set `E2E_FIREFOX`. `E2E_BROWSERS=firefox` (or `chrome`) runs one:
+
+```bash
+E2E_BROWSERS=firefox E2E_FIREFOX="/path/to/firefox" npm run test:smoke
 ```
 
 Load the extension from `dist-mv3/` ("Load unpacked") in Chrome, or

@@ -247,10 +247,14 @@ const routeWarnings = new Map<string, string[]>();
 let errorsLoaded: Promise<void> | null = null;
 let errorsTimer: ReturnType<typeof setTimeout> | null = null;
 
-/** MV3: survive service-worker restarts via session storage (cleared with the browser session). */
+/**
+ * MV3: survive service-worker restarts via session storage (cleared with the browser session).
+ * Firefox MV2's `chrome.*` takes callbacks only (no promise), its `browser.*` returns promises.
+ */
 function sessionArea(): chrome.storage.StorageArea | null {
     try {
-        return (globalThis as any).chrome?.storage?.session ?? null;
+        const g = globalThis as any;
+        return (g.browser ?? g.chrome)?.storage?.session ?? null;
     } catch {
         return null;
     }
