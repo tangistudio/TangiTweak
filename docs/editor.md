@@ -591,6 +591,10 @@ In the Editor it gets completions, hover descriptions and validation.
 }
 ```
 
+`debuggerFriendlyOverlays: true` is the **Overlays** setting:
+[every overlay and toast pane in the page](scripting.md#debugger-friendly-overlays),
+so debugger extensions like Playwriter don't remove them.
+
 `textTypes` has no control in Settings: edit it here. It lists the
 Content-Types `onResponseBody` gets as text and replaces the defaults
 ([binary bodies](scripting.md#binary-bodies)).

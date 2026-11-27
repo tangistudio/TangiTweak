@@ -1,6 +1,6 @@
 /** Per-handler routes: normalization, matching, required strategy, and the page-side shim. */
 import { describe, expect, it } from "vitest";
-import { RouteIndex, autoLayerLabel, effectiveStrategy, handlerLayer, inferLayer, sortByLayer, hookCanSee, normalizeRoute, routeGroups, routeLabel, routeMatches, routeMayMatch, sampleUrl, scriptUrls, type RouteMeta } from "../src/shared/route";
+import { RouteIndex, autoLayerLabel, effectiveStrategy, handlerLayer, inferLayer, isShadowOverlay, sortByLayer, hookCanSee, normalizeRoute, routeGroups, routeLabel, routeMatches, routeMayMatch, sampleUrl, scriptUrls, type RouteMeta } from "../src/shared/route";
 import { domHandlersFor, makePageShim } from "../src/shared/pageShim";
 import { compileScript } from "../src/shared/compile";
 
@@ -13,6 +13,17 @@ describe("routeMayMatch", () => {
         const load = normalizeRoute("onDocument", "https://a.com/cart/*", 0);
         expect(routeMayMatch(load, "https://a.com/home")).toBe(false);
         expect(routeMayMatch(load, "https://a.com/cart/1")).toBe(true);
+    });
+});
+
+describe("isShadowOverlay", () => {
+    it("debuggerSafe onOverlays always; every other onOverlay with the setting on; never tweak.site or onPage", () => {
+        const plain = { kind: "onOverlay", debuggerSafe: undefined } as const;
+        const safe = { kind: "onOverlay", debuggerSafe: true } as const;
+        const site = { kind: "onOverlay", api: "site", debuggerSafe: true } as const;
+        const page = { kind: "onDocument", debuggerSafe: undefined } as const;
+        expect([plain, safe, site, page].map((r) => isShadowOverlay(r, false))).toEqual([false, true, false, false]);
+        expect([plain, safe, site, page].map((r) => isShadowOverlay(r, true))).toEqual([true, true, false, false]);
     });
 });
 

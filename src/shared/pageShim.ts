@@ -16,7 +16,7 @@
  * the site's world no handle can be called (siteRemote), and the stores
  * aren't there.
  */
-import { isDebuggerSafeOverlay, normalizeRoute, placeKeyer, placeKind, routeMatches, type DocumentWhen, type PageWorld, type PlaceApi, type RouteMeta } from "./route";
+import { isDebuggerSafeOverlay, isShadowOverlay, normalizeRoute, placeKeyer, placeKind, routeMatches, type DocumentWhen, type PageWorld, type PlaceApi, type RouteMeta } from "./route";
 import { inertRemote, LIB_SITE_STORE, siteRemote, SITE_NO_STORES, unusableStore, type SiteCannotCallError } from "./remote";
 import type { Exposer } from "./rpc";
 import { fromWireResponse, splitFetchInit, toWireRequest, type WtFetchInit } from "./ttFetch";
@@ -75,8 +75,11 @@ export interface PageShimOptions {
     fetch?: (request: WireRequest, bypass: boolean) => Promise<WireResponse>;
     /** `tweak.toast` in onPage code: the background's toast center shows it (absent: it rejects; onSite code never has it) */
     toast?: (spec: ToastSpec) => Promise<ToastResult>;
-    /** isolated world (top frame only): also collect `onOverlay({ debuggerSafe: true })` handlers to mount in a closed shadow root */
-    debuggerSafeOverlays?: boolean;
+    /**
+     * isolated world (top frame only): also collect `onOverlay({ debuggerSafe: true })` handlers to mount in a closed shadow root;
+     * `"all"`: every `tweak.onOverlay` (the "Debugger-friendly overlays" setting), marked `debuggerSafe` so it's handled as one
+     */
+    debuggerSafeOverlays?: boolean | "all";
 }
 
 /** onPage's `tweak.fetch`: from the background (relative URLs resolve against the page) */
@@ -109,7 +112,7 @@ export interface PageShim {
     /** what the script's code runs with (scriptFunction) */
     host: TweakHost;
     dom: PageDocumentHandler[];
-    /** opt-in `onOverlay({ debuggerSafe: true })` handlers collected in the isolated world */
+    /** `onOverlay({ debuggerSafe: true })` handlers (every onOverlay in `"all"` mode) collected in the isolated world */
     shadowOverlays: PageDocumentHandler[];
     /** run the script's top level (`run`): libraries' functions it calls register into it, like the background's */
     top<T>(run: () => T): T;
@@ -136,6 +139,7 @@ export function makePageShim(o: PageShimOptions): PageShim {
             r.lib = lib;
             r.n = k.n;
         } else if (api !== "onOverlay" && k.n !== r.index) r.n = k.n;
+        if (world === "isolated" && o.debuggerSafeOverlays === "all" && isShadowOverlay(r, true)) r.debuggerSafe = true;
         if (api === mine) {
             o.exposer?.register(k.key);
             dom.push({ h: k.key, route: r, when: r.when || "document_end", fn: fn as any });

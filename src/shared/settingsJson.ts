@@ -27,6 +27,10 @@ export const BODY_CAP_MAX = 16384;
 /** chrome.storage key of bodyCap (absent: DEFAULT_BODY_CAP) */
 export const BODY_CAP_KEY = "resBodyCap";
 export const isBodyCap = (v: unknown): v is number => typeof v === "number" && Number.isInteger(v) && v >= BODY_CAP_MIN && v <= BODY_CAP_MAX;
+/** chrome.storage key of debuggerFriendlyOverlays (absent or false: off) */
+export const DEBUGGER_OVERLAYS_KEY = "resDebuggerOverlays";
+export const DEBUGGER_OVERLAYS_DESC =
+    "Render every tweak.onOverlay and toast pane in a closed shadow root instead of an extension iframe, so debugger extensions like Playwriter can attach without removing them. The page can see keys typed into them. Chrome MV3 needs user scripts on.";
 export const BODY_CAP_DESC = `Network view: kB of each request/response body kept (${BODY_CAP_MIN}..${BODY_CAP_MAX})`;
 
 /** a valid textTypes value: a non-empty list of non-empty strings */
@@ -42,6 +46,8 @@ export interface GlobalSettings {
     bodyCap?: number;
     /** each tweak's data folder name; undefined = DEFAULT_DATA_FOLDER */
     dataFolder?: string;
+    /** every onOverlay and toast pane renders in a closed shadow root (no extension iframe); undefined = false */
+    debuggerFriendlyOverlays?: boolean;
 }
 
 export interface SettingsDoc {
@@ -61,6 +67,7 @@ export function buildSettingsObject(g: Partial<GlobalSettings>): Record<string, 
     if (g.bodyCap !== undefined && g.bodyCap !== DEFAULT_BODY_CAP) out.bodyCap = g.bodyCap;
     if (g.textTypes !== undefined && !same(g.textTypes, DEFAULT_TEXT_TYPES)) out.textTypes = g.textTypes;
     if (g.dataFolder !== undefined && g.dataFolder !== DEFAULT_DATA_FOLDER) out.dataFolder = g.dataFolder;
+    if (g.debuggerFriendlyOverlays === true) out.debuggerFriendlyOverlays = true;
     return out;
 }
 
@@ -83,7 +90,7 @@ export function parseSettings(text: string): SettingsDoc {
 
     const gSrc = isObj(raw.settings) ? { ...raw.settings, ...raw } : raw;
     const globals: Partial<GlobalSettings> = {};
-    for (const k of ["logLevel", "logCap", "textTypes", "bodyCap", "dataFolder"] as const) if (k in gSrc) globals[k] = gSrc[k];
+    for (const k of ["logLevel", "logCap", "textTypes", "bodyCap", "dataFolder", "debuggerFriendlyOverlays"] as const) if (k in gSrc) globals[k] = gSrc[k];
     return { globals };
 }
 
@@ -100,5 +107,7 @@ export function planSettings(doc: SettingsDoc, current: GlobalSettings): Setting
     if (isBodyCap(bc) && bc !== (current.bodyCap ?? DEFAULT_BODY_CAP)) globals.bodyCap = bc;
     const df = doc.globals.dataFolder === undefined ? DEFAULT_DATA_FOLDER : doc.globals.dataFolder;
     if (!dataFolderProblem(df) && df !== (current.dataFolder ?? DEFAULT_DATA_FOLDER)) globals.dataFolder = df;
+    const dfo = doc.globals.debuggerFriendlyOverlays === undefined ? false : doc.globals.debuggerFriendlyOverlays;
+    if (typeof dfo === "boolean" && dfo !== !!current.debuggerFriendlyOverlays) globals.debuggerFriendlyOverlays = dfo;
     return globals;
 }

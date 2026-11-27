@@ -66,6 +66,14 @@ export const isSiteRoute = (route: Pick<RouteMeta, "kind" | "api">): boolean => 
 export const isDebuggerSafeOverlay = (route: Pick<RouteMeta, "kind" | "api" | "debuggerSafe">): boolean =>
     route.kind === "onOverlay" && route.api !== "site" && route.debuggerSafe === true;
 
+/**
+ * Whether a route's overlay renders in a closed shadow root in the isolated world:
+ * opted in (`debuggerSafe: true`), or any `tweak.onOverlay` while the
+ * "Debugger-friendly overlays" setting is on (`all`). `tweak.site` never does.
+ */
+export const isShadowOverlay = (route: Pick<RouteMeta, "kind" | "api" | "debuggerSafe">, all: boolean): boolean =>
+    route.kind === "onOverlay" && route.api !== "site" && (all || route.debuggerSafe === true);
+
 /** Default mode for a `tweak.site` route: `"custom"` (replace immediately) or `"original"` (stay on original until toggled). */
 export type SiteDefaultMode = "custom" | "original";
 const SITE_DEFAULT_MODES: SiteDefaultMode[] = ["custom", "original"];

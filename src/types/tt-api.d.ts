@@ -346,6 +346,10 @@ declare namespace TangiTweak {
          * external debugger extensions (such as Playwriter) can attach without
          * removing the overlay. Requires Chrome user scripts on MV3.
          *
+         * The "Debugger-friendly overlays" setting (Settings → Overlays) turns
+         * this on for every `onOverlay` and toast pane. It doesn't change
+         * `tweak.site`.
+         *
          * @defaultValue `false`
          */
         debuggerSafe?: boolean;
@@ -1931,7 +1935,8 @@ declare namespace TangiTweak {
          * foreign extension iframe is in the tab. Pass `debuggerSafe: true` in
          * the route options to opt into rendering inside a fixed closed shadow
          * root in the isolated world so debugger extensions can attach without
-         * removing the overlay.
+         * removing the overlay. The "Debugger-friendly overlays" setting does
+         * this for every overlay.
          *
          * @param route Page URL pattern(s), or `{ url, exclude, when, debuggerSafe }`.
          * @param handler Draws the GUI. May return functions for this script's

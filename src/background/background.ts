@@ -27,7 +27,7 @@ import { USER_SCRIPTS_NOTICE } from "../shared/userScriptsStatus";
 import { actionIconView, createBusyIndicator } from "./busyIcon";
 import { onBusyChange } from "./engine/busy";
 import { addBridgePort } from "./engine/bridgePorts";
-import { addPreviewPort, addUserScriptPort } from "./engine/overlayLinks";
+import { addPanePort, addPreviewPort, addUserScriptPort } from "./engine/overlayLinks";
 import { contextTag, SCRIPT_CONTEXTS } from "../shared/scriptLog";
 
 const IS_FIREFOX =
@@ -146,7 +146,8 @@ chrome.runtime.onMessage.addListener((msg: any, _s, sendResponse) => {
 
 // ---- manager UI port: logs stream over it ----
 // L6: a script's isolated-world onPage code (MV3 chrome.userScripts world)
-if (__MV3__) (chrome.runtime as any).onUserScriptConnect?.addListener((port: chrome.runtime.Port) => addUserScriptPort(port));
+// (and a toast pane drawn in the page, src/overlay/paneWorld.ts)
+if (__MV3__) (chrome.runtime as any).onUserScriptConnect?.addListener((port: chrome.runtime.Port) => addPanePort(port) || addUserScriptPort(port));
 chrome.runtime.onConnect.addListener((port) => {
     if (addBridgePort(port)) return; // L2: a content-script bridge
     if (addPreviewPort(port)) return; // L5: the Editor's Preview tab

@@ -1660,7 +1660,7 @@ async function start(opts: { fresh?: boolean }): Promise<boolean> {
             if (!page) scheduleDataExport();
         });
         chrome.storage.onChanged.addListener((c) => {
-            if (c.resLogLevel || c.resLogCap || c.resTextTypes || c.resBodyCap || c[DATA_FOLDER_KEY]) scheduleReconcile();
+            if (c.resLogLevel || c.resLogCap || c.resTextTypes || c.resBodyCap || c.resDebuggerOverlays || c[DATA_FOLDER_KEY]) scheduleReconcile();
             if (c[DATA_FOLDER_KEY] && dirHandle) void serial(async () => renameDataFolders(await getDataFolder()));
             if (c[PACKAGE_TYPINGS_KEY] && dirHandle) void serial(ensurePackageTypingsFiles);
         });

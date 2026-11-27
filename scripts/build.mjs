@@ -74,8 +74,13 @@ function entriesFor(dist, mv3, firefox = false) {
         },
         {
             // a script's overlay frame (tweak.onOverlay), framed into pages by the bridge
-            input: path.join(root, "src/overlay/overlayRuntime.ts"),
+            input: path.join(root, "src/overlay/overlayBoot.ts"),
             output: { file: path.join(dist, "overlay.js"), format: "iife" },
+        },
+        {
+            // a toast pane drawn in the page ("Debugger-friendly overlays"), injected by the background
+            input: path.join(root, "src/overlay/paneWorld.ts"),
+            output: { file: path.join(dist, "pane.js"), format: "iife" },
         },
     ];
     if (!mv3) {

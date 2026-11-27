@@ -8,7 +8,7 @@ import { panel } from "../state/panel";
 import { saveTheme, type ThemePref } from "../theme";
 import { aboutText } from "../about";
 import { cleanFolderPath, copyPathHint, hostOs, type LaunchMode } from "../bundle";
-import { BODY_CAP_KEY, BODY_CAP_MAX, BODY_CAP_MIN, DEFAULT_BODY_CAP } from "../../shared/settingsJson";
+import { BODY_CAP_KEY, BODY_CAP_MAX, BODY_CAP_MIN, DEBUGGER_OVERLAYS_KEY, DEFAULT_BODY_CAP } from "../../shared/settingsJson";
 import { DEFAULT_DATA_FOLDER } from "../../shared/tweakData";
 import { Overlay, useControl, useFlash } from "./controls";
 import { toastsApi, type ToastPrefs, type ToastPrefsPatch } from "../lib/toastsApi";
@@ -311,7 +311,12 @@ function Logging() {
 }
 
 function Tweaks() {
-    const { dataFolder } = useSnapshot(settings);
+    const { dataFolder, debuggerOverlays } = useSnapshot(settings);
+    const debugSafe = useControl<HTMLInputElement>(debuggerOverlays, (el) => {
+        settings.debuggerOverlays = el.checked;
+        if (el.checked) chrome.storage.local.set({ [DEBUGGER_OVERLAYS_KEY]: true });
+        else chrome.storage.local.remove(DEBUGGER_OVERLAYS_KEY);
+    });
     const [error, setError] = useState("");
     const input = useControl<HTMLInputElement>(dataFolder, (el) => {
         const name = el.value.trim();
@@ -329,6 +334,21 @@ function Tweaks() {
                     <input id="settings-data-folder" ref={input} type="text" spellCheck={false} placeholder={DEFAULT_DATA_FOLDER} />
                     {error && <p id="settings-data-folder-error" className="setting-help error">{error}</p>}
                     <p className="setting-help">The folder inside each tweak that holds its settings (enable switch, changed params) and saved stores. It isn't code: builds, tests and exports leave it out. Renaming it renames it in every tweak.</p>
+                </div>
+            </div>
+            <div className="setting">
+                <span className="setting-label">Overlays</span>
+                <div className="setting-control">
+                    <label className="setting-check"><input id="settings-debugger-overlays" ref={debugSafe} type="checkbox" /> Debugger-friendly overlays</label>
+                    <p className="setting-help">
+                        Lets debugger extensions like Playwriter attach to a tab without removing overlays and toast panes.
+                        <br />
+                        They draw in the page instead of in an extension frame.
+                        <br />
+                        The page can see keys you type into them.
+                        <br />
+                        On Chrome MV3 this needs user scripts on.
+                    </p>
                 </div>
             </div>
         </section>

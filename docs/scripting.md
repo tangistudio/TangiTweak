@@ -1614,9 +1614,10 @@ it right away, and the value survives restarts.
   sites whose CSP blocks scripts and `eval`, and why the site can't reach
   them. An `about:blank` frame wouldn't be removed, but it would inherit
   the page's CSP and be open to the page. For a GUI that must survive
-  these tools, use `tweak.onPage` with `ctx.mount` and `ctx.shortcut`: it
-  renders into the page (in a closed shadow root) with no extension
-  frame.
+  these tools, pass `debuggerSafe: true` in the route options (it draws in
+  a closed shadow root in the page, see below) or turn on
+  [Debugger-friendly overlays](#debugger-friendly-overlays) for every
+  overlay. `tweak.onPage` with `ctx.mount` and `ctx.shortcut` works too.
 - **Preview in the Editor.** The Editor's **Preview** tab (⌥⇧V) runs the
   open script's overlay without its page, with the real stores, and
   updates it on save; see [Preview](editor.md#preview).
@@ -1810,6 +1811,30 @@ tweak.onOverlay("*://app.example.com/*", async () => {
 - **Per-tab switch (kept across reloads):** a `tweak.tabStore` field — works with `strategy: "rules"` too.
 - **Per-page switch (resets on reload):** a `tweak.pageStore` field, so turning it on affects only this document load.
 - **Surviving Chrome debugger extensions (such as Playwriter):** Chrome blocks `chrome-extension://` iframes inside a tab while another extension attaches `chrome.debugger`. Pass `debuggerSafe: true` in the `onOverlay` route options to mount your overlay in an isolated-world closed shadow root instead. On Chrome MV3, this option requires [user scripts](#user-scripts-on-chrome) to be enabled.
+
+### Debugger-friendly overlays
+
+**Settings → Overlays → Debugger-friendly overlays** (off by default,
+`"debuggerFriendlyOverlays": true` in [settings.json](editor.md#settingsjson))
+does this for every tweak at once, so you can use Playwriter on any tab:
+
+- Every `tweak.onOverlay` draws as if it passed `debuggerSafe: true`.
+- [Toast panes](#toast-panes) draw in a closed shadow root in the page
+  instead of an extension frame. Their `t` and `ui` work the same.
+- `tweak.site` keeps its own `debuggerSafe` option and the Editor's
+  Preview keeps its frames.
+
+The trade-offs:
+
+- Keys typed into an overlay or pane bubble out of its shadow root, so
+  the page can see them. Don't type secrets into them on sites you don't
+  trust.
+- On Chrome MV3 they need [user scripts](#user-scripts-on-chrome); toast
+  panes also need Chrome 135. Without them, overlays and panes stay in
+  their frames and Problems says why.
+
+Turning it on reloads the tabs whose overlays move (Chrome MV3). Turning
+it off moves open overlays back into their frames right away.
 
 ## Full-page replacement: `tweak.site`
 
@@ -2141,7 +2166,9 @@ tweak.onToastAction(({ actionId, value }) => {
   toast open, `ui.close()`, `ui.keepOpen()` stops the timer and
   `ui.update(data)` draws it again.
 - It runs in its own extension frame, like an [overlay](#overlays--tweakonoverlay),
-  up to 480 × 480 px; the frame grows with its content. TangiTweak keeps
+  up to 480 × 480 px; the frame grows with its content. With
+  [Debugger-friendly overlays](#debugger-friendly-overlays) on, it draws
+  in a closed shadow root in the page instead. TangiTweak keeps
   the corner, the stacking, the timer, the close button and the "from
   <tweak>" line.
 - `data` must be JSON, up to 32 KB.

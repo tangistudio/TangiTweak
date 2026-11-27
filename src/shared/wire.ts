@@ -1018,6 +1018,38 @@ export interface WireOps {
         /** What the frame runs, without `phase` and `pane`. */
         res: OverlayInit;
     };
+    /**
+     * L2: run a granted pane (`pane.open`'s `nonce`) in the page instead of a
+     * frame (the "Debugger-friendly overlays" setting): MV2 injects pane.js
+     * into the bridge's own world once; Chrome MV3 runs it in script `s`'s
+     * user-script world, where it takes the light-DOM element tagged
+     * `data-tt-pane="token"` and talks to the bridge over `pane.relay`.
+     */
+    "pane.shadow": {
+        req: {
+            /** The nonce `pane.open` granted. */
+            nonce: string;
+            /** MV3: the tag of the element the pane draws in. */
+            token?: string;
+        };
+        res: {};
+    };
+    /**
+     * L2 (Chrome MV3): one message between an in-page pane (its world's port,
+     * `tt-pane`) and the bridge, relayed by the owner; `closed` when its port
+     * went. From the bridge without `msg`: a heartbeat that keeps the service
+     * worker (the relay) up while the pane shows.
+     */
+    "pane.relay": {
+        push: {
+            /** The pane's nonce. */
+            nonce: string;
+            /** The message. */
+            msg?: WireMessage;
+            /** Its port disconnected. */
+            closed?: boolean;
+        };
+    };
     /** L2: one of script `s`'s pane frames closed. The grant goes with the last one. */
     "pane.closed": { push: {} };
     /** L3: a pane called `ui.action(id, value)`. The toast stays open. */
@@ -1029,6 +1061,8 @@ export interface WireOps {
             value?: unknown;
         };
     };
+    /** L3: the bridge stops an in-page pane (src/overlay/paneWorld.ts): its toast went. A frame just goes. */
+    "pane.stop": { push: {} };
     /** L3: a pane called `ui.close()`. */
     "pane.close": { push: {} };
     /** L3: a pane called `ui.keepOpen()`: the toast's timer stops. */
@@ -1098,8 +1132,11 @@ export interface IsoInit {
     libStores?: { [scriptId: string]: { [name: string]: StoreSnapshot } };
     /** The page the frame is part of (its top frame's document): the only one whose `tweak.pageStore` copies it reaches. */
     page: string;
-    /** True when the script also has `onOverlay({ debuggerSafe: true })` handlers to render in a closed shadow root (top frame only). */
-    shadowOverlay?: boolean;
+    /**
+     * True when the script also has `onOverlay({ debuggerSafe: true })` handlers to render in a closed shadow root (top frame only);
+     * `"all"`: every `tweak.onOverlay` does (the "Debugger-friendly overlays" setting).
+     */
+    shadowOverlay?: boolean | "all";
 }
 
 /**

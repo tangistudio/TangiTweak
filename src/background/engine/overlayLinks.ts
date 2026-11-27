@@ -34,6 +34,8 @@ import { shippedLibIds, type ShippedLib } from "../../shared/scriptImports";
 import { tabScopeOfPage } from "../../shared/storeOps";
 import { fetchFor, pageFetchFor, storeOwner } from "./stores";
 import { reactChunkSource } from "../reactChunk";
+import { runPaneWorld } from "../userScripts";
+import { packBytes, unpackBytes } from "../../shared/bytesPack";
 import { pages, pagesReady } from "./pages";
 import { addBypass, addBypassRule } from "./bypass";
 import type { ToastResult } from "../../shared/toast";
@@ -286,6 +288,44 @@ export async function revalidateOverlayLinks(): Promise<void> {
 /** pane frames' nonces until they confirmed (Firefox), with their tab */
 const paneNonces = new Map<string, { tabId: number; nonce: string; seen: boolean; expires: number }>();
 
+/** The port name of a toast pane drawn in the page (Chrome MV3, src/overlay/paneWorld.ts). */
+export const PANE_PORT = "tt-pane";
+/** Chrome MV3 in-page panes, by nonce: waiting for their world's port, then relayed to their bridge. */
+const inPagePanes = new Map<string, { link: BridgeLink; s: string; documentId?: string; port: chrome.runtime.Port | null; expires: number }>();
+
+/**
+ * L2 ⇄ pane relay (Chrome MV3): the user-script world running an in-page
+ * pane connects `tt-pane` and first says the nonce its bridge asked us to
+ * run it with (`pane.shadow`), from that bridge's tab, top frame and
+ * document; then each message goes to the bridge as `pane.relay` and back.
+ * False if the port isn't one.
+ */
+export function addPanePort(port: chrome.runtime.Port): boolean {
+    if (port.name !== PANE_PORT) return false;
+    const sender = port.sender;
+    const first = (m: any) => {
+        port.onMessage.removeListener(first);
+        const nonce = typeof m?.ttPane === "string" ? m.ttPane : "";
+        const p = inPagePanes.get(nonce);
+        if (!p || p.port || p.expires < Date.now() || sender?.id !== chrome.runtime.id || sender?.tab?.id !== p.link.tabId || sender?.frameId !== 0 || (p.documentId && (sender as any)?.documentId !== p.documentId)) {
+            port.disconnect();
+            return;
+        }
+        p.port = port;
+        port.onMessage.addListener((msg: any) => {
+            if (inPagePanes.get(nonce) === p) p.link.ep.push("pane.relay", { nonce, msg: unpackBytes(msg) }, p.s);
+        });
+        port.onDisconnect.addListener(() => {
+            void chrome.runtime.lastError;
+            if (inPagePanes.get(nonce) !== p) return;
+            inPagePanes.delete(nonce);
+            if (!p.link.ep.closed) p.link.ep.push("pane.relay", { nonce, closed: true }, p.s);
+        });
+    };
+    port.onMessage.addListener(first);
+    return true;
+}
+
 export function serveLink(link: BridgeLink): void {
     const mine = new Map<string, Grant>();
     /** toast pane grants, apart from overlays' (`overlay.closed` and revalidation leave them alone) */
@@ -435,6 +475,48 @@ export function serveLink(link: BridgeLink): void {
         const initAll = await storeOwner.init([s!, ...libs], { page: g.page });
         const libStores = libs.size ? Object.fromEntries([...libs].map((id) => [id, initAll[id] ?? {}])) : undefined;
         return { s: s!, name: run.name, code: run.code, codeHash: run.codeHash, routes: [], url: g.url, params: run.params, stores: initAll[s!] ?? {}, ...(libStores ? { libStores } : {}), page: g.page, libs: run.libs, react: run.react };
+    });
+    // "Debugger-friendly overlays": a granted pane draws in the page (src/overlay/paneWorld.ts)
+    link.ep.handle("pane.shadow", async ({ nonce, token }, s) => {
+        const n = typeof nonce === "string" ? paneNonces.get(nonce) : undefined;
+        if (s === undefined || link.frameId !== 0 || !panes.has(s) || !n || n.tabId !== link.tabId || n.seen || n.expires < Date.now()) throw new Error("pane.shadow: refused");
+        // one use: no frame can confirm it now (confirmNonce)
+        n.seen = true;
+        if (__MV3__) {
+            if (typeof token !== "string" || token.length < 16) throw new Error("pane.shadow: refused");
+            const documentId = (link.port.sender as any)?.documentId as string | undefined;
+            inPagePanes.set(nonce, { link, s, documentId, port: null, expires: Date.now() + NONCE_TTL_MS });
+            setTimeout(() => {
+                const p = inPagePanes.get(nonce);
+                if (p && !p.port) inPagePanes.delete(nonce);
+            }, NONCE_TTL_MS);
+            await runPaneWorld({ tabId: link.tabId, frameId: 0, documentId }, s, { nonce, token });
+            return {};
+        }
+        // MV2: once into the bridge's own world (it defines __ttPaneRun)
+        await new Promise<void>((resolve, reject) =>
+            chrome.tabs.executeScript(link.tabId, { file: "pane.js", frameId: 0, runAt: "document_start" }, () => {
+                const e = chrome.runtime.lastError;
+                e ? reject(new Error(e.message)) : resolve();
+            })
+        );
+        return {};
+    });
+    link.ep.on("pane.relay", (a) => {
+        const p = typeof a?.nonce === "string" ? inPagePanes.get(a.nonce) : undefined;
+        if (!p || p.link !== link) return;
+        if (a.closed) {
+            inPagePanes.delete(a.nonce);
+            p.port?.disconnect();
+        } else if (a.msg) p.port?.postMessage(packBytes(a.msg));
+        // else a heartbeat: it kept this worker up
+    });
+    link.ep.onClose(() => {
+        for (const [nonce, p] of [...inPagePanes])
+            if (p.link === link) {
+                inPagePanes.delete(nonce);
+                p.port?.disconnect();
+            }
     });
     link.ep.on("pane.closed", (_a, s) => {
         const g = s === undefined ? undefined : panes.get(s);
@@ -763,5 +845,6 @@ export function resetOverlayLinks(): void {
     linkWaiters.clear();
     previews.clear();
     paneNonces.clear();
+    inPagePanes.clear();
     deps = { overlayRuns };
 }

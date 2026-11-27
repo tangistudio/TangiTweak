@@ -37,7 +37,7 @@ import { binaryOptedOut, debuggerMissedLine, frameHasHook as pingHook, isLoopbac
 import { resolveParamValues } from "../../shared/scriptDef";
 import { shippedLibIds, type ShippedLib } from "../../shared/scriptImports";
 import { autoLayerLabel, isLayer, type ScriptLayers } from "../../shared/route";
-import { effectiveStrategy, hookCanSee, indexRoutes, isDebuggerSafeOverlay, isNetKind, isSiteRoute, pageWorld, routeLabel, routeMatches, routeMayMatch, takesBinary, type RouteMeta, type Strategy } from "../../shared/route";
+import { effectiveStrategy, hookCanSee, indexRoutes, isDebuggerSafeOverlay, isNetKind, isShadowOverlay, isSiteRoute, pageWorld, routeLabel, routeMatches, routeMayMatch, takesBinary, type RouteMeta, type Strategy } from "../../shared/route";
 import { SiteRulesManager } from "./siteRules";
 import { analyzeScripts, runBodyOp, type Analyzed } from "../compileHost";
 import { recordNetBody } from "../network";
@@ -47,6 +47,7 @@ import { overlapHints, winnerOf } from "../../shared/precedence";
 import { targetsWebSocket, WS_BLIND, wsUnseen } from "../../shared/websocketLimits";
 import { isTabScope } from "../../shared/storeOps";
 import { TEXT_TYPES_KEY } from "../settingsFile";
+import { DEBUGGER_OVERLAYS_KEY } from "../../shared/settingsJson";
 import { getTextTypes, setTextTypes } from "../../shared/bodyKind";
 import { packBytes, unpackBytes } from "../../shared/bytesPack";
 import type { RequestBody } from "../../shared/requestBody";
@@ -54,8 +55,8 @@ import { pushBundleUpdate } from "./bridgePorts";
 import { importFiles } from "./importFiles";
 import { installPages, pages, pagesReady } from "./pages";
 import { pushIsoUpdate, pushPreviewUpdate, revalidateOverlayLinks, setupOverlayLinks, type IsoRun, type OverlayRun } from "./overlayLinks";
-import { onUserScriptsStatus, runSiteUnits, syncUserScripts, userScriptsStatus, type IsoScript, type SiteScript } from "../userScripts";
-import { USER_SCRIPTS_OFF, userScriptsProblem, type UserScriptsStatus } from "../../shared/userScriptsStatus";
+import { canRunPanes, onUserScriptsStatus, runSiteUnits, syncUserScripts, userScriptsStatus, type IsoScript, type SiteScript } from "../userScripts";
+import { USER_SCRIPTS_OFF, debuggerFriendly, debuggerOverlaysProblem, debuggerPanesProblem, userScriptsProblem, type UserScriptsStatus } from "../../shared/userScriptsStatus";
 import { contentHash } from "../../shared/folderSync";
 import { reactChunkSource } from "../reactChunk";
 import { createSchedules } from "./schedules";
@@ -81,19 +82,28 @@ function pageRequestBody(msg: any): RequestBody | undefined {
     return typeof b === "string" || b instanceof Uint8Array ? b : undefined;
 }
 
-/** settings.textTypes → bodyKind.ts (every reload and hook bundle) */
+/** settings.debuggerFriendlyOverlays: every onOverlay (and toast pane) in a closed shadow root (loaded with textTypes) */
+let debuggerOverlays = false;
+
+/** settings.textTypes → bodyKind.ts, and debuggerFriendlyOverlays (every reload and hook bundle) */
 function loadTextTypes(): Promise<void> {
     return new Promise((resolve) => {
         try {
-            chrome.storage.local.get([TEXT_TYPES_KEY], (g: any) => {
+            chrome.storage.local.get([TEXT_TYPES_KEY, DEBUGGER_OVERLAYS_KEY], (g: any) => {
                 void (chrome.runtime as any).lastError;
                 setTextTypes(g?.[TEXT_TYPES_KEY]);
+                debuggerOverlays = g?.[DEBUGGER_OVERLAYS_KEY] === true;
                 resolve();
             });
         } catch {
             resolve();
         }
     });
+}
+
+/** what "Debugger-friendly overlays" moves into closed shadow roots here: every non-site onOverlay, and toast panes */
+async function debuggerFriendlyHere(): Promise<{ overlays: boolean; panes: boolean }> {
+    return debuggerFriendly(debuggerOverlays, __MV3__ ? await userScriptsStatus() : "ok", !__MV3__ || canRunPanes());
 }
 
 /** stored scripts with their meta replaced by the analyzed one (real params + imports) */
@@ -354,9 +364,17 @@ export function createPipeline(
             for (const msg of siteProblems(s.code, s.meta.routes || [])) problems.push({ id: s.id, msg });
             for (const msg of rulesProblems(s.code, s.meta.routes || [])) problems.push({ id: s.id, msg });
             for (const msg of toastEveryProblems(s.code, s.meta)) problems.push({ id: s.id, msg });
+            // Chrome MV3: "Debugger-friendly overlays" can't draw its toast panes in the page (a warning, they still draw in their iframe)
+            if (__MV3__ && debuggerOverlays && s.meta.toast?.panes?.length && !debuggerFriendly(true, userScripts, canRunPanes()).panes) {
+                const at = /\.\s*toastPane\s*\(/.exec(s.code);
+                const line = at ? `line ${s.code.slice(0, at.index).split("\n").length} (warning): ` : "";
+                problems.push({ id: s.id, msg: line + debuggerPanesProblem(userScripts, chrome.runtime.id) });
+            }
             for (const r of s.meta.routes || []) {
                 // Chrome MV3: onPage, onSite and debuggerSafe onOverlay code need chrome.userScripts (an error, see problems.ts)
                 if (userScripts !== "ok" && (r.kind === "onDocument" || isDebuggerSafeOverlay(r))) problems.push({ id: s.id, msg: userScriptsProblem(routeLabel(r), userScripts, chrome.runtime.id) });
+                // the "Debugger-friendly overlays" setting can't move it into the page: it stays in its iframe (a warning, it still runs)
+                else if (userScripts !== "ok" && isShadowOverlay(r, debuggerOverlays)) problems.push({ id: s.id, msg: debuggerOverlaysProblem(routeLabel(r), userScripts, chrome.runtime.id) });
                 if (!isNetKind(r.kind)) continue;
                 const strategy = effectiveStrategy(r);
                 const msg = routeProblem({ kind: r.kind, strategy, resourceTypes: r.resourceTypes }, { firefox: IS_FIREFOX, mv3: __MV3__ });
@@ -697,7 +715,7 @@ export function createPipeline(
         const domHandlers: { scriptId: string; name: string; src: string; params: Record<string, any>; v: string; fk?: string; layers?: ScriptLayers }[] = [];
         // onPage scripts (and opt-in debuggerSafe onOverlay scripts): never shipped to the page's own world.
         // MV3 runs them in chrome.userScripts worlds that load the code from the owner (`isoRuns`)
-        const isoHandlers: ((typeof domHandlers[number] & { shadowOverlay?: boolean }) | { scriptId: string; name: string; shadowOverlay?: boolean })[] = [];
+        const isoHandlers: ((typeof domHandlers[number] & { shadowOverlay?: boolean | "all" }) | { scriptId: string; name: string; shadowOverlay?: boolean | "all" })[] = [];
         const isoRuns = new Map<string, IsoRun>();
         // onOverlay / tweak.site routes only — overlay code never goes through the page
         const overlays: { scriptId: string; name: string; routes: RouteMeta[]; codeHash: string; fullPage?: boolean; debuggerSafe?: boolean; react?: boolean }[] = [];
@@ -706,6 +724,11 @@ export function createPipeline(
         const routes: RouteMeta[] = [];
         await loadTextTypes();
         const activeSite = preview === undefined && top && typeof tabId === "number" ? (await siteRules.ensureReady(), siteRules.activeForTab(url, tabId)) : null;
+        // the "Debugger-friendly overlays" setting: every onOverlay in a closed shadow root (Chrome MV3: only while user scripts run; else the iframe, see warnRoutes)
+        const friendly = await debuggerFriendlyHere();
+        const shadowAll = friendly.overlays;
+        // and the top frame's toast panes in the page, not an overlay.html frame
+        const shadowPanes = friendly.panes && top && preview === undefined;
         const pageScripts = await listScripts();
         const paramValues = await loadAllParamValues();
         // MV3: analyzed in the sandbox page (the SW can't eval),
@@ -750,7 +773,7 @@ export function createPipeline(
                     else if (top && routeMayMatch(r, url)) {
                         if (isSiteRoute(r)) {
                             if (activeSite && activeSite.scriptId === s.id) siteOver.push(r);
-                        } else if (isDebuggerSafeOverlay(r)) {
+                        } else if (isShadowOverlay(r, shadowAll)) {
                             shadowOver = true;
                             iso = true;
                         } else {
@@ -782,11 +805,12 @@ export function createPipeline(
             const params = resolveParamValues(a.paramDefs || {}, paramValues[s.id]);
             const h = { scriptId: s.id, name: s.meta.name, src, params, v: contentHash(JSON.stringify([src, params])) };
             if (main) domHandlers.push(h);
+            const shadowOverlay = shadowOver ? (shadowAll ? ("all" as const) : true) : undefined;
             if (iso && __MV3__) {
-                isoHandlers.push({ scriptId: s.id, name: s.meta.name, ...(shadowOver ? { shadowOverlay: true } : {}) });
-                isoRuns.set(s.id, { name: s.meta.name, src: h.src, siteV: h.v, params: h.params, libs: [], codeHash: "", overlay: !!combinedOver.length, ...(shadowOver ? { shadowOverlay: true } : {}) });
+                isoHandlers.push({ scriptId: s.id, name: s.meta.name, ...(shadowOverlay ? { shadowOverlay } : {}) });
+                isoRuns.set(s.id, { name: s.meta.name, src: h.src, siteV: h.v, params: h.params, libs: [], codeHash: "", overlay: !!combinedOver.length, ...(shadowOverlay ? { shadowOverlay } : {}) });
                 isoScriptDeps.set(s.id, new Set(a.deps));
-            } else if (iso) isoHandlers.push({ ...h, ...(shadowOver ? { shadowOverlay: true } : {}) });
+            } else if (iso) isoHandlers.push({ ...h, ...(shadowOverlay ? { shadowOverlay } : {}) });
             if (main) for (const d of a.deps) mainDeps.add(d);
             if (iso && !__MV3__) for (const d of a.deps) isoDeps.add(d);
         }
@@ -817,7 +841,8 @@ export function createPipeline(
         // a user-script world re-runs when its code, params or imports change
         for (const [id, run] of isoRuns) {
             run.libs = libsOf(isoScriptDeps.get(id)!);
-            run.codeHash = contentHash(JSON.stringify([run.src, run.params, run.libs.map((l) => [l.name, l.src ?? l.json ?? l.alias ?? ""])]));
+            // the world re-runs its code when every onOverlay moves into (or out of) it
+            run.codeHash = contentHash(JSON.stringify([run.src, run.params, run.libs.map((l) => [l.name, l.src ?? l.json ?? l.alias ?? ""]), ...(run.shadowOverlay === "all" ? ["all"] : [])]));
         }
         // MV3 without user scripts: the overlay's calls into isolated code say why at once
         const isoOff = isoRuns.size && (await userScriptsStatus()) !== "ok" ? USER_SCRIPTS_OFF : undefined;
@@ -835,9 +860,9 @@ export function createPipeline(
             : undefined;
         // what a frame runs from this bundle (its overlays apart: they carry their own code hash): a page back from the back/forward cache compares it
         const libRev = (l: ShippedLib) => [l.name, siteKey(l.name, l.src ?? l.pkg?.js ?? l.json ?? l.alias ?? ""), l.params];
-        const rev = contentHash(JSON.stringify([routes, getTextTypes(), domHandlers.map((h) => [h.scriptId, h.v]), libs.map(libRev), isoHandlers.map((h) => [h.scriptId, "v" in h ? h.v : "", !!h.shadowOverlay]), isoLibs.map(libRev), isoOff, siteOff, siteInfo?.scriptId ?? null, !!siteInfo?.debuggerSafe]));
+        const rev = contentHash(JSON.stringify([routes, getTextTypes(), domHandlers.map((h) => [h.scriptId, h.v]), libs.map(libRev), isoHandlers.map((h) => [h.scriptId, "v" in h ? h.v : "", h.shadowOverlay ?? false]), isoLibs.map(libRev), isoOff, siteOff, siteInfo?.scriptId ?? null, !!siteInfo?.debuggerSafe, shadowPanes]));
         dlogLevel("compile", "debug", `timing: page bundle for ${url.slice(0, 80)} — ${Math.round(performance.now() - t0)} ms`);
-        return { bundle: { count: routes.length, routes, textTypes: getTextTypes(), domHandlers, isoHandlers, overlays, libs, isoLibs, rev, ...(isoOff ? { isoOff } : {}), ...(siteOff ? { siteOff } : {}), ...(siteInfo ? { site: siteInfo } : {}) }, overlayRuns, isoRuns, previewWhy };
+        return { bundle: { count: routes.length, routes, textTypes: getTextTypes(), domHandlers, isoHandlers, overlays, libs, isoLibs, rev, ...(isoOff ? { isoOff } : {}), ...(siteOff ? { siteOff } : {}), ...(siteInfo ? { site: siteInfo } : {}), ...(shadowPanes ? { shadowPanes } : {}) }, overlayRuns, isoRuns, previewWhy };
     }
     installPages();
     // tweak.every and tweak.toast (alarms listen from here on: an alarm can be what woke the service worker)
@@ -1296,7 +1321,7 @@ export function createPipeline(
         scripts = scripts.map((s) => ({ ...s, layers: layers.get(s.id) }));
         const isoScripts: IsoScript[] = scripts
             .filter((x) => x.enabled && x.meta.active)
-            .map((x) => ({ id: x.id, routes: (x.meta.routes || []).filter((r) => (r.kind === "onDocument" && pageWorld(r) === "isolated") || isDebuggerSafeOverlay(r)) }))
+            .map((x) => ({ id: x.id, routes: (x.meta.routes || []).filter((r) => (r.kind === "onDocument" && pageWorld(r) === "isolated") || isShadowOverlay(r, debuggerOverlays)) }))
             .filter((x) => x.routes.length);
         // MV3 onSite code: user scripts in the page's world
         const site = __MV3__ && analyzed ? siteScripts(stored, analyzed, packagesSnapshot()) : [];
@@ -1380,9 +1405,33 @@ export function createPipeline(
     chrome.runtime.onMessage.addListener(onToastMessage);
     // ownership moves between the helper strategy and the other strategies
     const offProcess = onHelperActiveChange(() => void reload());
-    const onStorage = (changes: Record<string, unknown>, area: string) => {
-        if (area === "local" && changes[TEXT_TYPES_KEY]) void reload();
+    const onStorage = (changes: Record<string, any>, area: string) => {
+        if (area !== "local") return;
+        if (changes[DEBUGGER_OVERLAYS_KEY]) {
+            const on = changes[DEBUGGER_OVERLAYS_KEY].newValue === true;
+            // open pages take the new bundle (MV2 moves overlays in place); MV3 pages need the newly registered user scripts
+            void reload().then(() => (__MV3__ && on ? reloadShadowOverlayTabs() : undefined));
+        } else if (changes[TEXT_TYPES_KEY]) void reload();
     };
+    /**
+     * Chrome MV3, "Debugger-friendly overlays" just turned on: a script whose
+     * only isolated code is its onOverlay wasn't registered as a user script, and
+     * a registration only reaches documents that load next. Reload the tabs
+     * whose overlays moved, once the registrations are in.
+     */
+    async function reloadShadowOverlayTabs(): Promise<void> {
+        await syncUserScripts();
+        if (!(await debuggerFriendlyHere()).overlays) return;
+        const moved = [...toastScripts.values()].filter(
+            (x) => x.enabled && x.meta.active && !(x.meta.routes || []).some((r) => (r.kind === "onDocument" && pageWorld(r) === "isolated") || isDebuggerSafeOverlay(r)) && (x.meta.routes || []).some((r) => isShadowOverlay(r, true))
+        );
+        if (!moved.length) return;
+        const tabs = await new Promise<chrome.tabs.Tab[]>((r) => chrome.tabs.query({}, (t) => r(t || [])));
+        for (const t of tabs) {
+            if (t.id === undefined || !t.url || !/^https?:/.test(t.url)) continue;
+            if (moved.some((x) => (x.meta.routes || []).some((r) => isShadowOverlay(r, true) && routeMayMatch(r, t.url!)))) chrome.tabs.reload(t.id, {}, () => void (chrome.runtime as any).lastError);
+        }
+    }
     chrome.storage.onChanged.addListener(onStorage);
     void reload();
 

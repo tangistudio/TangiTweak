@@ -1,7 +1,9 @@
 /**
  * Standalone MV3 Chromium e2e verification for `tweak.site` and
  * `debuggerSafe: true` (both `tweak.site` and `tweak.onOverlay`) while a second
- * extension holds an active `chrome.debugger` session (simulating Playwriter).
+ * extension holds an active `chrome.debugger` session (simulating Playwriter),
+ * and the "Debugger-friendly overlays" setting (plain onOverlay and toast panes
+ * in closed shadow roots).
  *
  * Usage: npm run build && PATH="$(mise where node@24.22.0)/bin:$PATH" npx tsx test/site.e2e.ts
  */
@@ -311,6 +313,75 @@ try {
 
     await dbgSend({ type: "detach", tabId });
     await deleteTweak(mgrSend, "Safe Overlay");
+    await mgrSend({ type: "settleScripts" });
+
+    // 4. the "Debugger-friendly overlays" setting: a plain onOverlay and a toast pane render in closed shadow roots
+    await mgr.evaluate(() => new Promise<void>((r) => chrome.storage.local.set({ resDebuggerOverlays: true }, () => r())));
+    const allCode = `
+        import { tweak } from "tangitweak";
+        tweak.onOverlay("*://127.0.0.1:${PORT}/overlay-target*", () => {
+            document.title = "PLAIN-OVERLAY-MOUNTED";
+            return <div>PLAIN-OVERLAY</div>;
+        });
+        tweak.toastPane("card", (t, ui) => {
+            const n = (t.data as { n: number }).n;
+            const g = globalThis as any;
+            // the pane's node reports in the title while it's in the page
+            g.__tick ??= setInterval(() => (document.title = g.__paneEl?.isConnected ? g.__paneEl.textContent : "PANE-GONE"), 100);
+            if (n === 1) setTimeout(() => ui.action("go", 2), 300);
+            return <div ref={(el) => (g.__paneEl = el)}>PANE-{n}</div>;
+        });
+        tweak.onToastAction(({ actionId, value }) => {
+            if (actionId === "go") tweak.toast({ id: "p", title: "Pane", message: "Pane", pane: "card", data: { n: value }, duration: "sticky" });
+        });
+        tweak.onPage("*://127.0.0.1:${PORT}/shop*", () => {
+            tweak.toast({ id: "p", title: "Pane", message: "Pane", pane: "card", data: { n: 1 }, duration: "sticky" });
+        });
+    `;
+    const savedAll = await saveTweak(mgrSend, "s_all_ov", "All Overlays", allCode);
+    await mgrSend({ type: "settleScripts" });
+    check("a plain onOverlay + toastPane tweak compiles and saves", savedAll?.meta?.active === true, JSON.stringify(savedAll?.meta?.routes));
+    const extFrames = () => tab.frames().filter((f: any) => f.url().startsWith("chrome-extension://")).map((f: any) => f.url());
+    const titleIs = (t: string, timeout = 10000) =>
+        tab.waitForFunction((x: string) => document.title === x, t, { timeout }).then(() => true, () => false);
+
+    await tab.goto(`${ORIGIN}/overlay-target`);
+    const plainUp = await titleIs("PLAIN-OVERLAY-MOUNTED");
+    check("with the setting on, a plain onOverlay mounts with no chrome-extension:// iframe", plainUp && extFrames().length === 0, `mounted=${plainUp} frames=${extFrames()}`);
+    const attachedAll = await dbgSend({ type: "attach", tabId });
+    check("Playwriter simulator attaches to a tab with a plain onOverlay", attachedAll?.ok === true, JSON.stringify(attachedAll));
+    await tab.evaluate(() => (document.title = "CHECK"));
+    await tab.reload();
+    const plainUnderDbg = await titleIs("PLAIN-OVERLAY-MOUNTED");
+    check("the plain onOverlay mounts again under chrome.debugger", plainUnderDbg && extFrames().length === 0, `mounted=${plainUnderDbg} frames=${extFrames()}`);
+    await dbgSend({ type: "detach", tabId });
+
+    await tab.goto(`${ORIGIN}/shop`);
+    const pane1 = await titleIs("PANE-1");
+    check("with the setting on, a toast pane draws with no overlay.html frame", pane1 && extFrames().length === 0, `drawn=${pane1} frames=${extFrames()}`);
+    const pane2 = await titleIs("PANE-2");
+    check("the in-page pane's ui.action reaches onToastAction and its update redraws in place", pane2 && extFrames().length === 0, `updated=${pane2} frames=${extFrames()}`);
+    const attachedPane = await dbgSend({ type: "attach", tabId });
+    check("Playwriter simulator attaches to a tab showing a toast pane", attachedPane?.ok === true, JSON.stringify(attachedPane));
+    await tab.evaluate(() => (document.title = "CHECK"));
+    const paneUnderDbg = await titleIs("PANE-2", 5000);
+    check("the toast pane stays in the page under chrome.debugger", paneUnderDbg && extFrames().length === 0, `live=${paneUnderDbg} title=${await tab.title()} frames=${extFrames()}`);
+    await dbgSend({ type: "detach", tabId });
+
+    await tab.goto(`${ORIGIN}/overlay-target`);
+    await titleIs("PLAIN-OVERLAY-MOUNTED");
+    await mgr.evaluate(() => new Promise<void>((r) => chrome.storage.local.remove("resDebuggerOverlays", () => r())));
+    await mgrSend({ type: "settleScripts" });
+    let backInFrame = false;
+    for (let i = 0; i < 50 && !backInFrame; i++) {
+        backInFrame = extFrames().length > 0;
+        if (!backInFrame) await tab.waitForTimeout(100);
+    }
+    check("turning the setting off moves the open plain onOverlay back into its extension iframe", backInFrame, `frames=${extFrames()}`);
+    const ctl = await dbgSend({ type: "attach", tabId });
+    check("control: chrome.debugger can't attach while that iframe is in the tab", ctl?.ok === false, JSON.stringify(ctl));
+    if (ctl?.ok) await dbgSend({ type: "detach", tabId });
+    await deleteTweak(mgrSend, "All Overlays");
 } catch (err) {
     console.error("E2E ERROR:", err);
     failed++;

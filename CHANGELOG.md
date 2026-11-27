@@ -7,6 +7,10 @@ its section below.
 
 ## [Unreleased]
 
+### Added
+
+- **[Debugger-friendly overlays](docs/scripting.md#debugger-friendly-overlays)** in Settings → Overlays (off by default, `debuggerFriendlyOverlays` in `settings.json`). Every `tweak.onOverlay` and toast pane draws in a closed shadow root in the page instead of an extension frame, so Playwriter and other `chrome.debugger` extensions can attach without removing them. The page can see keys typed into them. On Chrome MV3 it needs user scripts (toast panes also Chrome 135); without them Problems says so. `tweak.site` keeps its own `debuggerSafe` option.
+
 ## [0.41.0-alpha] - 2026-11-25
 
 Handlers from several tweaks now stack predictably: they run from general to specific and the last word wins ([docs](docs/scripting.md#multiple-handlers--how-they-stack)).

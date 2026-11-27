@@ -209,4 +209,21 @@ describe("tweak.site runtime", () => {
         expect(ran).toEqual(["normal"]);
         delete (globalThis as any).__ttTestRan;
     });
+
+    it('"all" (the Debugger-friendly overlays setting) collects every onOverlay as debuggerSafe but leaves tweak.site alone', () => {
+        const cjs = `
+            const { tweak } = require("tangitweak");
+            tweak.onOverlay("*://example.com/*", () => {});
+            tweak.onOverlay({ url: "*://example.com/*", debuggerSafe: true }, () => {});
+            tweak.site("*://example.com/*", () => {});
+        `;
+        const shim = (mode: boolean | "all") => {
+            const s = makePageShim({ world: "isolated", debuggerSafeOverlays: mode, params: {}, log: () => {}, storage: { get: async () => undefined, set: async () => {} } });
+            const mod = { exports: {} };
+            s.top(() => scriptFunction(cjs, "all.ts")(s.host, console, makeLibRequire([], () => {})("all.ts"), mod, mod.exports));
+            return s.shadowOverlays.map((o) => o.route.index);
+        };
+        expect(shim(true)).toEqual([1]);
+        expect(shim("all")).toEqual([0, 1]);
+    });
 });

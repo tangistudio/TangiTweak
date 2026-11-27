@@ -2,7 +2,7 @@
  * JSON schemas for settings.json — used by Monaco's built-in JSON worker in
  * the Editor — and for a tweak's own data folder settings.json.
  */
-import { LOG_LEVELS, DEFAULT_LOG_CAP, DEFAULT_LOG_LEVEL, TEXT_TYPES_DESC, DEFAULT_BODY_CAP, BODY_CAP_MIN, BODY_CAP_MAX } from "./settingsJson";
+import { LOG_LEVELS, DEFAULT_LOG_CAP, DEFAULT_LOG_LEVEL, TEXT_TYPES_DESC, DEFAULT_BODY_CAP, BODY_CAP_MIN, BODY_CAP_MAX, DEBUGGER_OVERLAYS_DESC } from "./settingsJson";
 import { DATA_FOLDER_DESC, DEFAULT_DATA_FOLDER } from "./tweakData";
 import { DEFAULT_TEXT_TYPES } from "./bodyKind";
 import { isParamDef, paramDefault, type ParamNode, type ParamTree } from "./scriptDef";
@@ -50,6 +50,11 @@ export const SETTINGS_SCHEMA = {
             pattern: "^[A-Za-z0-9._-]+$",
             default: DEFAULT_DATA_FOLDER,
             description: `${DATA_FOLDER_DESC}. Changing it renames the folder in every tweak`,
+        },
+        debuggerFriendlyOverlays: {
+            type: "boolean",
+            default: false,
+            description: DEBUGGER_OVERLAYS_DESC,
         },
     },
 };

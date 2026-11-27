@@ -23,6 +23,15 @@ describe("settings.json", () => {
         expect(parseSettings(JSON.stringify({ scripts: { "A.ts": { enabled: false } } }))).toEqual({ globals: {} });
     });
 
+    it("debuggerFriendlyOverlays: written only when on; a file without it turns it off; a non-boolean is skipped", () => {
+        expect(JSON.parse(renderSettings({ ...G, debuggerFriendlyOverlays: true }))).toEqual({ debuggerFriendlyOverlays: true });
+        expect(renderSettings({ ...G, debuggerFriendlyOverlays: false })).toBe("{}\n");
+        expect(planSettings(parseSettings(`{"debuggerFriendlyOverlays":true}`), G)).toEqual({ debuggerFriendlyOverlays: true });
+        expect(planSettings(parseSettings("{}"), { ...G, debuggerFriendlyOverlays: true })).toEqual({ debuggerFriendlyOverlays: false });
+        expect(planSettings(parseSettings(`{"debuggerFriendlyOverlays":true}`), { ...G, debuggerFriendlyOverlays: true })).toEqual({});
+        expect(planSettings(parseSettings(`{"debuggerFriendlyOverlays":"yes"}`), G)).toEqual({});
+    });
+
     it("rejects non-object JSON roots and invalid JSON syntax", () => {
         expect(() => parseSettings("{bad")).toThrow(/invalid JSON/);
         expect(() => parseSettings("[]")).toThrow(/JSON object/);

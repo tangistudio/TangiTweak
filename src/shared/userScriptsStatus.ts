@@ -36,3 +36,25 @@ export const USER_SCRIPTS_NOTICE: Record<Exclude<UserScriptsStatus, "ok">, { lin
 export function userScriptsProblem(label: string, status: Exclude<UserScriptsStatus, "ok">, extensionId: string): string {
     return `${label}: ${USER_SCRIPTS_PROBLEM} — ${userScriptsHowTo(status, extensionId)}`;
 }
+
+/** the Problems warning for an onOverlay the "Debugger-friendly overlays" setting can't move out of its iframe (`label`: "onOverlay #1") */
+export function debuggerOverlaysProblem(label: string, status: Exclude<UserScriptsStatus, "ok">, extensionId: string): string {
+    return `${label}: stays in an extension iframe that debuggers like Playwriter remove. "Debugger-friendly overlays" needs user scripts: ${userScriptsHowTo(status, extensionId)}`;
+}
+
+/**
+ * What the "Debugger-friendly overlays" setting (`on`) moves out of extension
+ * iframes: every onOverlay but tweak.site's (Chrome MV3: while user scripts
+ * run) and toast panes (Chrome MV3: also needs `userScripts.execute`, Chrome
+ * 135). Firefox and MV2: pass "ok" and true.
+ */
+export function debuggerFriendly(on: boolean, userScripts: UserScriptsStatus, paneWorld: boolean): { overlays: boolean; panes: boolean } {
+    const overlays = on && userScripts === "ok";
+    return { overlays, panes: overlays && paneWorld };
+}
+
+/** the Problems warning for toast panes the setting can't draw in the page (`status` "ok": the browser can't run code in a page on demand) */
+export function debuggerPanesProblem(status: UserScriptsStatus, extensionId: string): string {
+    const why = status === "ok" ? "draws them in the page from Chrome 135" : `needs user scripts: ${userScriptsHowTo(status, extensionId)}`;
+    return `tweak.toastPane: its panes stay in an extension iframe that debuggers like Playwriter remove. "Debugger-friendly overlays" ${why}`;
+}

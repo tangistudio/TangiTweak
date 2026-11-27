@@ -31,6 +31,8 @@ export const settings = proxy({
     bodyCap: DEFAULT_BODY_CAP,
     /** each tweak's data folder name */
     dataFolder: DEFAULT_DATA_FOLDER,
+    /** overlays and toast panes in closed shadow roots, not extension iframes */
+    debuggerOverlays: false,
     /** absolute path of the synced folder, for the ↗ button */
     vscodePath: "",
     launchMode: "vscode" as LaunchMode,

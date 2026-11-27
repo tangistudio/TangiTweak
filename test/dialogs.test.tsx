@@ -391,6 +391,24 @@ describe("settings dialog", () => {
         expect($("#btn-folder-disconnect")).not.toBeNull();
         await act(async () => void (settings.folder.mode = "off"));
     });
+
+    it("Debugger-friendly overlays starts off and its box writes the setting", async () => {
+        const set = vi.fn();
+        const remove = vi.fn();
+        vi.stubGlobal("chrome", { storage: { local: { set, remove } } });
+        try {
+            const { SettingsDialog } = await import("../src/ui/dialogs/SettingsDialog");
+            render(<SettingsDialog />);
+            const box = $<HTMLInputElement>("#settings-debugger-overlays");
+            expect(box.checked).toBe(false);
+            fireEvent.click(box);
+            expect(set).toHaveBeenCalledWith({ resDebuggerOverlays: true });
+            fireEvent.click(box);
+            expect(remove).toHaveBeenCalledWith("resDebuggerOverlays");
+        } finally {
+            vi.unstubAllGlobals();
+        }
+    });
 });
 
 describe("quick open", () => {

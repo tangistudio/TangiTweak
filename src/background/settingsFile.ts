@@ -11,6 +11,7 @@ import {
     DEFAULT_LOG_LEVEL,
     DEFAULT_BODY_CAP,
     BODY_CAP_KEY,
+    DEBUGGER_OVERLAYS_KEY,
     isTextTypes,
     isBodyCap,
     type GlobalSettings,
@@ -37,10 +38,11 @@ function storageRemove(key: string): Promise<void> {
 }
 
 export async function currentSettings(): Promise<GlobalSettings> {
-    const g = await storageGet(["resLogLevel", "resLogCap", TEXT_TYPES_KEY, BODY_CAP_KEY, DATA_FOLDER_KEY]);
+    const g = await storageGet(["resLogLevel", "resLogCap", TEXT_TYPES_KEY, BODY_CAP_KEY, DATA_FOLDER_KEY, DEBUGGER_OVERLAYS_KEY]);
     const globals: GlobalSettings = { logLevel: g.resLogLevel ?? DEFAULT_LOG_LEVEL, logCap: g.resLogCap ?? DEFAULT_LOG_CAP, dataFolder: dataFolderName(g[DATA_FOLDER_KEY]) };
     if (isTextTypes(g[TEXT_TYPES_KEY])) globals.textTypes = g[TEXT_TYPES_KEY];
     if (isBodyCap(g[BODY_CAP_KEY])) globals.bodyCap = g[BODY_CAP_KEY];
+    if (g[DEBUGGER_OVERLAYS_KEY] === true) globals.debuggerFriendlyOverlays = true;
     return globals;
 }
 
@@ -72,6 +74,10 @@ async function applyPlan(plan: SettingsPlan): Promise<{ error?: string }> {
     if (plan.bodyCap) {
         if (plan.bodyCap === DEFAULT_BODY_CAP) await storageRemove(BODY_CAP_KEY);
         else await storageSet({ [BODY_CAP_KEY]: plan.bodyCap });
+    }
+    if (plan.debuggerFriendlyOverlays !== undefined) {
+        if (plan.debuggerFriendlyOverlays) await storageSet({ [DEBUGGER_OVERLAYS_KEY]: true });
+        else await storageRemove(DEBUGGER_OVERLAYS_KEY);
     }
     return plan.dataFolder ? setDataFolder(plan.dataFolder) : {};
 }

@@ -27,7 +27,7 @@ import { isTsxName, scriptNameProblem, scriptFileName, scriptFileKey, scriptPath
 import { jsxElementAt } from "../shared/builtinSpecs";
 import { vscodeTargetPath, editorLaunchUrl, launchAppName, type LaunchMode } from "./bundle";
 import { computeDirty } from "./dirtyState";
-import { parseSettings, SETTINGS_FILE, isBodyCap, BODY_CAP_KEY, DEFAULT_BODY_CAP } from "../shared/settingsJson";
+import { parseSettings, SETTINGS_FILE, isBodyCap, BODY_CAP_KEY, DEFAULT_BODY_CAP, DEBUGGER_OVERLAYS_KEY } from "../shared/settingsJson";
 import { DATA_FOLDER_KEY, dataFolderName, DEFAULT_DATA_FOLDER, TWEAK_SETTINGS_FILE } from "../shared/tweakData";
 import { createNetStore, type NetStore } from "./network/netStore";
 import { installTooltips } from "./tooltip";
@@ -1510,13 +1510,14 @@ function setupSettings(): void {
     });
     settings.folder.supported = fsBridge.isSupported();
     const bodyCap = (v: unknown): number => (isBodyCap(v) ? v : DEFAULT_BODY_CAP);
-    chrome.storage.local.get(["resLogLevel", "resMonacoVerbose", "resLogBadge", "resLogCap", BODY_CAP_KEY, DATA_FOLDER_KEY, "resVscodePath", "resVscodeLaunch", "resEditorUrl"], (d) => {
+    chrome.storage.local.get(["resLogLevel", "resMonacoVerbose", "resLogBadge", "resLogCap", BODY_CAP_KEY, DEBUGGER_OVERLAYS_KEY, DATA_FOLDER_KEY, "resVscodePath", "resVscodeLaunch", "resEditorUrl"], (d) => {
         settings.dataFolder = dataFolderName(d?.[DATA_FOLDER_KEY]);
         if (d?.resLogLevel) logState.level = d.resLogLevel;
         setMonacoVerbose(!!d?.resMonacoVerbose);
         panel.statusBar = d?.resLogBadge !== false;
         if (d?.resLogCap) logState.cap = d.resLogCap;
         settings.bodyCap = bodyCap(d?.[BODY_CAP_KEY]);
+        settings.debuggerOverlays = d?.[DEBUGGER_OVERLAYS_KEY] === true;
         if (d?.resVscodePath) settings.vscodePath = d.resVscodePath;
         settings.launchMode = d?.resVscodeLaunch || "vscode";
         settings.editorUrl = d?.resEditorUrl || "";
@@ -1524,12 +1525,13 @@ function setupSettings(): void {
     });
     chrome.storage.onChanged.addListener((c) => {
         if (c[BODY_CAP_KEY]) settings.bodyCap = bodyCap(c[BODY_CAP_KEY].newValue);
+        if (c[DEBUGGER_OVERLAYS_KEY]) settings.debuggerOverlays = c[DEBUGGER_OVERLAYS_KEY].newValue === true;
         if (c[DATA_FOLDER_KEY]) settings.dataFolder = dataFolderName(c[DATA_FOLDER_KEY].newValue);
         if (c.resLogLevel?.newValue) logState.level = c.resLogLevel.newValue;
         if (c.resLogCap?.newValue) logState.cap = c.resLogCap.newValue;
         const storeChanged = Object.keys(c).some((k) => k.startsWith("resStore."));
         if (storeChanged || c.resParams || c[DATA_FOLDER_KEY]) void loadTweakData();
-        if (c.resScripts || c.resParams || c.resLogLevel || c.resLogCap || c[BODY_CAP_KEY] || c.resDataFiles || c.resFolders) {
+        if (c.resScripts || c.resParams || c.resLogLevel || c.resLogCap || c[BODY_CAP_KEY] || c[DEBUGGER_OVERLAYS_KEY] || c.resDataFiles || c.resFolders) {
             void (async () => {
                 if (selectedId === SETTINGS_ID || settingsModel) await loadSettingsModel();
                 // data files / folders change the script order (folders) or importers' errors

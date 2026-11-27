@@ -212,6 +212,34 @@ export async function runSiteUnits(target: { tabId: number; frameId: number; doc
         if (key) running.delete(key);
     }
 }
+/** user-script worlds can draw toast panes in the page (Chrome 135+: `execute`) */
+export function canRunPanes(): boolean {
+    return __MV3__ && typeof api()?.execute === "function";
+}
+
+/**
+ * Runs pane.js (src/overlay/paneWorld.ts) in one document, in script `s`'s
+ * user-script world: a toast pane drawn in the page ("Debugger-friendly
+ * overlays"). `boot` tells it its nonce and the tag of its host element.
+ */
+export async function runPaneWorld(target: { tabId: number; frameId: number; documentId?: string }, s: string, boot: { nonce: string; token: string }): Promise<void> {
+    if ((await userScriptsStatus()) !== "ok") throw new Error("user scripts are off");
+    const us = api();
+    if (typeof us?.execute !== "function") throw new Error("this browser can't run code in a page on demand");
+    const perWorld = typeof us.getWorldConfigurations === "function";
+    // the same world settings as the script's isolated code (syncUserScripts): eval, and a port back here
+    if (perWorld) await us.configureWorld({ worldId: s, csp: ISO_WORLD_CSP, messaging: true });
+    else await us.configureWorld({ csp: ISO_WORLD_CSP, messaging: true });
+    const { tabId, frameId, documentId } = target;
+    await us.execute({
+        target: documentId ? { tabId, documentIds: [documentId] } : { tabId, frameIds: [frameId] },
+        world: "USER_SCRIPT",
+        ...(perWorld ? { worldId: s } : {}),
+        injectImmediately: true,
+        js: [{ code: `globalThis.__ttPaneBoot=${JSON.stringify(boot)};` }, { file: "pane.js" }],
+    });
+}
+
 /** the runs under way: tab, document and a hash of the code */
 const running = new Set<string>();
 

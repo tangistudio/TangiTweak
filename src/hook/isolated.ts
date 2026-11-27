@@ -275,11 +275,12 @@ import { FrameKeyOffers } from "../shared/frameKeys";
     function exec(init: IsoInit, hot: boolean): void {
         const gen = life.begin();
         const allowShadowOverlay = top && !!init.shadowOverlay;
+        const shadowMode = allowShadowOverlay && (init.shadowOverlay === "all" ? "all" : true);
         const makeShim = () =>
             makePageShim({
                 params: init.params || {},
                 world: "isolated",
-                debuggerSafeOverlays: allowShadowOverlay,
+                debuggerSafeOverlays: shadowMode,
                 stores: { store: (n, initial, persist) => stores().store(s, n, initial, persist), tabStore: (n, initial) => stores().tabStore(s, n, initial, tabScopeOfPage(page)), pageStore: (n, initial) => stores().pageStore(s, n, initial, page) },
                 siteStore: (n, initial) => siteStores().store(s, n, initial),
                 exposer,

@@ -282,7 +282,7 @@ import type { PaneToast } from "../shared/wire";
     // ---- onPage code in the isolated world: compiles the FULL script source
     // with a shim so top-level helpers/closures survive; the DOM is shared
     // with the page, window (page JS globals) is not ----
-    interface DocumentHandler { scriptId: string; name: string; src: string; params?: Record<string, any>; layers?: ScriptLayers; shadowOverlay?: boolean }
+    interface DocumentHandler { scriptId: string; name: string; src: string; params?: Record<string, any>; layers?: ScriptLayers; shadowOverlay?: boolean | "all" }
 
     /** page-world messages toward trusted code: dropped, logged (a few per page) */
     let droppedN = 0;
@@ -325,6 +325,7 @@ import type { PaneToast } from "../shared/wire";
         if (resp.count > 0 || (resp.domHandlers || []).length || (resp.isoHandlers || []).length || (resp.overlays || []).length) openPort();
         pageScriptIds = new Set(((resp.domHandlers || []) as DocumentHandler[]).map((h) => h.scriptId));
         if (window === top) syncSiteFouc(resp.site ?? null);
+        shadowPanes = window === top && resp.shadowPanes === true;
         syncOverlays(window === top ? resp.overlays || [] : [], hot);
         if (__MV3__) {
             // MV3 content scripts can't eval: isolated code runs in user-script worlds; this frame only relays the overlay's calls
@@ -568,7 +569,7 @@ import type { PaneToast } from "../shared/wire";
                     ? overlayClient(scriptId).remote(key, sig)
                     : inertRemote(TOP_FRAME_ONLY);
         };
-        const shimFor = (scriptId: string | null, name: string, params: Record<string, any>, exposer?: Exposer, storesOf?: string, paramOwner?: string, gen?: Generation, debuggerSafeOverlays = false) =>
+        const shimFor = (scriptId: string | null, name: string, params: Record<string, any>, exposer?: Exposer, storesOf?: string, paramOwner?: string, gen?: Generation, debuggerSafeOverlays: boolean | "all" = false) =>
             makePageShim({
                 params,
                 world,
@@ -628,7 +629,7 @@ import type { PaneToast } from "../shared/wire";
                 // page-side require over the shipped library sources and data files
                 const codeOf = (importer: string) => (importer === h.name ? h.src : (libSources.find((l) => l.name === importer)?.src ?? ""));
                 const allowShadow = world === "isolated" && window === top && !!h.shadowOverlay;
-                const shim = shimFor(h.scriptId, h.name, h.params || {}, exposer, h.scriptId, h.scriptId, gen, allowShadow);
+                const shim = shimFor(h.scriptId, h.name, h.params || {}, exposer, h.scriptId, h.scriptId, gen, allowShadow && (h.shadowOverlay === "all" ? "all" : true));
                 // the tweak's modules run with its `tweak`: their handlers, params and stores are its own
                 const requireFrom = makeLibRequire(
                     libSources,
@@ -709,12 +710,16 @@ import type { PaneToast } from "../shared/wire";
     let l2Holders = 0;
     // the toasts this (top) frame draws; it holds the port while any are up
     let toastLayer: ToastLayer | null = null;
-    /** A toast pane's frame (`tweak.toastPane`), by toast key. */
+    /** A toast pane (`tweak.toastPane`), by toast key: in a frame, or in the page ("Debugger-friendly overlays"). */
     interface PaneFrame {
         key: string;
         s: string;
         view: ToastView;
-        frame: HTMLIFrameElement;
+        /** what the toast shows: the frame, or the box the in-page pane's host goes in */
+        el: HTMLElement;
+        frame: HTMLIFrameElement | null;
+        /** in the page: the element whose closed shadow root the pane draws in */
+        host: HTMLElement | null;
         nonce: string;
         /** its current link (after it said hello) */
         ep: Endpoint | null;
@@ -729,6 +734,11 @@ import type { PaneToast } from "../shared/wire";
         closed: boolean;
     }
     const paneFrames = new Map<string, PaneFrame>();
+    // the bundle says toast panes draw in the page (src/overlay/paneWorld.ts)
+    let shadowPanes = false;
+    // Chrome MV3 in-page panes: the bridge's end of each, by nonce (their traffic goes through the background)
+    const paneRelays = new Map<string, Endpoint>();
+    let paneBeat: ReturnType<typeof setInterval> | null = null;
     let l2Backoff = 50;
     let l2Timer: ReturnType<typeof setTimeout> | null = null;
     let l2Opened = 0;
@@ -768,6 +778,14 @@ import type { PaneToast } from "../shared/wire";
             p.reply(r);
         });
         ep.on("iso.call", (c, s) => guard(() => s !== undefined && isRpcCall(c) && callOverlayFromIso(s, c)));
+        ep.on("pane.relay", (a) =>
+            guard(() => {
+                const r = typeof a?.nonce === "string" ? paneRelays.get(a.nonce) : undefined;
+                if (!r) return;
+                if (a.closed) r.close("the pane's world went");
+                else if (a.msg) r.receive(a.msg);
+            })
+        );
         ep.on("frameKeys.hit", (a) => guard(() => keyOffers.hit(a?.token)));
         ep.on("frameKeys.watch", (a) =>
             guard(() => {
@@ -805,6 +823,8 @@ import type { PaneToast } from "../shared/wire";
         if (l2Opened > 1) keyOffers.relink();
         ep.onClose(() => {
             if (l2 === ep) l2 = null;
+            // in-page panes whose traffic went through the background lost it: they show the default toast
+            for (const p of [...paneFrames.values()]) if (p.host && __MV3__) failPane(p, "lost its link to the extension");
             // the background forgot what this frame watched for its parents; they offer again
             childKeys.clear();
             for (const [cid, p] of [...isoPending])
@@ -1085,7 +1105,7 @@ import type { PaneToast } from "../shared/wire";
         }));
     }
 
-    // ---- toast panes: a tweak's own toast inside, in an overlay.html frame ----
+    // ---- toast panes: a tweak's own toast inside, in an overlay.html frame (or in the page) ----
     const PANE_MAX = 480;
     const paneToastOf = (v: ToastView): PaneToast => ({ id: v.id, data: v.data, ...(v.title !== undefined ? { title: v.title } : {}), ...(v.message !== undefined ? { message: v.message } : {}), kind: v.kind });
 
@@ -1093,35 +1113,91 @@ import type { PaneToast } from "../shared/wire";
         const cut = view.key.indexOf(":");
         if (cut <= 0 || !view.pane) return null;
         closePane(view.key);
+        const label = `${view.title ?? view.pane} (from ${view.source})`;
+        const base = { key: view.key, s: view.key.slice(0, cut), view, nonce: "", ep: null, granted: false, expect: false, loads: 0, reloads: 0, closed: false };
+        if (shadowPanes) {
+            // in the page: a debugger extension removing extension frames can't take it
+            const box = document.createElement("div");
+            box.setAttribute("role", "group");
+            box.setAttribute("aria-label", label);
+            box.style.cssText = `display:block;width:100%;max-height:${PANE_MAX}px;overflow:auto;margin:0;padding:0`;
+            const host = document.createElement("tangitweak-pane");
+            host.style.cssText = "all:initial;display:none";
+            const p: PaneFrame = { ...base, el: box, frame: null, host };
+            paneFrames.set(view.key, p);
+            openPane(p);
+            return box;
+        }
         const frame = document.createElement("iframe");
         frame.setAttribute("allowtransparency", "true");
-        frame.setAttribute("aria-label", `${view.title ?? view.pane} (from ${view.source})`);
+        frame.setAttribute("aria-label", label);
         frame.style.cssText = "all:initial;display:block;width:100%;height:48px;border:0;margin:0;padding:0;background:transparent;color-scheme:normal";
-        const p: PaneFrame = { key: view.key, s: view.key.slice(0, cut), view, frame, nonce: "", ep: null, granted: false, expect: false, loads: 0, reloads: 0, closed: false };
+        const p: PaneFrame = { ...base, el: frame, frame, host: null };
         paneFrames.set(view.key, p);
         frame.addEventListener("load", () => guard(() => paneLoaded(p)));
         openPane(p);
         return frame;
     }
 
-    /** grant a fresh nonce, then (re)load the frame with it */
+    /** grant a fresh nonce, then (re)load the frame with it (or start the pane in the page) */
     function openPane(p: PaneFrame): void {
         p.nonce = newNonce();
         l2call("pane.open", { nonce: p.nonce, url: location.href }, p.s).then(
             () => {
                 if (p.closed) return void l2?.push("pane.closed", {}, p.s);
                 p.granted = true;
+                if (p.host) return void startShadowPane(p).catch((e: any) => failPane(p, `couldn't start: ${e?.message || e}`));
                 p.expect = true;
                 // a query of its own each time: only the hash changing wouldn't load it again
-                p.frame.src = chrome.runtime.getURL("overlay.html") + (p.loads ? `?${p.loads}` : "") + "#" + p.nonce;
+                p.frame!.src = chrome.runtime.getURL("overlay.html") + (p.loads ? `?${p.loads}` : "") + "#" + p.nonce;
                 p.loads++;
             },
             (e: any) => failPane(p, `couldn't start: ${e?.message || e}`)
         );
     }
 
+    /** an in-page pane: the background runs pane.js; it says hello like a frame */
+    async function startShadowPane(p: PaneFrame): Promise<void> {
+        const host = p.host!;
+        const nonce = p.nonce;
+        const debug = (m: string) => dlog("debug", `toast pane of ${p.view.source}:`, m);
+        if (__MV3__) {
+            // pane.js runs in the script's user-script world and finds its host by this tag (then untags it)
+            host.setAttribute("data-tt-pane", newNonce());
+            document.documentElement.appendChild(host);
+            const relay = new Endpoint((msg) => l2?.push("pane.relay", { nonce, msg }, p.s), { debug });
+            paneRelays.set(nonce, relay);
+            relay.onClose(() => {
+                if (paneRelays.get(nonce) !== relay) return;
+                paneRelays.delete(nonce);
+                l2?.push("pane.relay", { nonce, closed: true }, p.s);
+            });
+            wirePane(p, relay, nonce);
+            paneBeat ??= setInterval(() => {
+                const r = [...paneFrames.values()].filter((x) => x.host && paneRelays.has(x.nonce));
+                if (!r.length) {
+                    clearInterval(paneBeat!);
+                    paneBeat = null;
+                }
+                for (const x of r) l2?.push("pane.relay", { nonce: x.nonce }, x.s);
+            }, 20000);
+            await l2call("pane.shadow", { nonce, token: host.getAttribute("data-tt-pane")! }, p.s);
+            return;
+        }
+        const g = globalThis as any;
+        if (typeof g.__ttPaneRun !== "function") await l2call("pane.shadow", { nonce }, p.s);
+        if (p.closed || p.nonce !== nonce) return;
+        if (typeof g.__ttPaneRun !== "function") throw new Error("pane.js didn't load");
+        const { port1, port2 } = new MessageChannel();
+        const ep = messagePortEndpoint(port1, { debug });
+        wirePane(p, ep, nonce);
+        p.el.appendChild(host);
+        host.style.display = "block";
+        void g.__ttPaneRun(port2, nonce, host);
+    }
+
     function paneLoaded(p: PaneFrame): void {
-        if (p.closed || !p.frame.getAttribute("src")) return;
+        if (p.closed || !p.frame?.getAttribute("src")) return;
         if (!p.expect) {
             // it moved in the DOM and reloaded: grant a new nonce (a few times in a row)
             if (++p.reloads > 3) return failPane(p, "its frame kept reloading");
@@ -1136,22 +1212,32 @@ import type { PaneToast } from "../shared/wire";
     }
 
     function connectPane(p: PaneFrame): void {
-        const win = p.frame.contentWindow;
+        const win = p.frame?.contentWindow;
         if (p.closed || !win) return;
-        const s = p.s;
         const { port1, port2 } = new MessageChannel();
         const ep = messagePortEndpoint(port1, { debug: (m) => dlog("debug", `toast pane of ${p.view.source}:`, m) });
-        const nonce = p.nonce;
+        wirePane(p, ep, p.nonce);
+        win.postMessage({ ttOverlay: true }, "*", [port2]);
+    }
+
+    /** what a pane (frame or in-page) may call, once it said hello with `nonce` */
+    function wirePane(p: PaneFrame, ep: Endpoint, nonce: string): void {
+        const s = p.s;
         let proven = false;
         const live = () => proven && !p.closed && p.ep === ep;
         ep.handle("hello", async (a) => {
-            if (proven || a?.nonce !== nonce || p.closed) {
+            // in the page (MV3) its world untagged the host it took: one the page made can't say hello
+            if (proven || a?.nonce !== nonce || p.closed || (__MV3__ && p.host?.hasAttribute("data-tt-pane"))) {
                 ep.close("refused");
                 throw new Error("refused");
             }
             proven = true;
             p.ep = ep;
             p.reloads = 0;
+            if (p.host && __MV3__) {
+                p.el.appendChild(p.host);
+                p.host.style.display = "block";
+            }
             const init = await l2call("pane.init", {}, s);
             return { ...init, phase: phaseNow(), pane: { name: p.view.pane!, toast: paneToastOf(p.view) } };
         });
@@ -1169,23 +1255,26 @@ import type { PaneToast } from "../shared/wire";
         ep.handle("storage.set", mine((a: ReqOf<"storage.set">) => new Promise((r) => safeSend({ type: "scriptStorageSet", scriptId: s, key: a.key, value: a.value }, () => r({})))));
         ep.handle("param.set", mine((a: ReqOf<"param.set">) => new Promise((r) => safeSend({ type: "scriptParamSet", scriptId: s, key: a.key, value: a.value, lib: a.lib }, () => r({})))));
         ep.handle("toast", mine((a: ReqOf<"toast">) => l2call("toast", a, s)));
+        // MV3 in-page panes: the user-script world can't ask the background for React itself (pane.js)
+        if (p.host && __MV3__) ep.handle("builtin.react", mine(() => new Promise<string>((resolve, reject) => safeSend({ type: "getBuiltinReact" }, (r: any) => (typeof r?.src === "string" ? resolve(r.src) : reject(new Error(r?.error || "no answer from the extension")))))));
         ep.on("log", (a) => live() && scriptLog(s, ["debug", "info", "warn", "error"].includes(a?.level) ? a.level : "info", String(a?.msg ?? ""), "overlay"));
         ep.on("pane.action", (a) => live() && typeof a?.actionId === "string" && a.actionId.length <= 64 && toastLayer?.paneAction(p.key, a.actionId, a.value));
         ep.on("pane.close", () => live() && toastLayer?.paneClose(p.key));
         ep.on("pane.keepOpen", () => live() && toastLayer?.paneKeepOpen(p.key));
         ep.on("pane.size", (a) => {
-            if (live() && typeof a?.height === "number" && isFinite(a.height)) p.frame.style.height = `${Math.min(PANE_MAX, Math.max(0, Math.ceil(a.height)))}px`;
+            if (live() && p.frame && typeof a?.height === "number" && isFinite(a.height)) p.frame.style.height = `${Math.min(PANE_MAX, Math.max(0, Math.ceil(a.height)))}px`;
         });
         ep.on("pane.failed", (a) => live() && failPane(p, String(a?.why ?? "it failed").slice(0, 300)));
         ep.onClose(() => {
             if (p.ep === ep) p.ep = null;
+            // an in-page pane can't come back on its own
+            if (p.host && proven && !p.closed) failPane(p, "stopped");
         });
-        win.postMessage({ ttOverlay: true }, "*", [port2]);
-        // a frame that never says hello (a page that blocks extension frames) shows the default toast
+        // a pane that never says hello (a page that blocks extension frames) shows the default toast
         setTimeout(() => {
             if (!proven && !p.closed && p.nonce === nonce) {
                 ep.close("no hello");
-                failPane(p, "its frame didn't start");
+                failPane(p, p.frame ? "its frame didn't start" : "didn't start");
             }
         }, 15000);
     }
@@ -1203,8 +1292,11 @@ import type { PaneToast } from "../shared/wire";
         if (!p) return;
         paneFrames.delete(key);
         p.closed = true;
+        if (p.host) p.ep?.push("pane.stop", {});
         p.ep?.close("the toast closed");
         p.ep = null;
+        paneRelays.get(p.nonce)?.close("the toast closed");
+        p.host?.remove();
         if (p.granted) l2?.push("pane.closed", {}, p.s);
         p.granted = false;
     }

@@ -67,6 +67,12 @@ export interface OverlayEnv {
     trustedKey?: (e: KeyboardEvent) => boolean;
     /** the Fast Refresh registry's key (default: the script's name; the test loader keeps each page's apart) */
     hotKey?: string;
+    /**
+     * A toast pane drawn in the page (the "Debugger-friendly overlays" setting,
+     * src/overlay/paneWorld.ts): draw into this closed shadow root and leave the
+     * window alone (no fetch patch, key, error or pointer listeners: they're the page's).
+     */
+    paneRoot?: ShadowRoot;
 }
 
 /** run `init`'s script in this frame, talking to the bridge over `ep` */
@@ -74,6 +80,7 @@ export async function startOverlay(ep: Endpoint, init: OverlayInit, env: Overlay
     const { win, doc } = env;
     const s = init.s;
     const paneMode = !!init.pane;
+    const inPage = !!env.paneRoot;
     const log = (level: ScriptLogLevel, msg: string) => ep.push("log", { level, msg });
     const errorLine = (e: any, context: string) => formatScriptError(init.name, e, context);
 
@@ -232,7 +239,7 @@ export async function startOverlay(ep: Endpoint, init: OverlayInit, env: Overlay
         return fn ? runShortcut(fn, (e: any) => log("error", errorLine(e, "ctx.shortcut"))) : false;
     };
     ep.on("shortcut.fire", ({ id }) => void fireKey(id));
-    const stopKeys = watchShortcuts(win, (e) => keys.find(e), (hits) => hits.map((h) => fireKey(h.id)).includes(true), { trusted: env.trustedKey });
+    const stopKeys = inPage ? () => {} : watchShortcuts(win, (e) => keys.find(e), (hits) => hits.map((h) => fireKey(h.id)).includes(true), { trusted: env.trustedKey });
     const shortcut = (combo: string, fn: () => unknown, opts?: ShortcutOptions) => {
         const priority = shortcutPriority(fn, opts);
         // iframes: the bridge also listens in the page's iframes
@@ -267,7 +274,7 @@ export async function startOverlay(ep: Endpoint, init: OverlayInit, env: Overlay
         toastWhere: "this",
         pageFetch: page,
     };
-    if (env.patchFetch !== false) {
+    if (env.patchFetch !== false && !inPage) {
         // the GUI's own fetch is the page's: same origin, cookies and interception
         win.fetch = async (input: RequestInfo | URL, rinit?: RequestInit) => fromWireResponse(await page.fetch(await toWireRequest(input, rinit ?? {}, page.url), false));
     }
@@ -328,7 +335,7 @@ export async function startOverlay(ep: Endpoint, init: OverlayInit, env: Overlay
                     libCss.add(css);
                     const el = doc.createElement("style");
                     el.textContent = css;
-                    (doc.head || doc.documentElement).appendChild(el);
+                    (env.paneRoot ?? doc.head ?? doc.documentElement).appendChild(el);
                 },
             }
         );
@@ -476,11 +483,17 @@ export async function startOverlay(ep: Endpoint, init: OverlayInit, env: Overlay
         if (!paneEl) {
             paneEl = doc.createElement("div");
             paneEl.className = "tt-pane";
-            doc.body.style.margin = "0";
-            doc.body.appendChild(paneEl);
+            if (env.paneRoot) env.paneRoot.appendChild(paneEl);
+            else {
+                doc.body.style.margin = "0";
+                doc.body.appendChild(paneEl);
+            }
+            // a frame's height follows its content (in the page, the pane's box does by itself)
             const size = () => !ep.closed && ep.push("pane.size", { height: Math.ceil(paneEl!.getBoundingClientRect().height) });
-            if (typeof (win as any).ResizeObserver === "function") new (win as any).ResizeObserver(size).observe(paneEl);
-            else setTimeout(size, 50);
+            if (!inPage) {
+                if (typeof (win as any).ResizeObserver === "function") new (win as any).ResizeObserver(size).observe(paneEl);
+                else setTimeout(size, 50);
+            }
         }
         paneRoot ??= client.createRoot(paneEl);
         paneRoot.render(h(PaneHost, { t: paneToast, render: paneEntry.render }));
@@ -498,9 +511,11 @@ export async function startOverlay(ep: Endpoint, init: OverlayInit, env: Overlay
     const onError = (ev: ErrorEvent) => log("error", ev.error ? errorLine(ev.error, "overlay") : scriptLogLine(init.name, "overlay", ev.message));
     const onRejection = (ev: PromiseRejectionEvent) => log("error", ev.reason instanceof Error ? errorLine(ev.reason, "overlay (unhandled rejection)") : scriptLogLine(init.name, "overlay (unhandled rejection)", formatLogArgs([ev.reason])));
     const onPointer = () => ep.push("focus", {});
-    win.addEventListener("error", onError);
-    win.addEventListener("unhandledrejection", onRejection);
-    win.addEventListener("pointerdown", onPointer, true);
+    if (!inPage) {
+        win.addEventListener("error", onError);
+        win.addEventListener("unhandledrejection", onRejection);
+        win.addEventListener("pointerdown", onPointer, true);
+    }
 
     let lastRects = "";
     const measure = () => {
@@ -531,7 +546,7 @@ export async function startOverlay(ep: Endpoint, init: OverlayInit, env: Overlay
     return { client, exposer, ran, measure, stop };
 }
 
-// ---- boot (only in overlay.html) ----
+// ---- boot (overlay.html and site pages, src/overlay/overlayBoot.ts) ----
 
 /**
  * The bridge posts `{ ttOverlay: true }` with the port; this frame proves
@@ -541,7 +556,7 @@ export async function startOverlay(ep: Endpoint, init: OverlayInit, env: Overlay
  * the nonce belongs to this tab, so a page framing overlay.html itself
  * gets nothing.
  */
-function boot(): void {
+export function boot(): void {
     const nonce = (typeof (window as any).__ttOverlayNonce === "string" && (window as any).__ttOverlayNonce) || location.hash.slice(1);
     if (!nonce) return;
     const onMessage = async (ev: MessageEvent) => {
@@ -561,5 +576,3 @@ function boot(): void {
     };
     window.addEventListener("message", onMessage);
 }
-
-if (typeof document !== "undefined" && document.documentElement?.dataset.ttOverlay === "1") boot();

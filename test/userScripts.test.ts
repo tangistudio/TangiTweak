@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { syncUserScripts, runSiteUnits, userScriptsStatus, onUserScriptsStatus, resetUserScripts, ISO_WORLD_CSP } from "../src/background/userScripts";
-import { userScriptsProblem, USER_SCRIPTS_PROBLEM } from "../src/shared/userScriptsStatus";
+import { debuggerFriendly, debuggerPanesProblem, userScriptsProblem, USER_SCRIPTS_PROBLEM } from "../src/shared/userScriptsStatus";
 import type { RouteMeta } from "../src/shared/route";
 
 const route = (url: string, index = 0): RouteMeta => ({ kind: "onDocument", api: "onPage", index, url: [url], world: "isolated" }) as any;
@@ -212,5 +212,21 @@ describe("chrome.userScripts (MV3 isolated onPage)", () => {
         expect(p).toContain("chrome://extensions/?id=abc");
         expect(p).toMatch(/Editor's banner/);
         expect(userScriptsProblem("onPage #1", "off", "abc")).not.toMatch(/banner/);
+    });
+});
+
+describe("the Debugger-friendly overlays setting", () => {
+    it("moves overlays while user scripts run and panes only when the browser can also run code on demand", () => {
+        expect(debuggerFriendly(false, "ok", true)).toEqual({ overlays: false, panes: false });
+        expect(debuggerFriendly(true, "ok", true)).toEqual({ overlays: true, panes: true });
+        expect(debuggerFriendly(true, "ok", false)).toEqual({ overlays: true, panes: false });
+        expect(debuggerFriendly(true, "off", true)).toEqual({ overlays: false, panes: false });
+        expect(debuggerFriendly(true, "no-permission", true)).toEqual({ overlays: false, panes: false });
+    });
+
+    it("says why panes stay in their iframe, as a warning (not the user-scripts error)", () => {
+        expect(debuggerPanesProblem("ok", "x")).toMatch(/Chrome 135/);
+        expect(debuggerPanesProblem("off", "x")).toMatch(/Allow User Scripts/);
+        expect(debuggerPanesProblem("off", "x")).not.toContain(USER_SCRIPTS_PROBLEM);
     });
 });
