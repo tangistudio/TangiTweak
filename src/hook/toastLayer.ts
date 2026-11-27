@@ -101,7 +101,10 @@ const TOAST_CSS = `
 [part=source]{grid-column:2;font-size:12px;opacity:.65;cursor:grab;user-select:none}
 [part=progress]{position:absolute;left:0;bottom:0;height:2px;width:100%;background:var(--tt-accent);opacity:.5;transform-origin:left;animation:tt-progress var(--tt-ms) linear forwards;animation-play-state:paused}
 [part=progress].run{animation-play-state:running}
-.pane{grid-column:1/3;grid-row:1;max-height:480px;overflow:auto}
+.paned [part=source]{grid-column:1/3;grid-row:1;align-self:center}
+.paned [part=close]{align-self:center}
+/* !important: the frame's inline all:initial would reset its grid placement */
+.pane{grid-column:1/-1!important;grid-row:2!important;margin-top:4px!important;max-height:480px}
 @keyframes tt-progress{from{transform:scaleX(1)}to{transform:scaleX(0)}}
 @keyframes tt-pulse{50%{opacity:.3}}
 @media (prefers-reduced-motion:reduce){.strip.pulse{animation:none}}
@@ -241,6 +244,7 @@ export function createToastLayer(h: ToastLayerHost, win: Window = window): Toast
         const pane = view.pane ? h.pane?.(view, slot) ?? null : null;
         if (pane) {
             pane.classList.add("pane");
+            box.classList.add("paned");
             box.appendChild(pane);
         } else {
             box.appendChild(iconOf(view));

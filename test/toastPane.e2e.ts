@@ -91,6 +91,18 @@ try {
     const first = await paneFrame();
     check("the pane draws in its toast", !!first);
     const loadsBefore = paneLoads;
+    if (first) {
+        const at = await (await first.frameElement()).evaluate((n: Element) => {
+            const root = n.getRootNode() as ShadowRoot;
+            const [box, source, close, frame] = [...["[part=toast]", "[part=source]", "[part=close]"].map((s) => root.querySelector(s)!), n].map((e) => e.getBoundingClientRect().toJSON());
+            return { box, frame, source, close };
+        });
+        check(
+            "a pane's toast shows its source and close above the full-width pane",
+            at.source.bottom <= at.frame.top && at.close.bottom <= at.frame.top && at.frame.width > at.box.width - 40,
+            JSON.stringify({ source: at.source.top, close: at.close.top, frameTop: at.frame.top, frameW: at.frame.width, boxW: at.box.width }),
+        );
+    }
 
     const corners = [
         [40, 40],
