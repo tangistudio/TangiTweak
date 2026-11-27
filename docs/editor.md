@@ -444,7 +444,7 @@ tweaks extend, and [`tangitweak/test`](testing.md)). The root `package.json`
 lists it as the `tangitweak` devDependency
 (`file:.tangitweak/sdk/tangitweak`), and its `workspaces` hold every tweak
 folder plus the SDK. So `npm install`, at the root or in a tweak's folder,
-installs a tweak's `"tangitweak": "^0.40.2-alpha"` dependency as that copy
+installs a tweak's `"tangitweak": "^0.41.0-alpha"` dependency as that copy
 (as long as the range matches this build), even before it's on npm. A
 tweak's `{ "extends": "tangitweak/tsconfig.json" }`,
 `import { tweak } from "tangitweak"` and its tests' `tangitweak/test`

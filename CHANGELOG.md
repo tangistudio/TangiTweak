@@ -7,6 +7,8 @@ its section below.
 
 ## [Unreleased]
 
+## [0.41.0-alpha] - 2026-11-25
+
 Handlers from several tweaks now stack predictably: they run from general to specific and the last word wins ([docs](docs/scripting.md#multiple-handlers--how-they-stack)).
 
 ### Added
@@ -25,6 +27,8 @@ Handlers from several tweaks now stack predictably: they run from general to spe
 - The Editor has a **Schedules** view (⌥⇧S) with Run now and Pause, and its Preview draws toast panes. The popup can mute a tweak's toasts and shows its last 20; Settings has a Toasts section.
 - `tangitweak/test`: `t.trigger("every")`, `t.trigger("toastAction", event)` and `t.toasts`.
 - **The toolbar icon shows an amber "!" while user scripts are off** (Chrome MV3), on every tab, because `onPage` and `onSite` code don't run then. Hovering the icon says why. The popup explains it too, with a button for the next step: grant the `userScripts` permission, then open TangiTweak's details to turn on "Allow User Scripts".
+- **[`tweak.site(route, fn)`](docs/scripting.md#full-page-replacement-tweaksite)** replaces a website in place with your own React app. The tab stays on the real URL, so `ctx.origin.fetch` sends the site's cookies. `exclude` keeps pages like login or checkout on the real site. The popup gets an **Original | Custom** switch, `ctx.navigator` works with React Router and the original site comes back if your app fails to start.
+- **`debuggerSafe: true`** on `tweak.site` and `tweak.onOverlay` keeps them visible while another extension (such as Playwriter) has `chrome.debugger` attached to the tab.
 
 ### Changed
 
@@ -1230,7 +1234,8 @@ Before `0.0.1-alpha` was tagged, the extension grew from an initial TypeScript p
 - Built the initial TypeScript script engine (in-browser Sucrase transpilation, `res.onRequest` / `res.onDom` / `res.log`, script `console.*` capture), embedded Monaco editor with bundled API typings, movable log panel, popup with per-tab active-script badge, sample scripts, and bundle import/export.
 - Implemented three initial interception tiers (`MAIN`-world `fetch`/XHR hook, MV2 blocking `webRequest`, and `chrome.debugger` `Fetch` for main-frame HTML and subresources with adaptive idle detach), two-way local folder sync via the File System Access API, and the headless Chromium E2E suite.
 
-[Unreleased]: https://github.com/tangistudio/TangiTweak/compare/v0.40.2-alpha...HEAD
+[Unreleased]: https://github.com/tangistudio/TangiTweak/compare/v0.41.0-alpha...HEAD
+[0.41.0-alpha]: https://github.com/tangistudio/TangiTweak/compare/v0.40.2-alpha...v0.41.0-alpha
 [0.40.2-alpha]: https://github.com/tangistudio/TangiTweak/compare/v0.36.1-alpha...v0.40.2-alpha
 [0.40.1-alpha]: https://github.com/tangistudio/TangiTweak/compare/v0.37.0-alpha...v0.40.1-alpha
 [0.37.0-alpha]: https://github.com/tangistudio/TangiTweak/compare/v0.36.1-alpha...v0.37.0-alpha
