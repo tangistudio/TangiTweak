@@ -722,7 +722,10 @@ import type { PaneToast } from "../shared/wire";
         granted: boolean;
         /** a load we asked for is coming (others are reloads: the frame moved) */
         expect: boolean;
+        /** for the frame URL's cache-buster */
         loads: number;
+        /** reloads since it last said hello: a frame stuck reloading fails, moving it around doesn't */
+        reloads: number;
         closed: boolean;
     }
     const paneFrames = new Map<string, PaneFrame>();
@@ -1094,7 +1097,7 @@ import type { PaneToast } from "../shared/wire";
         frame.setAttribute("allowtransparency", "true");
         frame.setAttribute("aria-label", `${view.title ?? view.pane} (from ${view.source})`);
         frame.style.cssText = "all:initial;display:block;width:100%;height:48px;border:0;margin:0;padding:0;background:transparent;color-scheme:normal";
-        const p: PaneFrame = { key: view.key, s: view.key.slice(0, cut), view, frame, nonce: "", ep: null, granted: false, expect: false, loads: 0, closed: false };
+        const p: PaneFrame = { key: view.key, s: view.key.slice(0, cut), view, frame, nonce: "", ep: null, granted: false, expect: false, loads: 0, reloads: 0, closed: false };
         paneFrames.set(view.key, p);
         frame.addEventListener("load", () => guard(() => paneLoaded(p)));
         openPane(p);
@@ -1120,8 +1123,8 @@ import type { PaneToast } from "../shared/wire";
     function paneLoaded(p: PaneFrame): void {
         if (p.closed || !p.frame.getAttribute("src")) return;
         if (!p.expect) {
-            // it moved in the DOM and reloaded: grant a new nonce (a few times)
-            if (p.loads > 3) return failPane(p, "its frame kept reloading");
+            // it moved in the DOM and reloaded: grant a new nonce (a few times in a row)
+            if (++p.reloads > 3) return failPane(p, "its frame kept reloading");
             p.ep?.close("reloaded");
             p.ep = null;
             if (p.granted) l2?.push("pane.closed", {}, p.s);
@@ -1148,6 +1151,7 @@ import type { PaneToast } from "../shared/wire";
             }
             proven = true;
             p.ep = ep;
+            p.reloads = 0;
             const init = await l2call("pane.init", {}, s);
             return { ...init, phase: phaseNow(), pane: { name: p.view.pane!, toast: paneToastOf(p.view) } };
         });

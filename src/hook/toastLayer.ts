@@ -70,7 +70,7 @@ const LAYER_CSS = `
 .stack[data-h=center]{left:50%;transform:translateX(-50%);align-items:center}
 .stack.narrow{left:${EDGE}px;right:${EDGE}px;transform:none;align-items:stretch}
 .stack.open{overflow-y:auto;pointer-events:auto}
-.slot{position:relative;pointer-events:auto;overflow:hidden;contain:paint;max-width:calc(100vw - ${2 * EDGE}px);transition:opacity .15s,transform .15s}
+.slot{position:relative;pointer-events:auto;overflow:hidden;contain:paint;max-width:calc(100vw - ${2 * EDGE}px);transition:opacity .15s,transform .15s,translate .2s ease-out}
 .slot.in{opacity:0;transform:translateY(6px)}
 .stack[data-v=top] .slot.in{transform:translateY(-6px)}
 .pill{pointer-events:auto;align-self:inherit;border:1px solid #d0d7de;background:#fff;color:#1f2328;border-radius:999px;padding:2px 10px;font:inherit;font-size:12px;cursor:pointer}
@@ -378,7 +378,7 @@ export function createToastLayer(h: ToastLayerHost, win: Window = window): Toast
             const p = stackOf(it.view.position, width);
             groups.set(p, [...(groups.get(p) ?? []), it]);
         }
-        for (const el of [...root.children]) if (!groups.has((el as HTMLElement).dataset.pos as ToastPosition)) el.remove();
+        const kidsOf = new Map<HTMLElement, HTMLElement[]>();
         for (const [pos, list] of groups) {
             let stack = root.querySelector<HTMLElement>(`.stack[data-pos="${pos}"]`);
             if (!stack) {
@@ -396,11 +396,11 @@ export function createToastLayer(h: ToastLayerHost, win: Window = window): Toast
             const waiting = isOpen ? 0 : folded.length + list.filter((t) => t.missed).length;
             const kids: HTMLElement[] = shown.map((t) => t.slot);
             if (waiting || isOpen) kids.push(pillFor(pos, waiting, list));
-            // move only what changed: a moved pane frame reloads
-            for (const c of [...stack.children]) if (!kids.includes(c as HTMLElement)) c.remove();
+            // move only what changed: a pane frame moved with insertBefore reloads
             kids.forEach((k, i) => {
-                if (stack!.children[i] !== k) stack!.insertBefore(k, stack!.children[i] ?? null);
+                if (stack!.children[i] !== k) place(stack!, k, stack!.children[i] ?? null);
             });
+            kidsOf.set(stack, kids);
             for (const t of list) {
                 if (isOpen && t.missed) {
                     // opened again: it stays until closed
@@ -411,6 +411,38 @@ export function createToastLayer(h: ToastLayerHost, win: Window = window): Toast
                 }
                 tick(t);
             }
+        }
+        // only after every move: a toast going to another corner is never detached on the way
+        for (const [stack, kids] of kidsOf) for (const c of [...stack.children]) if (!kids.includes(c as HTMLElement)) c.remove();
+        for (const el of [...root.children]) if (!kidsOf.has(el as HTMLElement)) el.remove();
+    }
+
+    /** `moveBefore` keeps a pane's frame loaded (Chrome 133+, Firefox 144+); `insertBefore` reloads it. */
+    function place(parent: HTMLElement, node: HTMLElement, ref: Element | null): void {
+        const mb = (parent as any).moveBefore;
+        if (typeof mb === "function" && node.isConnected && parent.isConnected) {
+            try {
+                return void mb.call(parent, node, ref);
+            } catch {}
+        }
+        parent.insertBefore(node, ref);
+    }
+
+    /** Run `change` (a corner change), then slide each toast from where it was. */
+    function slide(change: () => void): void {
+        const from = new Map([...items.values()].map((t) => [t.slot, t.slot.getBoundingClientRect()]));
+        change();
+        for (const [slot, r] of from) {
+            if (!slot.isConnected) continue;
+            const n = slot.getBoundingClientRect();
+            const dx = r.left - n.left;
+            const dy = r.top - n.top;
+            if (!dx && !dy) continue;
+            slot.style.transition = "none";
+            slot.style.translate = `${dx}px ${dy}px`;
+            void slot.offsetWidth;
+            slot.style.transition = "";
+            slot.style.translate = "";
         }
     }
 
@@ -464,15 +496,20 @@ export function createToastLayer(h: ToastLayerHost, win: Window = window): Toast
         const up = (u: PointerEvent) => {
             win.removeEventListener("pointermove", move);
             win.removeEventListener("pointerup", up);
-            if (stack) {
+            const settle = () => {
+                if (!stack) return;
                 stack.classList.remove("dragging");
                 stack.style.translate = "";
-            }
-            if (Math.abs(u.clientX - x0) + Math.abs(u.clientY - y0) < 8) return;
+            };
+            if (Math.abs(u.clientX - x0) + Math.abs(u.clientY - y0) < 8) return settle();
             const position = nearestCorner(u.clientX, u.clientY, win.innerWidth, win.innerHeight);
             h.send("toast.corner", { host: win.location.host, position });
             for (const t of items.values()) t.view = { ...t.view, position, userCorner: true };
-            layout();
+            // from where it was dropped, not from its old corner
+            slide(() => {
+                settle();
+                layout();
+            });
         };
         win.addEventListener("pointermove", move);
         win.addEventListener("pointerup", up);
