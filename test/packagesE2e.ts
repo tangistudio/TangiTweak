@@ -1,5 +1,5 @@
 /**
- * Shared E2E check (MV2 + MV3): installing a tweak by opening its
+ * Shared E2E check (MV3): installing a tweak by opening its
  * package.json's install link. The tab goes to the install page, which lists
  * what the tweak can do; installing writes its package.json, entry, module and
  * JSON file into the tweak's folder and the entry runs. An update that

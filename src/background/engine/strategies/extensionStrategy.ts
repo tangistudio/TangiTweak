@@ -1,25 +1,16 @@
 /**
- * Blocking-webRequest strategy: Firefox and MV2-capable Chromium browsers
- * (ungoogled-chromium, Brave, Opera…). Redirect/block, request/response
- * headers and a synchronous onRequest `replaceResponse` result work
- * everywhere with no debugger involvement.
+ * Blocking-webRequest strategy (Firefox): redirect/block, request and
+ * response headers, onRequest `replaceResponse` and onResponseBody, with no
+ * debugger involvement. Chrome MV3 has no blocking webRequest, so the
+ * strategy runs nothing there.
  *
  * Runs only handler routes whose strategy is "extension".
  *
- * How a replacement (the onRequest `replaceResponse` result) is served:
- * - Firefox: in place — the request proceeds and filterResponseData swaps
- *   the body, so the URL is kept (the upstream status code is, too). The
- *   mock goes through onResponseHeaders and onResponseBody first, with
- *   `ctx.replacedBy` set.
- * - Chromium: webRequest can't touch bodies, so the only way is a redirect —
- *   to a data: URL, or for page loads to the extension's serve.html (the
- *   address bar shows the extension URL and the page loses its origin).
- *   Neither can carry a status: non-200 replacements aren't served here,
- *   and this layer's response handlers never see the mock.
- *
- * Response-body streaming (onResponseBody via filterResponseData) and
- * awaiting async handlers are Firefox-only. MV3 has no blocking webRequest
- * at all.
+ * A replacement (the onRequest `replaceResponse` result) is served in
+ * place: the request proceeds and filterResponseData swaps the body, so the
+ * URL is kept (the upstream status code is, too). The mock goes through
+ * onResponseHeaders and onResponseBody first, with `ctx.replacedBy` set.
+ * Async handlers are awaited (Firefox's blocking listeners take promises).
  */
 import { withPage } from "../../../shared/currentPage";
 import { tabScope } from "../../../shared/storeOps";
@@ -34,8 +25,6 @@ import { log, logObserved, noteBodySkip, scriptError } from "../logs";
 import { bodyKind } from "../../../shared/bodyKind";
 import { kindSkipLine } from "../../../shared/netTypes";
 import { dlogLevel } from "../../../shared/debugLog";
-import { IS_FIREFOX } from "./helperState";
-import { wsNotApplied } from "../../../shared/websocketLimits";
 import { compileMv2, ownsAny } from "./strategyScripts";
 import { HeaderStack, mergeHeaderEdits, mixedResultLine, mockFlowLine, overrideLine, overruledLine, singleRequestResult, type ReplacedBy, type RequestDecision, type Who, type Winner } from "../../../shared/precedence";
 import { editPairs, editRecord, replacementBody } from "../../../shared/bodyOps";
@@ -112,7 +101,7 @@ export class ExtensionStrategy implements InterceptionStrategy {
     }
 
     supportsBodyModification(): boolean {
-        return IS_FIREFOX;
+        return true;
     }
 
     /** the entry's `kind` handlers whose route matches this request */
@@ -122,8 +111,8 @@ export class ExtensionStrategy implements InterceptionStrategy {
 
     /**
      * Same order as every strategy (precedence.ts): every script's onRequest
-     * runs and the last decision wins. Firefox awaits async handlers in
-     * place and carries on with the rest.
+     * runs and the last decision wins. Async handlers are awaited in place
+     * and the rest carry on after them.
      */
     handleBeforeRequest(details: WebRequestDetailsLike, tabUrl: string | null): MaybePromise<HookDisposition> {
         const matched = this.entries.filter((e) => KINDS.some((k) => this.hits(e, k, details).length));
@@ -143,11 +132,6 @@ export class ExtensionStrategy implements InterceptionStrategy {
                     continue;
                 }
                 if (isThenable(result)) {
-                    if (!IS_FIREFOX) {
-                        // Chrome: blocking webRequest cannot await — the result would be decided too late
-                        scriptError(step.entry.id, `async ${routeLabel(step.h.route)}: Chrome's blocking webRequest cannot await. Return synchronously, or set strategy: "debugger" or "helper" on this route.`);
-                        continue;
-                    }
                     // Firefox blocking listeners accept promises natively
                     const next = i + 1;
                     return Promise.resolve(result).then(
@@ -165,10 +149,8 @@ export class ExtensionStrategy implements InterceptionStrategy {
         return run(0);
     }
 
-    /** Firefox: mark the request so the header-phase hook wires the onResponseBody stream filter */
+    /** mark the request so the header-phase hook wires the onResponseBody stream filter */
     private queueStreams(details: WebRequestDetailsLike, tabUrl: string | null, matched: Entry[]): void {
-        // (Chromium can't read bodies here — the pipeline warns at load.)
-        if (!IS_FIREFOX) return;
         for (const entry of matched) {
             const transforms = this.hits(entry, "onResponseBody", details);
             if (!transforms.length) continue;
@@ -201,18 +183,10 @@ export class ExtensionStrategy implements InterceptionStrategy {
         }
         const { mime, content } = replacementContent(details, rep);
         const by: ReplacedBy = { tweak: d.entry.name, handler: routeLabel(d.h.route) };
-        if (IS_FIREFOX) {
-            this.queueStreams(details, tabUrl, matched);
-            pendingFirefoxReplace.set(details.requestId, { content, mime, headers: rep.headers?.set, scriptId: d.entry.id, scriptName: d.entry.name, by });
-            reportSkipped(details.tabId, req, w, details.requestId);
-            return { kind: "allow" };
-        }
-        if (details.type === "websocket") {
-            log(details.tabId, `[${d.entry.name}] onRequest → ${wsNotApplied("replaceResponse", "extension", details.url)}`, "warn", d.entry.id, undefined, undefined, details.requestId);
-            return { kind: "allow" };
-        }
-        reportSkipped(details.tabId, req, w, details.requestId, { mockFlows: false });
-        return this.redirectServe(details, content, mime);
+        this.queueStreams(details, tabUrl, matched);
+        pendingFirefoxReplace.set(details.requestId, { content, mime, headers: rep.headers?.set, scriptId: d.entry.id, scriptName: d.entry.name, by });
+        reportSkipped(details.tabId, req, w, details.requestId);
+        return { kind: "allow" };
     }
 
     /** one handler's result: updates the decision and the request header edits */
@@ -225,10 +199,6 @@ export class ExtensionStrategy implements InterceptionStrategy {
         }
         result = single.result;
         const say = (msg: string) => log(details.tabId, `[${entry.name}] onRequest → ${msg}`, "info", entry.id, undefined, undefined, details.requestId);
-        if (result && result.redirect && !result.block && details.type === "websocket" && !IS_FIREFOX) {
-            log(details.tabId, `[${entry.name}] onRequest → ${wsNotApplied("redirect", "extension", details.url, result.redirect)}`, "warn", entry.id, undefined, undefined, details.requestId);
-            return;
-        }
         const outcome: RequestDecision | null = !result ? null : result.replaceResponse ? "replace" : result.redirect ? "redirect" : result.block === true ? "block" : result.allow === true ? "allow" : null;
         if (outcome) {
             if (outcome === "replace") {
@@ -272,7 +242,7 @@ export class ExtensionStrategy implements InterceptionStrategy {
         const pending = pendingFirefoxStreams.get(details.requestId);
         // Firefox in-place replacement: the mock goes through the response handlers, then replaces the body
         const rep = pendingFirefoxReplace.get(details.requestId);
-        if (rep && IS_FIREFOX && !isRedirectStatus(details.statusCode)) {
+        if (rep && !isRedirectStatus(details.statusCode)) {
             pendingFirefoxReplace.delete(details.requestId);
             pendingFirefoxStreams.delete(details.requestId);
             const own = rep.headers ? { set: rep.headers } : undefined;
@@ -290,7 +260,7 @@ export class ExtensionStrategy implements InterceptionStrategy {
         }
         const changes = this.responseHeaderChanges(details, tabUrl);
         // Firefox streaming: wire the filter when response headers arrive.
-        if (pending && IS_FIREFOX && !isRedirectStatus(details.statusCode)) {
+        if (pending && !isRedirectStatus(details.statusCode)) {
             pendingFirefoxStreams.delete(details.requestId);
             // a binary Content-Type with no `binary: true` route: don't buffer it at all
             const ct = contentTypeOf(details.responseHeaders) || "";
@@ -305,21 +275,6 @@ export class ExtensionStrategy implements InterceptionStrategy {
 
     dispose(): void {
         this.entries = [];
-    }
-
-    /**
-     * Chromium only: webRequest can't write a body, so the replacement is
-     * served by redirecting — the URL changes (see the header comment).
-     */
-    private redirectServe(details: WebRequestDetailsLike, content: string | Uint8Array, mime: string): HookDisposition {
-        recordNetBody({ tabId: details.tabId, url: details.url, method: details.method, modified: content, mime, status: 200, requestId: details.requestId });
-        // Chrome blocks top-level data: navigations — serve main frames from an extension page instead
-        if (details.type === "main_frame") {
-            const rid = "serve_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-            serveStore.set(rid, { content: typeof content === "string" ? content : new TextDecoder().decode(content), mime });
-            return { kind: "redirect", url: chrome.runtime.getURL("serve.html?rid=" + rid) };
-        }
-        return { kind: "redirect", url: toDataUrl(mime, content) };
     }
 
     /** Firefox: the upstream body is never read; the mock, after the onResponseBody handlers, is written once */
@@ -340,7 +295,7 @@ export class ExtensionStrategy implements InterceptionStrategy {
         }
     }
 
-    /** onResponseHeaders in layer then list order; the later handler wins per header and sees the earlier edits. Firefox awaits async ones in place. */
+    /** onResponseHeaders in layer then list order; the later handler wins per header and sees the earlier edits. Async ones are awaited in place. */
     private responseHeaderChanges(details: WebRequestDetailsLike, tabUrl: string | null, replacedBy?: ReplacedBy): MaybePromise<HeaderChanges | null> {
         const steps = layered(this.entries.flatMap((entry) => this.hits(entry, "onResponseHeaders", details).map((h) => ({ entry, h }))));
         if (!steps.length) return null;
@@ -374,10 +329,6 @@ export class ExtensionStrategy implements InterceptionStrategy {
                     continue;
                 }
                 if (isThenable(result)) {
-                    if (!IS_FIREFOX) {
-                        scriptError(step.entry.id, `async ${routeLabel(step.h.route)}: Chrome's blocking webRequest cannot await. Return synchronously, or set strategy: "debugger" or "helper" on this route.`);
-                        continue;
-                    }
                     const next = i + 1;
                     return Promise.resolve(result).then(
                         (r) => (apply(step, r), run(next)),
@@ -531,22 +482,10 @@ export function normalize(result: any): HookDisposition {
     return { kind: "allow" };
 }
 
-export function toDataUrl(mime: string, content: string | Uint8Array): string {
-    if (typeof content === "string") {
-        return "data:" + mime + ";charset=UTF-8," + encodeURIComponent(content);
-    }
-    let bin = "";
-    for (let i = 0; i < content.length; i++) bin += String.fromCharCode(content[i]);
-    return "data:" + mime + ";base64," + btoa(bin);
-}
-
 function contentTypeOf(headers: { name: string; value?: string }[] | undefined): string | undefined {
     const h = headers?.find((x) => x.name.toLowerCase() === "content-type");
     return h?.value;
 }
-
-/** in-memory store for main-frame served replacements */
-export const serveStore = new Map<string, { content: string; mime: string }>();
 
 /** Merge stacked header mods: the later edit wins per header (set or remove). */
 export function mergeHeaderMods(base: HeaderChanges | undefined, add: HeaderChanges): HeaderChanges {

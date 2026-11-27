@@ -4,26 +4,25 @@
 
 ```bash
 npm install
-npm run build        # bundle to dist/
+npm run build        # bundle to dist-mv3/ (Chrome) and dist-firefox/
 npm run watch        # rebuild on change
 npm test             # vitest unit tests
 npm run typecheck
-npm run test:e2e     # full browser e2e (needs E2E_CHROMIUM, see below)
+npm run test:e2e     # the main browser e2e suite (test/mv3.e2e.ts, see below)
 ```
 
-The e2e suite (`test/e2e.ts`) launches a fresh MV2-capable Chromium, loads the
-extension, seeds sample scripts through the real Editor page, and verifies
-every strategy against a local HTTP server: matcher, redirect, block, request +
-response headers, onRequest mocks (main frame + fetch), onResponseBody (fetch /
-XHR / script-tag CDP), per-tab badge, and enable/disable toggling.
+The e2e suites (`test/*.e2e.ts`) launch a fresh Chromium, load `dist-mv3/`
+and drive the real Editor page against a local HTTP server. They need a
+Chromium that still accepts `--load-extension` (branded Chrome 137+ doesn't);
+`test/browserSetup.ts` finds ungoogled-chromium or an old Chrome for Testing,
+or set `E2E_CHROMIUM`:
 
 ```bash
-# any Chromium that still supports MV2 (Chrome for Testing ≤ ~126 works):
-E2E_CHROMIUM="/path/to/Google Chrome for Testing" npm run test:e2e
+E2E_CHROMIUM="/path/to/Chromium" npm run test:e2e
 ```
 
-Load the extension from `dist/` ("Load unpacked", MV2), or any recent Firefox
-(callback-based APIs work everywhere).
+Load the extension from `dist-mv3/` ("Load unpacked") in Chrome, or
+`dist-firefox/` in Firefox.
 
 ## Releases
 
@@ -232,7 +231,7 @@ the frame's code, stores and `from: "page"` fetches go through the
 bridge's extension port (`src/background/engine/overlayLinks.ts`
 authorizes each script on it). Calls between the overlay, `onPage` and
 `onSite` code (handles) use `src/shared/rpc.ts`; a save re-runs handlers
-in place through `src/shared/runLifecycle.ts`. On Chromium (MV2 and MV3) the manifest lists
+in place through `src/shared/runLifecycle.ts`. On Chrome the manifest lists
 `overlay.html` as a sandbox page, so it runs scripts without the extension
 CSP and has an opaque origin; Firefox has no manifest sandbox, so there it's
 a normal extension page that checks a one-time nonce with the background
@@ -245,13 +244,10 @@ until its code hash changes or the page reloads.
 
 `npm run build` produces both bundles:
 
-- **`dist/` (= `dist-mv2/`)** — the MV2 build for Chromium.
 - **`dist-firefox/`** — the MV2 build for Firefox (the `.xpi`): its
-  manifest also registers the page hook as a MAIN-world content script,
-  which Chromium's MV2 rejects ("The 'world' property is restricted…").
-  On Chromium MV2 the bridge injects the hook with a `<script>` tag instead.
+  manifest registers the page hook as a MAIN-world content script.
   It's built with `__FIREFOX__`, which leaves out what Firefox lacks
-  (`chrome.debugger`, `webRequest.onActionIgnored`, `serve.html`) so AMO's
+  (`chrome.debugger`, `webRequest.onActionIgnored`) so AMO's
   linter doesn't flag it; the build fails if such a call gets back in. Check
   it with `npx addons-linter dist-firefox`.
 - **`dist-mv3/`** — the Manifest V3 build (`manifest_version: 3`,
@@ -290,8 +286,6 @@ pages, and drops blocking `webRequest`):
     else that slips through (POSTs, very fast subresources) is logged as a
     **warning** ("… was NOT intercepted by "X" — it loaded before the
     debugger attached … Reload the tab"); a reload is intercepted (tabs
-    stay attached). MV2 attaches only once the navigation has started, so
-    there the page itself is always missed on its first load (warned).
   - `onResponseHeaders` is applied at the Response stage
     (`Fetch.continueResponse` keeps the body streaming when no body handler
     changes it); redirects/error statuses pass through untransformed.

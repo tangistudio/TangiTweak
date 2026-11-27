@@ -1,12 +1,14 @@
 /**
- * Resolves an MV2-capable Chromium binary for the e2e suite:
+ * Resolves a Chromium binary for the e2e suites, one that still loads an
+ * unpacked extension with --load-extension (branded Chrome 137+ doesn't):
  *   1. E2E_CHROMIUM env var (explicit override)
  *   2. Any installed ungoogled-chromium (homebrew cask, all versions)
  *   3. Any Chrome for Testing ≤ 126 under /tmp or ~/Library/Caches
  *   4. Auto-download: ungoogled-chromium via brew install --cask
- *      (fallback: last MV2-capable Chrome for Testing, 125.0.6422.78)
+ *      (fallback: Chrome for Testing 125.0.6422.78)
  */
 import { existsSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import https from "node:https";
@@ -67,7 +69,7 @@ export async function resolveBrowser(): Promise<string> {
 
     // 4a. brew install ungoogled-chromium
     if (spawnSync("brew", ["--version"], { stdio: "ignore" }).status === 0) {
-        console.log("[browser] no MV2 Chromium found — installing ungoogled-chromium via brew…");
+        console.log("[browser] no Chromium found — installing ungoogled-chromium via brew…");
         const r = spawnSync("brew", ["install", "--cask", "ungoogled-chromium"], { stdio: "inherit" });
         if (r.status === 0) {
             const after = candidates();
@@ -79,7 +81,7 @@ export async function resolveBrowser(): Promise<string> {
         console.log("[browser] brew install failed — falling back to Chrome for Testing download");
     }
 
-    // 4b. download Chrome for Testing 125 (last MV2-capable)
+    // 4b. download Chrome for Testing 125
     const dl = "/tmp/chrome-mac-arm64";
     const zip = "/tmp/chrome-mac-arm64.zip";
     console.log("[browser] downloading Chrome for Testing 125 (~120MB)…");
@@ -89,4 +91,9 @@ export async function resolveBrowser(): Promise<string> {
     if (!existsSync(exe)) throw new Error("downloaded browser not found at " + exe);
     console.log("[browser] downloaded:", exe);
     return exe;
+}
+
+/** The id Chromium gives an unpacked extension loaded from `root` (an absolute path). */
+export function unpackedExtensionId(root: string): string {
+    return createHash("sha256").update(root, "utf8").digest("hex").split("").map((c) => String.fromCharCode(parseInt(c, 16) + 97)).join("").slice(0, 32);
 }

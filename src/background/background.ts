@@ -434,4 +434,4 @@ if (__MV3__) {
     })();
 }
 
-console.log(`[TangiTweak] background ready (${__MV3__ ? "mv3/sandbox" : IS_FIREFOX ? "firefox/webRequest+filterResponseData" : "chrome/mv2"})`);
+console.log(`[TangiTweak] background ready (${__MV3__ ? "mv3/sandbox" : "firefox/webRequest+filterResponseData"})`);

@@ -7,6 +7,11 @@ its section below.
 
 ## [Unreleased]
 
+### Removed
+
+- **The Chrome MV2 build** (`tangitweak-mv2-vX.Y.Z.zip` / `.crx`, `dist/`). Chrome 138 turned Manifest V2 off for everyone and Chrome 139 removed the policy that kept it on. Use the MV3 build (`tangitweak-mv3-vX.Y.Z.zip`) on Chrome, Edge and Brave. The `extension` strategy is now Firefox only.
+- **Breaking (SDK):** `browser: "chromium-mv2"` in `createTweakTest` and `loadTweak`. Use `"chrome"` or `"firefox"`.
+
 ## [0.41.1-alpha] - 2026-11-27
 
 ### Added

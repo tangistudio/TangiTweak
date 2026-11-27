@@ -140,17 +140,6 @@ describe("browsers", () => {
         expect(second.skipped).toEqual([]);
         await t.dispose();
     });
-
-    it("Chrome MV2's blocking webRequest can't await", async () => {
-        const t = await loadTweak(
-            { name: "m", code: src(`tweak.onRequest({ url: "*://a.test/*", strategy: "extension" }, async () => ({ block: true }));`) },
-            { browser: "chromium-mv2" }
-        );
-        const res = await t.simulate("https://a.test/x");
-        expect(res.blocked).toBe(false);
-        expect(t.logs.map((l) => l.message).join("\n")).toContain("Chrome's blocking webRequest cannot await");
-        await t.dispose();
-    });
 });
 
 describe("bundle discovery", () => {

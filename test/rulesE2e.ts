@@ -1,5 +1,5 @@
 /**
- * Shared E2E check (MV2 + MV3): the `rules` strategy. Handlers become
+ * Shared E2E check (MV3): the `rules` strategy. Handlers become
  * declarativeNetRequest session rules — block, redirect, request and
  * response headers, a full-URLPattern route (optional + named groups) whose
  * captures land in the redirect — and a handler that can't be a rule (it

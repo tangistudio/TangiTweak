@@ -104,9 +104,9 @@ export interface TweakTestOptions {
      */
     entry?: string;
     /**
-     * Whose limits the tweak follows: `"chrome"` (MV3), `"chromium-mv2"` or
-     * `"firefox"`. It decides which handlers are turned off, the layers a
-     * request goes through and where `onSite` runs under a page's CSP.
+     * Whose limits the tweak follows: `"chrome"` (MV3) or `"firefox"`. It
+     * decides which handlers are turned off, the layers a request goes
+     * through and where `onSite` runs under a page's CSP.
      *
      * @defaultValue `"chrome"`
      */
@@ -179,7 +179,7 @@ export interface GotoOptions {
     /** The website's own `<body>` HTML, before any handler runs. */
     html?: string;
     /**
-     * The page's Content-Security-Policy. On `"firefox"` and `"chromium-mv2"`,
+     * The page's Content-Security-Policy. On `"firefox"`,
      * where `onSite` code is injected with eval, a policy whose `script-src`
      * (or `default-src`) lacks `'unsafe-eval'` sends `onSite` to the isolated
      * world and {@link TweakHandle.problems} says so. `"chrome"` (MV3)

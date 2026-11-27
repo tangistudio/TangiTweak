@@ -133,8 +133,8 @@ try {
     const extId = EXT_ID;
     check("extension id derived from the dist-mv3 path", /^[a-p]{32}$/.test(extId), extId);
 
-    // 1. the MV3 service worker is up: it's NOT a page target (unlike MV2's
-    // background_page, MV3 SWs never appear in /json/list) — verify it
+    // 1. the MV3 service worker is up: it's NOT a page target (MV3 service
+    // workers never appear in /json/list) — verify it
     // registers and answers via a manager-page round-trip below
     const mgr = await ctx.newPage();
     await mgr.goto(`chrome-extension://${extId}/editor.html`);

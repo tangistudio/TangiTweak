@@ -217,8 +217,8 @@ The Manifest V3 package, for current Chrome, Edge and Brave.
 _Avoid_: Chrome build
 
 **MV2 build**:
-The Manifest V2 package, for Firefox and Chromium browsers that still run Manifest V2.
-_Avoid_: legacy build, Chrome MV2 (say "the MV2 build on Chromium")
+The Manifest V2 package, for Firefox.
+_Avoid_: legacy build
 
 ## Editor and UI
 

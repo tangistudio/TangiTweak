@@ -24,7 +24,6 @@ import { layerOf } from "../../shared/packageMetadata";
 import { loadPackages, packagesSnapshot, requestPackages } from "./packageImports";
 import { isUrlSpec, packageClosure, type PackageModules } from "../../shared/packageImports";
 import { packageUnit, scriptUnit, siteKey } from "../../shared/siteCode";
-import { serveStore } from "./strategies/extensionStrategy";
 import { dlog, dlogLevel } from "../../shared/debugLog";
 import { isThenable, rulesProblems, siteProblems, toastEveryProblems, toRunnableJs } from "../../shared/compile";
 import "../../shared/transpile";
@@ -1076,12 +1075,6 @@ export function createPipeline(
                 }
             });
             sendResponse({});
-            return false;
-        }
-        if (msg && msg.type === "getServe") {
-            const entry = serveStore.get(msg.rid);
-            serveStore.delete(msg.rid);
-            sendResponse(entry || { content: null });
             return false;
         }
 

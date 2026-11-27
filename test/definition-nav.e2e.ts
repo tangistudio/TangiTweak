@@ -10,10 +10,10 @@ import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { chromium } from "playwright-core";
-import { resolveBrowser } from "./browserSetup";
+import { resolveBrowser, unpackedExtensionId } from "./browserSetup";
 import { saveTweak } from "./e2eTweak";
 
-const EXT_ROOT = path.join(new URL("..", import.meta.url).pathname, "dist");
+const EXT_ROOT = path.join(new URL("..", import.meta.url).pathname, "dist-mv3");
 const profile = mkdtempSync(path.join(tmpdir(), "reso-defnav-"));
 const proc = spawn(await resolveBrowser(), [
     "--headless=new",
@@ -44,7 +44,7 @@ const [port] = readFileSync(path.join(profile, "DevToolsActivePort"), "utf8").sp
 browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`, { timeout: 90000 });
 const ctx = browser.contexts()[0];
 
-const extId = (await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()).find((t: any) => t.type === "background_page").url.split("/")[2];
+const extId = unpackedExtensionId(EXT_ROOT);
 const openManager = async (): Promise<any> => {
     const p = await ctx.newPage();
     await p.goto(`chrome-extension://${extId}/editor.html`);

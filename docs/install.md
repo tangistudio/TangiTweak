@@ -5,8 +5,7 @@
 ## From a release (recommended)
 
 1. Grab a zip from [Releases](https://github.com/tangistudio/TangiTweak/releases) and unzip it:
-   `tangitweak-mv3-vX.Y.Z.zip` for current Chrome / Edge / Brave, or
-   `tangitweak-mv2-vX.Y.Z.zip` (its `dist` folder) for MV2-capable Chromium.
+   `tangitweak-mv3-vX.Y.Z.zip` for Chrome / Edge / Brave.
    Firefox uses the `.xpi` instead — see [Firefox](#firefox).
 2. Open `chrome://extensions`.
 3. Enable **Developer mode** (top-right), click **Load unpacked**, and select the unzipped folder.
@@ -29,8 +28,8 @@ unlisted (self-distributed) add-on.
 
 ## Signed `.crx`
 
-Each release also ships signed `tangitweak-mv3-vX.Y.Z.crx` / `tangitweak-mv2-vX.Y.Z.crx`
-packages with a fixed extension id (`jcoealmhehnajkglhfchcnjdpkhnkdei`). Chrome
+Each release also ships a signed `tangitweak-mv3-vX.Y.Z.crx`
+package with a fixed extension id (`jcoealmhehnajkglhfchcnjdpkhnkdei`). Chrome
 keeps a `.crx` from outside the Web Store enabled only when it's allowed by
 enterprise policy (`ExtensionInstallAllowlist` / `ExtensionInstallForcelist`,
 pointing at that id) or on Linux via drag-and-drop onto `chrome://extensions`
@@ -42,12 +41,9 @@ in Developer mode; otherwise use the zip.
 git clone https://github.com/tangistudio/TangiTweak.git
 cd tangitweak
 npm install && npm run build
-# then: chrome://extensions → Developer mode → Load unpacked → dist/
+# then: chrome://extensions → Developer mode → Load unpacked → dist-mv3/
+# Firefox: about:debugging#/runtime/this-firefox → Load Temporary Add-on… → dist-firefox/manifest.json
 ```
-
-> `dist/` needs an MV2-capable Chromium (ungoogled-chromium or any Chromium ≤ ~126) or
-> Firefox. Modern stable Chrome removed MV2 — load `dist-mv3/` there instead
-> (see [Compatibility](strategies.md#compatibility)).
 
 **Releases are automated** — pushing a `vX.Y.Z` tag runs the GitHub Action
 

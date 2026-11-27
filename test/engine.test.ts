@@ -90,22 +90,6 @@ describe("ExtensionStrategy", () => {
         expect(d).toEqual({ kind: "redirect", url: "https://mocked.example.com/data" });
     });
 
-    it("a redirect or replacement of a WebSocket isn't applied, with a warning (Chrome ignores it)", () => {
-        const s = new ExtensionStrategy();
-        s.reload([
-            named("Socky", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "wss://ws.example.com/*", strategy: "extension" }, () => ({ redirect: "wss://other.example.com/ws" }));
-tweak.onRequest({ url: "wss://ws.example.com/*", strategy: "extension" }, () => ({ replaceResponse: { body: "nope" } }));`),
-            named("Hdr", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "wss://ws.example.com/*", strategy: "extension" }, () => ({ headers: { set: { "x-a": "1" } } }));`),
-        ]);
-        const ws = details({ url: "wss://ws.example.com/ws", type: "websocket", requestId: "ws1" });
-        expect((s.handleBeforeRequest(ws, null) as any).kind).toBe("allow");
-        const warns = allLogs().filter((e) => e.level === "warn" && e.message.includes("wss://ws.example.com/ws") && e.message.includes("NOT applied")).map((e) => e.message);
-        expect(warns.some((m) => m.startsWith("[Socky] onRequest → redirect wss://ws.example.com/ws → wss://other.example.com/ws NOT applied") && m.includes("Chrome ignores redirects on WebSocket handshakes"))).toBe(true);
-        expect(warns.some((m) => m.startsWith("[Socky] onRequest → replaceResponse wss://ws.example.com/ws NOT applied"))).toBe(true);
-        // request headers still apply
-        expect(JSON.stringify(s.handleBeforeSendHeaders(ws, null))).toContain('"x-a"');
-    });
-
     it("non-matching url → allow", () => {
         const s = new ExtensionStrategy();
         s.reload([
@@ -122,17 +106,13 @@ tweak.onRequest({ url: "wss://ws.example.com/*", strategy: "extension" }, () => 
         expect((s.handleBeforeRequest(details(), null) as any).kind).toBe("allow");
     });
 
-    it("static onRequest replaceResponse → data url redirect", () => {
+    it("static onRequest replaceResponse is served in place: the request goes on", () => {
         const s = new ExtensionStrategy();
         s.reload([
             makeScript("a", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*://api.example.com/v1/data", strategy: "extension" }, () => ({ replaceResponse: { body: { mocked: true } } }));`),
         ]);
-        const d = s.handleBeforeRequest(details(), null) as any;
-        expect(d.kind).toBe("redirect");
-        if (d.kind === "redirect") {
-            expect(d.url).toContain("data:application/json");
-            expect(decodeURIComponent(d.url)).toContain('"mocked"');
-        }
+        expect((s.handleBeforeRequest(details(), null) as any).kind).toBe("allow");
+        s.pruneRequest("r1");
     });
 
     it("onResponseHeaders modifies headers", () => {

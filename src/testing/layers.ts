@@ -23,8 +23,8 @@ import { substitute, type RuleSpec } from "../shared/dnrRules";
 import type { Routed } from "../shared/compile";
 import { NET_KINDS } from "../shared/route";
 
-/** The browser a test pretends to be: Chrome MV3, a Chromium MV2 build or Firefox. */
-export type BrowserName = "chrome" | "chromium-mv2" | "firefox";
+/** The browser a test pretends to be: Chrome (MV3) or Firefox. */
+export type BrowserName = "chrome" | "firefox";
 
 /** What each {@link BrowserName} is, in the terms `routeProblem` checks a route against. */
 export const BROWSER_ENV: Record<
@@ -37,7 +37,6 @@ export const BROWSER_ENV: Record<
     }
 > = {
     chrome: { firefox: false, mv3: true },
-    "chromium-mv2": { firefox: false, mv3: false },
     firefox: { firefox: true, mv3: false },
 };
 
@@ -100,22 +99,15 @@ export function webRequestType(t: string | undefined): string {
  * Returns a tweak's handlers as `browser` runs them: the routes it turns off
  * (with the Problems view's text) and the ones left.
  *
- * On Chromium MV2 an `extension` handler's async result is ignored, since
- * blocking webRequest can't wait for it: the promise's rejection is
- * swallowed, `onAsync` is called and the handler counts as returning
- * nothing.
- *
  * @param scripts - The compiled scripts, in load order.
  * @param browser - The browser to run them as.
- * @param onAsync - Called each time an ignored async result comes back.
  * @returns The scripts without their turned-off routes, the routes left and the routes turned off.
  */
 export function layerScripts(
     scripts: OpScript[],
-    browser: BrowserName,
-    onAsync: (s: OpScript, route: RouteMeta) => void
+    browser: BrowserName
 ): {
-    /** The scripts with only the routes `browser` runs, MV2 `extension` handlers wrapped. */
+    /** The scripts with only the routes `browser` runs. */
     scripts: OpScript[];
     /** Every route that runs, in script order. */
     refs: RouteRef[];
@@ -141,15 +133,7 @@ export function layerScripts(
                     return [];
                 }
                 refs.push(ref);
-                if (browser !== "chromium-mv2" || ref.strategy !== "extension") return [h];
-                const fn = (...args: any[]) => {
-                    const r = (h.fn as any)(...args);
-                    if (!r || typeof r.then !== "function") return r;
-                    r.then(undefined, () => {});
-                    onAsync(s, h.route);
-                    return undefined;
-                };
-                return [{ ...h, fn }];
+                return [h];
             });
         }
         return { ...s, handlers };

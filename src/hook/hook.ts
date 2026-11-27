@@ -26,10 +26,6 @@ import { siteBuiltin } from "../shared/siteBuiltin";
 import { watchCall, type CallWatch } from "../shared/callWatch";
 
 (() => {
-    // tells the MV2 bridge its inline copy ran (a page CSP may block it)
-    try {
-        document.currentScript?.setAttribute("data-res-ran", "1");
-    } catch {}
     const w = window as any;
     // only the page's own world: as an isolated content script (a browser
     // that ignores the manifest's `world: "MAIN"`) the bridge injects us instead

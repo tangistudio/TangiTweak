@@ -37,23 +37,6 @@ const details = () => ({
 });
 
 describe("onRequest respond", () => {
-    it("extension strategy: object body → JSON data-url redirect", () => {
-        const s = new ExtensionStrategy();
-        s.reload([makeScript("a", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*", strategy: "extension" }, () => ({ replaceResponse: { body: { mocked: true } } }));`)]);
-        const d = s.handleBeforeRequest(details(), null) as any;
-        expect(d.kind).toBe("redirect");
-        expect(decodeURIComponent(d.url)).toContain('"mocked"');
-        expect(d.url).toContain("application/json");
-    });
-
-    it("extension strategy: string body + explicit mime", () => {
-        const s = new ExtensionStrategy();
-        s.reload([makeScript("a", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*", strategy: "extension" }, () => ({ replaceResponse: { body: "<h1>hi</h1>", mime: "text/html" } }));`)]);
-        const d = s.handleBeforeRequest(details(), null) as any;
-        expect(d.kind).toBe("redirect");
-        expect(d.url).toContain("text/html");
-    });
-
     it("every onRequest runs: a later decision overrules an earlier mock", () => {
         const s = new ExtensionStrategy();
         s.reload([

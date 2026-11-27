@@ -22,7 +22,7 @@ Chrome closes):
    routes' `exclude` and `methods` itself, so those requests never reach
    the extension. `resourceTypes` is checked extension-side, after the pause. TLS
    to a host no URL pattern's hostname/port can match is tunneled untouched.
-   Your handlers run in the background page (MV2) or the sandbox (MV3), the
+   Your handlers run in the sandbox, the
    same code paths as the other strategies. The extension answers continue,
    fulfill, redirect or fail. Requests nobody listens to are not paused, and
    bodies are buffered only for `onResponseBody` handlers.

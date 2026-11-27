@@ -159,8 +159,8 @@ tweak.onResponseBody(
   pattern) makes the script fail to load. There is no fallback: when the strategy
   isn't available, the handler doesn't run and the Log view says why.
   To pick per browser or build, use `tweak.isChrome`, `tweak.isFirefox`,
-  `tweak.isMV2` and `tweak.isMV3` (Chromium-based browsers count as Chrome;
-  MV3 is the `dist-mv3/` build); per OS, `tweak.isMac`, `tweak.isWindows` and
+  `tweak.isMV2` and `tweak.isMV3` (Chromium-based browsers count as Chrome);
+  per OS, `tweak.isMac`, `tweak.isWindows` and
   `tweak.isLinux`:
 
   ```ts
@@ -179,11 +179,6 @@ tweak.onResponseBody(
 > fetch/XHR (REST/API) calls. For documents, `<script src>`, images,
 > workers, or anything that must not slip through, use `helper`,
 > `extension` or `debugger`. See [strategies](strategies.md).
->
-> **Note:** on Chromium MV2, `extension` can redirect the page itself and
-> change its headers, but not its body in place: `onResponseBody` never
-> runs and a replaced page moves to a `chrome-extension://` URL. Use
-> `helper` or `debugger` for that ([details](strategies.md#which-strategy-for-which-job)).
 
 ### Binary bodies
 
@@ -282,8 +277,7 @@ handlers never see it: add the type to `textTypes`, or use `binary: true`
 - Responses served from the browser cache aren't seen.
 - `Content-Encoding` (gzip, br…) is already decoded: the handler gets the
   plain bytes.
-- `extension` on Chromium MV2 has no bodies at all and `rules` never
-  does. `page` sees only the page's fetch/XHR, and binary bodies only for
+- `rules` never sees bodies. `page` sees only the page's fetch/XHR, and binary bodies only for
   `fetch()`: an XHR with `responseType` `arraybuffer` or `blob` isn't
   intercepted (text XHRs are).
 - `textTypes` is one global setting: it changes what every script sees.
@@ -1055,8 +1049,8 @@ so one handler can add an early listener and a late mount.
 
 - **Already past that moment?** (slow bundle, bfcache restore) The
   handler runs immediately.
-- **`document_start` race:** in the MV2 build the bundle arrives in ~1ms
-  and reliably beats page scripts. In the MV3 build a cold service
+- **`document_start` race:** in the Firefox build the bundle arrives in ~1ms
+  and reliably beats page scripts. In the Chrome build a cold service
   worker can take ~50-100ms, so early inline `<script>`s may already
   have run. When page code *must* see your change, rewrite the response
   with `onResponseBody` instead.
@@ -1172,7 +1166,7 @@ tweak.onPage("*://app.example.com/*", (ctx) => {
 
 #### User scripts on Chrome
 
-Firefox and the Chromium MV2 build run `onPage` code in the extension's
+Firefox runs `onPage` code in the extension's
 content-script world and `onSite` code in the site's. The Chrome (MV3)
 build runs both through Chrome's user scripts API, which is off until you
 turn it on:
@@ -1700,7 +1694,7 @@ tweak.onOverlay("*://app.example.com/*", (ctx) => {
   ```
 - **Several scripts.** If two overlays use the same keys, the one higher
   in the script list gets them; the other's Log says so. The same goes
-  for two `onPage` scripts in MV2 builds. In MV3 each `onPage` script
+  for two `onPage` scripts on Firefox. On Chrome each `onPage` script
   runs on its own, so the first to add the keys gets them, with no
   warning. An `onPage` shortcut and an overlay's with the same keys
   aren't ranked either: give them different keys.
@@ -2361,10 +2355,8 @@ alone.
 
 On `page`, `debugger` and `helper` a mock is served with any status and
 headers, URL kept, and the request is never sent. `extension` serves
-status 200 only (another status isn't served, with a warning): in place on
-Firefox, where the request is sent and its body discarded, and on Chromium
-MV2 by redirect (a `data:` URL, or the extension's `serve.html` for page
-loads), so the URL changes. There the response handlers don't run on it.
+status 200 only (another status isn't served, with a warning), in place:
+the request is sent and its body discarded.
 See [how each strategy serves a replacement](strategies.md#how-each-strategy-serves-a-replacement).
 
 A `redirect` starts a new request to the target, and the handlers matching
@@ -2443,23 +2435,20 @@ chain, so it is not always the original function.
 All `tweak.*` handlers may be `async` (return a Promise). What happens with the
 result depends on the handler's strategy:
 
-| handler | `page` (page fetch/XHR) | `extension`, Chromium MV2 | `extension`, Firefox | `debugger` | `helper` |
-|---|---|---|---|---|---|
-| `onRequest` redirect/block/replaceResponse/allow | ✅ awaited: the page's `fetch`/XHR waits as long as the handler needs | ⚠ result ignored, error logged — blocking webRequest can't await | ✅ awaited natively, a mock written in place (URL kept) | ✅ awaited at the Request stage, a mock never contacts upstream | ✅ awaited, a mock never contacts upstream |
-| `onRequest` headers | ✅ awaited | ⚠ ignored + error | ✅ awaited | ✅ awaited, applied at the Request stage | ✅ awaited, sent upstream |
-| `onResponseHeaders` | — (not on `page`) | ⚠ ignored + error | ✅ awaited | ✅ awaited, merged into the fulfilled headers | ✅ awaited |
-| `onResponseBody` | ✅ awaited (chained between handlers) | — (can't read bodies) | ✅ awaited | ✅ awaited | ✅ awaited (served `no-store`) |
-| `onSite`, `onPage`, `onOverlay` | run in the page / overlay on every strategy; not awaited (fire-and-forget) — a save waits for the new run's promise before undoing what the old run set up ([hot reload](#hot-reload--runs-and-ctx)) | | | | |
+| handler | `page` (page fetch/XHR) | `extension` (Firefox) | `debugger` | `helper` |
+|---|---|---|---|---|
+| `onRequest` redirect/block/replaceResponse/allow | ✅ awaited: the page's `fetch`/XHR waits as long as the handler needs | ✅ awaited natively, a mock written in place (URL kept) | ✅ awaited at the Request stage, a mock never contacts upstream | ✅ awaited, a mock never contacts upstream |
+| `onRequest` headers | ✅ awaited | ✅ awaited | ✅ awaited, applied at the Request stage | ✅ awaited, sent upstream |
+| `onResponseHeaders` | — (not on `page`) | ✅ awaited | ✅ awaited, merged into the fulfilled headers | ✅ awaited |
+| `onResponseBody` | ✅ awaited (chained between handlers) | ✅ awaited | ✅ awaited | ✅ awaited (served `no-store`) |
+| `onSite`, `onPage`, `onOverlay` | run in the page / overlay on every strategy; not awaited (fire-and-forget) — a save waits for the new run's promise before undoing what the old run set up ([hot reload](#hot-reload--runs-and-ctx)) | | | |
 
 Practical rules of thumb:
 
 - **Mocking/transforming APIs (fetch/XHR)?** Async just works — write
   `tweak.onResponseBody(API, async (ctx, body) => { const j = await translate(body); return …; })`.
-- **Redirect/block or header changes decided asynchronously** on Chromium?
-  Use `helper` or `debugger` (both await). Only
-  the `extension` strategy on Chromium can't: there an async result logs an error and the
-  request proceeds unmodified — set `strategy: "helper"` or `"debugger"` on the
-  route.
+- **Redirect/block or header changes decided asynchronously** on Chrome?
+  Use `helper` or `debugger` (both await).
 - **A mock from an async source** (file read, fetch): an async `onRequest`
   returning `{ replaceResponse }` on `helper`, `debugger` or `page` is all
   you need.

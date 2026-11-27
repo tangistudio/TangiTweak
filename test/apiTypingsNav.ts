@@ -1,5 +1,5 @@
 /**
- * Shared E2E check (MV2 + MV3 Editor): types in a hover's signature are
+ * Shared E2E check (MV3 Editor): types in a hover's signature are
  * links that swap the same hover for the type's hover (with Back), never
  * leaving the script; F12 opens the read-only API typings (tt-api.d.ts) in
  * the Code view and Go Back returns to the script with its cursor and

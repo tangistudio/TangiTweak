@@ -1,5 +1,5 @@
 /**
- * Shared E2E check (MV2 + MV3): folders and JSON data files, driven by the
+ * Shared E2E check (MV3): folders and JSON data files, driven by the
  * background messages the Explorer uses. A tweak `limiter` holds a
  * folder `mock` — itself a tweak — with a data file `mock/rate-limits.json`;
  * `limiter`'s entry imports `./mock/rate-limits.json` (rules strategy: a

@@ -49,14 +49,13 @@ React + `valtio` GUI overlay on the page.
 - **Install and share tweaks** — a tweak is a folder with a `package.json`; open its URL with `#tangitweak:install` (a gist, a GitHub repo or folder, any site, a local file) to install it with the files it imports and the npm packages its `dependencies` list; the install page shows what it can do first. Installed tweaks [update themselves](docs/packages.md#updates) unless an update can do more, which waits for your review.
 - **Folder sync** — keep scripts, data files (`.json`, `.md`, `.svg`, images) and their folders as plain files in a synced folder of your choice.
 - **Type-check and test tweaks** with the `tangitweak` npm package (`npm install -D tangitweak vitest react react-dom valtio`): Vitest tests that run a tweak the way the browser does ([docs](docs/testing.md)). Folder Sync also writes it to a synced folder, so it works without npm's copy.
-- **Chrome (MV3), MV2 Chromium and Firefox.**
+- **Chrome (MV3) and Firefox.**
 
 ## Install
 
 1. Download from [Releases](https://github.com/tangistudio/TangiTweak/releases):
-   `tangitweak-mv3-vX.Y.Z.zip` for current Chrome / Edge / Brave,
-   `tangitweak-firefox-vX.Y.Z.xpi` for Firefox, or
-   `tangitweak-mv2-vX.Y.Z.zip` for MV2-capable Chromium.
+   `tangitweak-mv3-vX.Y.Z.zip` for Chrome / Edge / Brave or
+   `tangitweak-firefox-vX.Y.Z.xpi` for Firefox.
 2. Chromium: unzip, open `chrome://extensions`, enable **Developer mode** and
    **Load unpacked** the folder. Firefox: drag the `.xpi` onto Firefox (see
    [docs/install.md](docs/install.md#firefox) if it's unsigned).

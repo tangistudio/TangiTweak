@@ -14,10 +14,10 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import http from "node:http";
 import { chromium } from "playwright-core";
-import { resolveBrowser } from "./browserSetup";
+import { resolveBrowser, unpackedExtensionId } from "./browserSetup";
 import { saveTweak } from "./e2eTweak";
 
-const EXT_ROOT = path.join(new URL("..", import.meta.url).pathname, "dist");
+const EXT_ROOT = path.join(new URL("..", import.meta.url).pathname, "dist-mv3");
 
 const PORT = 8911;
 const ORIGIN = `http://127.0.0.1:${PORT}`;
@@ -56,7 +56,7 @@ try {
     const [port] = readFileSync(path.join(profile, "DevToolsActivePort"), "utf8").split("\n");
     browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`, { timeout: 90000 });
     const ctx = browser.contexts()[0];
-    const extId = (await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()).find((t: any) => t.type === "background_page").url.split("/")[2];
+    const extId = unpackedExtensionId(EXT_ROOT);
 
     // a hook-tier script: transform /data responses
     const seed = await ctx.newPage();

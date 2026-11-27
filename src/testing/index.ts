@@ -213,10 +213,10 @@ export interface LoadTweakOptions {
      */
     allowCompileErrors?: boolean;
     /**
-     * The browser whose limits requests and pages follow: `"chrome"` (MV3),
-     * `"chromium-mv2"` or `"firefox"`. It decides which handlers are turned
-     * off, what each strategy sees and whether a page's CSP moves `onSite`
-     * to the isolated world.
+     * The browser whose limits requests and pages follow: `"chrome"` (MV3)
+     * or `"firefox"`. It decides which handlers are turned off, what each
+     * strategy sees and whether a page's CSP moves `onSite` to the isolated
+     * world.
      *
      * @defaultValue `"chrome"`
      */
@@ -493,8 +493,7 @@ export interface OpenPageOptions {
      */
     interceptFetch?: boolean;
     /**
-     * The page's Content-Security-Policy. On `"chromium-mv2"` and
-     * `"firefox"`, without `'unsafe-eval'` in `script-src` (or `default-src`),
+     * The page's Content-Security-Policy. On `"firefox"`, without `'unsafe-eval'` in `script-src` (or `default-src`),
      * `onSite` handlers run in the isolated world instead (as in the
      * extension) and a warning says so ({@link LoadedTweak.warnings}).
      */
@@ -1460,9 +1459,7 @@ export async function loadTweak(source: TweakSource, options: LoadTweakOptions =
         allScripts = entryScripts
             .map((s) => ({ id: s.id, name: s.name, handlers: compiledMap.get(s.id)!.handlers, layers }))
             .filter((s) => Boolean(s.handlers));
-        layered = layerScripts(allScripts, browser, (s, route) =>
-            logSink(s.name, "error", "", `async ${routeLabel(route)}: Chrome's blocking webRequest cannot await. Return synchronously, or set strategy: "debugger" or "helper" on this route.`)
-        );
+        layered = layerScripts(allScripts, browser);
         if (realLimits) for (const d of layered.disabled) warns.push(`${d.ref.scriptName}: ${routeLabel(d.ref.route)}: ${d.why}`);
         opScripts = realLimits ? layered.scripts : allScripts;
         currentErrors = errs;
@@ -1747,7 +1744,7 @@ export async function loadTweak(source: TweakSource, options: LoadTweakOptions =
         const siteScope = pageScope(win, { label: "site" });
         const isoScope = windowScope(win, { label: "iso" });
         pageOpts.setup?.(win);
-        // MV2/Firefox inject onSite with eval: a page CSP without 'unsafe-eval' sends it to the isolated world (hook.ts)
+        // Firefox injects onSite with eval: a page CSP without 'unsafe-eval' sends it to the isolated world (hook.ts)
         const cspNoEval = browser !== "chrome" && pageOpts.csp !== undefined && !cspAllowsEval(pageOpts.csp);
         if (cspNoEval && entryScripts.some((s) => (compiledMap.get(s.id)?.meta.routes || []).some((r) => r.kind === "onDocument" && pageWorld(r) === "page"))) {
             const line = "page CSP blocks eval in the page world — running onSite handlers in the isolated world instead";

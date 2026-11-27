@@ -8,5 +8,3 @@ declare const __NO_EVAL__: boolean;
 declare const __COMMIT__: string;
 /** Build-time injected: ISO timestamp of the build. */
 declare const __BUILD_TIME__: string;
-/** dist/hook.js, verbatim (the MV2 bridge injects it inline) */
-declare const __HOOK_SRC__: string;

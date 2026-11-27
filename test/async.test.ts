@@ -134,32 +134,6 @@ describe("handler stacking", () => {
 
 // ---------- async handlers ----------
 
-describe("async handlers (Chrome extension strategy)", () => {
-    it("async onRequest redirect → skipped with allow (needs sync or cdp)", async () => {
-        const s = new ExtensionStrategy();
-        s.reload([makeScript("a", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*", strategy: "extension" }, async (ctx) => ({ redirect: "https://async.com" }));`)]);
-        const d = s.handleBeforeRequest(details(), null) as any;
-        // not a promise (Chrome path) and not a redirect — allow
-        expect(d.then).toBeUndefined();
-        expect(d.kind).toBe("allow");
-    });
-
-    it("async onRequest replaceResponse → not served (no fallback; the error says to pick cdp/process)", () => {
-        const s = new ExtensionStrategy();
-        s.reload([makeScript("a", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*", strategy: "extension" }, async () => ({ replaceResponse: { body: { async: true } } }));`)]);
-        const d = s.handleBeforeRequest(details(), null) as any;
-        expect(d.kind).toBe("allow");
-    });
-
-    it("sync onRequest replaceResponse still redirects synchronously", () => {
-        const s = new ExtensionStrategy();
-        s.reload([makeScript("a", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*", strategy: "extension" }, () => ({ replaceResponse: { body: "static body" } }));`)]);
-        const d = s.handleBeforeRequest(details(), null) as any;
-        expect(d.kind).toBe("redirect");
-        expect(d.url).toContain("data:");
-    });
-});
-
 describe("async handlers (CDP tier loading)", () => {
     it("routes on other strategies are not loaded", () => {
         const c = new DebuggerStrategy();

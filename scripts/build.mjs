@@ -2,16 +2,12 @@
  * Build: bundles TS entries with Rolldown, copies static assets.
  *
  * Two targets:
- *   dist/    + dist-mv2/ — MV2 (manifest_version 2, blocking webRequest,
- *                          persistent background page) — the primary build
- *   dist-mv3/            — MV3 (service worker, sandbox-based compile,
- *                          hook tier carries interception — webRequest/
- *                          cdp tiers disabled at runtime)
+ *   dist-mv3/            Chrome MV3 (service worker, sandbox-based compile,
+ *                        webRequest tier disabled at runtime)
+ *   dist-firefox/        the MV2 build for Firefox (the .xpi), built with
+ *                        __FIREFOX__ so Chromium-only APIs are left out
  *
- *   dist-firefox/        — the MV2 build for Firefox (the .xpi), built with
- *                          __FIREFOX__ so Chromium-only APIs are left out
- *
- * The MV3 and Firefox manifests are derived from manifest.json at build time.
+ * Both manifests are derived from manifest.json at build time.
  */
 import { rolldown } from "rolldown";
 import { cp, mkdir, rm, writeFile, copyFile, readFile, readdir } from "node:fs/promises";
@@ -83,15 +79,7 @@ function entriesFor(dist, mv3, firefox = false) {
             output: { file: path.join(dist, "pane.js"), format: "iife" },
         },
     ];
-    if (!mv3) {
-        // Chromium only: Firefox replaces page bodies in place (extensionStrategy.ts)
-        if (!firefox) list.push(
-            {
-                input: path.join(root, "src/ui/serve.ts"),
-                output: { file: path.join(dist, "serve.js"), format: "iife" },
-            }
-        );
-    } else {
+    if (mv3) {
         list.push(
             {
                 // offscreen document: bridges the SW ⇄ sandbox iframe
@@ -123,10 +111,7 @@ function entriesFor(dist, mv3, firefox = false) {
 
 /**
  * The page hook as a MAIN-world content script, so it patches fetch/XHR
- * before the page's own scripts run. Chromium rejects `world` in MV2
- * manifests (it warns and ignores it), so manifest.json leaves it out and
- * the bridge injects hook.js with a <script> tag there; MV3 and Firefox
- * (128+) get it here.
+ * before the page's own scripts run (Firefox 128+, Chrome MV3).
  */
 const HOOK_MAIN = { matches: ["*://*/*"], js: ["hook.js"], all_frames: true, match_about_blank: true, match_origin_as_fallback: true, run_at: "document_start", world: "MAIN" };
 
@@ -173,14 +158,7 @@ function mv3Manifest(mv2) {
 }
 
 async function buildOnce(dist, mv3, firefox = false) {
-    const entries = entriesFor(dist, mv3, firefox);
-    // the page hook first: MV2 Chromium's bridge injects its source inline
-    const isHook = (e) => e.output.file === path.join(dist, "hook.js");
-    const hook = entries.find(isHook);
-    for (const entry of [hook, ...entries.filter((e) => !isHook(e))]) {
-        if (entry !== hook) {
-            entry.transform.define.__HOOK_SRC__ = JSON.stringify(await readFile(hook.output.file, "utf8"));
-        }
+    for (const entry of entriesFor(dist, mv3, firefox)) {
         const bundle = await rolldown(entry);
         await bundle.write({ file: entry.output.file, format: entry.output.format });
         await bundle.close();
@@ -347,14 +325,10 @@ async function copyStatic(dist, mv3, firefox = false) {
         await writeFile(path.join(dist, "manifest.json"), JSON.stringify(mv3Manifest(mv2), null, 4) + "\n");
         await copyFile(path.join(root, "src/background/offscreen.html"), path.join(dist, "offscreen.html"));
         await copyFile(path.join(root, "src/background/sandbox.html"), path.join(dist, "sandbox.html"));
-    } else if (firefox) {
+    } else {
         const mv2 = JSON.parse(await readFile(path.join(root, "manifest.json"), "utf8"));
         await writeFile(path.join(dist, "manifest.json"), JSON.stringify(firefoxManifest(mv2), null, 4) + "\n");
         await copyFile(path.join(root, "src/background/background.html"), path.join(dist, "background.html"));
-    } else {
-        await copyFile(path.join(root, "manifest.json"), path.join(dist, "manifest.json"));
-        await copyFile(path.join(root, "src/background/background.html"), path.join(dist, "background.html"));
-        await copyFile(path.join(root, "src/ui/serve.html"), path.join(dist, "serve.html"));
     }
     await copyFile(path.join(root, "src/ui/editor.html"), path.join(dist, "editor.html"));
     await copyFile(path.join(root, "src/overlay/overlay.html"), path.join(dist, "overlay.html"));
@@ -462,7 +436,6 @@ async function buildSdk() {
                 __FIREFOX__: "false",
                 __NO_EVAL__: "false",
                 __COMMIT__: JSON.stringify(gitCommit()),
-                __HOOK_SRC__: JSON.stringify(""),
                 __BUILD_TIME__: JSON.stringify(new Date().toISOString()),
             },
             jsx: { runtime: "automatic", importSource: "react" },
@@ -574,13 +547,6 @@ async function checkFirefoxBuild(dir) {
 async function buildAll() {
     cachedSdkJson = null;
     await buildSdk();
-    // MV2: dist/ (existing output, unchanged behavior) + dist-mv2/ copy
-    await rm(path.join(root, "dist"), { recursive: true, force: true });
-    await mkdir(path.join(root, "dist"), { recursive: true });
-    await buildOnce(path.join(root, "dist"), false);
-    await rm(path.join(root, "dist-mv2"), { recursive: true, force: true });
-    await cp(path.join(root, "dist"), path.join(root, "dist-mv2"), { recursive: true });
-    console.log("dist-mv2/ (copy of dist/) written");
     const firefox = path.join(root, "dist-firefox");
     await rm(firefox, { recursive: true, force: true });
     await mkdir(firefox, { recursive: true });

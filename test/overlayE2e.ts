@@ -1,5 +1,5 @@
 /**
- * Shared E2E check (MV2 + MV3): overlays (tweak.onOverlay). A `.tsx` switch
+ * Shared E2E check (MV3): overlays (tweak.onOverlay). A `.tsx` switch
  * with the built-in React and valtio toggles a page-strategy mock live;
  * clicks on empty areas reach the page; a strict-CSP page still shows the
  * overlay; the page can't find the frame or read the overlay's code; the
@@ -7,7 +7,7 @@
  * `ctx.onNavigate`; a page-posted call never reaches an overlay; a handle
  * call in onSite code throws SiteCannotCallError; on save the overlay
  * updates in place with its store kept; disabling removes it. With
- * `isolated` (the MV2 builds): an Alt+click in isolated onPage code calls
+ * `isolated` (onPage and the overlay in one world): an Alt+click in isolated onPage code calls
  * the overlay, which calls back to highlight. With `userScripts` (MV3):
  * while user scripts are off, isolated and onSite handlers don't run, the overlay's
  * calls into them reject with the hint, and the Problems error and the
@@ -609,7 +609,7 @@ const pageKeysCode = (origin: string, id: string) => `import { tweak } from "tan
 /**
  * onPage's `ctx.shortcut`: keys pressed in the page run it and the page
  * doesn't see them; a hot save keeps one registration; the script higher
- * in the list keeps shared keys (MV2: the scripts share a world); it stops
+ * in the list keeps shared keys (when the scripts share a world); it stops
  * with the script.
  */
 export async function checkPageShortcuts(ctx: any, mgr: any, origin: string, check: Check, opts: { label?: string; separateWorlds?: boolean } = {}): Promise<void> {
@@ -1428,7 +1428,7 @@ tweak.onPage({ url: "${origin}/ov-site-hot*", when: "document_end" }, () => {
 /**
  * Saved onSite code reaches open pages: one whose CSP forbids eval
  * (`cspWorld`: where its onSite code runs: Chrome MV3 injects it into the
- * site's world, MV2 falls back to the isolated world), the other tabs while
+ * site's world, an eval-based injection falls back to the isolated world), the other tabs while
  * one can't run code, and a page back from the back/forward cache (its
  * onPage code too). `failNextRun` (MV3) makes the next
  * `userScripts.execute` fail; false when it couldn't.

@@ -104,11 +104,12 @@ describe("extension strategy: log lines use the stored script name", () => {
         expect(entries.some((e) => e.message.includes("[Untitled script]"))).toBe(false);
     });
 
-    it("sync respond 200 → served + named serve log", () => {
+    it("sync respond 200 → served in place + named serve log", () => {
         const s = new ExtensionStrategy();
         s.reload([storedScript("a", "API mocker", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*", strategy: "extension" }, () => ({ replaceResponse: { body: "ok", mime: "text/plain" } }));`)]);
         const d = s.handleBeforeRequest(details(), null) as any;
-        expect(d.kind).toBe("redirect");
+        expect(d.kind).toBe("allow"); // served in place, at the response
+        s.pruneRequest(details().requestId);
         const line = entries.find((e) => e.message.includes("replaceResponse 200"));
         expect(line, "a respond log line must exist").toBeTruthy();
         expect(line!.message).toContain("[API mocker]");
@@ -127,7 +128,8 @@ describe("extension strategy: log lines use the stored script name", () => {
         const s = new ExtensionStrategy();
         s.reload([storedScript("a", "API mocker", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*", strategy: "extension" }, () => ({ replaceResponse: { body: { mocked: true } } }));`)]);
         const d = s.handleBeforeRequest(details(), null) as any;
-        expect(d.kind).toBe("redirect");
+        expect(d.kind).toBe("allow"); // served in place, at the response
+        s.pruneRequest(details().requestId);
         const line = entries.find((e) => e.message.includes("onRequest → replaceResponse"));
         expect(line, "a replaceResponse log line must exist").toBeTruthy();
         expect(line!.message).toContain("[API mocker]");
@@ -294,22 +296,7 @@ describe("per-script TypeScript error tracking", () => {
     });
 });
 
-describe("Chromium extension strategy: how it serves replacements (redirect)", () => {
-    const REPLACE = `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*", strategy: "extension" }, () => ({ replaceResponse: { body: "<h1>x</h1>" } }));`;
-    it("a page load is served via serve.html", () => {
-        const s = new ExtensionStrategy();
-        s.reload([storedScript("a", "Wr page", REPLACE)]);
-        const d = s.handleBeforeRequest(details({ type: "main_frame" }), null) as any;
-        expect(d.kind).toBe("redirect");
-        expect(d.url).toContain("serve.html");
-    });
-    it("a fetch/XHR gets a data: URL", () => {
-        const s = new ExtensionStrategy();
-        s.reload([storedScript("a", "Wr api", REPLACE)]);
-        const d = s.handleBeforeRequest(details(), null) as any;
-        expect(d.kind).toBe("redirect");
-        expect(d.url).toMatch(/^data:/);
-    });
+describe("extension strategy: other strategies' routes", () => {
     it("a route on another strategy is left alone", () => {
         const s = new ExtensionStrategy();
         s.reload([storedScript("a", "Cdp api", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*", strategy: "debugger" }, () => ({ replaceResponse: { body: "<h1>x</h1>" } }));`)]);

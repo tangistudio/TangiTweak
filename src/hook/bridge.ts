@@ -1706,23 +1706,8 @@ import type { PaneToast } from "../shared/wire";
     // initial: inject the hook + register dom handlers
     function injectHook(): void {
         if (document.querySelector("script[data-res-override-hook]")) return;
-        // MV2 Chromium: inline, so it runs now — before the page's own
-        // scripts make their first requests (a src script runs later). MV2
-        // content scripts' inline scripts aren't bound by the page CSP; if
-        // one ever blocks it (Trusted Types…), src still works
-        // (Firefox runs the hook as a MAIN-world content script already)
-        if (!__MV3__ && !chrome.runtime.getURL("").startsWith("moz-extension:")) {
-            const inline = document.createElement("script");
-            inline.setAttribute("data-res-override-hook", "1");
-            try {
-                inline.textContent = __HOOK_SRC__;
-                (document.head || document.documentElement).appendChild(inline);
-            } catch {}
-            const ran = inline.hasAttribute("data-res-ran");
-            inline.remove();
-            if (ran) return;
-            dlog("debug", "the inline page hook didn't run (page CSP) — injecting it by src");
-        }
+        // the hook runs as a MAIN-world content script already; this src copy
+        // covers a browser that ignores `world: "MAIN"` (it stops when hooked)
         const script = document.createElement("script");
         script.src = chrome.runtime.getURL("hook.js");
         script.setAttribute("data-res-override-hook", "1");

@@ -1,6 +1,4 @@
 node_modules/
-dist/
-dist-mv2/
 dist-firefox/
 dist-mv3/
 dist-sdk/
