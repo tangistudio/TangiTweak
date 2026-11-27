@@ -13,6 +13,7 @@ export interface ToastActivity {
     history: ToastHistoryEntry[];
     schedules: ScheduleRow[];
 }
+import type { UserScriptsStatus } from "../../shared/userScriptsStatus";
 
 export interface ScriptInfo {
     id: string;
@@ -67,6 +68,10 @@ export interface PopupApi {
     toggleSiteTab?(mode: "custom" | "original"): Promise<void>;
     /** the notice's button: grant site access if that's missing, then reload the tab */
     fixTab(status: TabStatus): Promise<void>;
+    /** Chrome MV3: can onPage and onSite code run (a fresh check) */
+    userScripts(): Promise<UserScriptsStatus>;
+    /** the notice's button: request the permission, or open TangiTweak's details for "Allow User Scripts" */
+    fixUserScripts(status: UserScriptsStatus): Promise<void>;
     setEnabled(id: string, enabled: boolean): Promise<void>;
     clearError(id: string): Promise<void>;
     getParams(scriptId: string): Promise<ScriptParams>;
@@ -124,6 +129,16 @@ export const chromePopupApi: PopupApi = {
             if (!granted) return;
         }
         chrome.tabs.reload(tab.id);
+        window.close();
+    },
+    userScripts: async () => (__MV3__ && (await sendWake<{ status: UserScriptsStatus }>({ type: "userScriptsStatus" }))?.status) || "ok",
+    fixUserScripts: async (status) => {
+        if (status === "no-permission") {
+            // first thing in the click: the request needs its user gesture
+            await new Promise<void>((resolve) => chrome.permissions.request({ permissions: ["userScripts" as any] }, () => resolve(void chrome.runtime.lastError)));
+            return;
+        }
+        chrome.tabs.create({ url: `chrome://extensions/?id=${chrome.runtime.id}` }, () => void chrome.runtime.lastError);
         window.close();
     },
     setEnabled: async (id, enabled) => void (await send({ type: "setEnabled", id, enabled })),

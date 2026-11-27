@@ -20,6 +20,18 @@ export function userScriptsHowTo(status: Exclude<UserScriptsStatus, "ok">, exten
     return status === "no-permission" ? `grant the "user scripts" permission from the Editor's banner, then ${allow}` : allow;
 }
 
+/** the toolbar icon's "!" tooltip and the popup's notice while user scripts are off, with the popup's button */
+export const USER_SCRIPTS_NOTICE: Record<Exclude<UserScriptsStatus, "ok">, { lines: string[]; action: string }> = {
+    "no-permission": {
+        lines: ["User scripts are off.", `onPage and onSite code don't run until TangiTweak has the "user scripts" permission.`],
+        action: "Grant permission",
+    },
+    off: {
+        lines: ["User scripts are off.", `onPage and onSite code don't run until "Allow User Scripts" is on in TangiTweak's details (before Chrome 138: Developer mode).`],
+        action: "Open extension details",
+    },
+};
+
 /** the Problems error for an onPage or onSite handler (`label`: "onPage #2") */
 export function userScriptsProblem(label: string, status: Exclude<UserScriptsStatus, "ok">, extensionId: string): string {
     return `${label}: ${USER_SCRIPTS_PROBLEM} — ${userScriptsHowTo(status, extensionId)}`;

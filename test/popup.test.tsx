@@ -3,10 +3,11 @@ import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/re
 import { Popup } from "../src/ui/popup/Popup";
 import type { PopupApi, ScriptInfo, ScriptParams } from "../src/ui/popup/api";
 import type { TabStatus } from "../src/shared/tabStatus";
+import type { UserScriptsStatus } from "../src/shared/userScriptsStatus";
 
 afterEach(cleanup);
 
-function fakeApi(scripts: ScriptInfo[], params: Record<string, ScriptParams> = {}, active: string[] = [], tab: TabStatus = "ok"): PopupApi & { calls: any[] } {
+function fakeApi(scripts: ScriptInfo[], params: Record<string, ScriptParams> = {}, active: string[] = [], tab: TabStatus = "ok", us: UserScriptsStatus = "ok"): PopupApi & { calls: any[] } {
     const calls: any[] = [];
     let list = scripts.map((s) => ({ ...s }));
     return {
@@ -15,6 +16,11 @@ function fakeApi(scripts: ScriptInfo[], params: Record<string, ScriptParams> = {
         activeOnTab: vi.fn(async () => [...active]),
         tabStatus: vi.fn(async () => tab),
         fixTab: vi.fn(async (s: TabStatus) => void calls.push(["fixTab", s])),
+        userScripts: vi.fn(async () => us),
+        fixUserScripts: vi.fn(async (s: UserScriptsStatus) => {
+            calls.push(["fixUserScripts", s]);
+            if (s === "no-permission") us = "off";
+        }),
         setEnabled: vi.fn(async (id: string, enabled: boolean) => {
             calls.push(["setEnabled", id, enabled]);
             list = list.map((s) => (s.id === id ? { ...s, enabled } : s));
@@ -80,6 +86,7 @@ describe("Popup", () => {
         await screen.findByText("Alpha");
         expect(container.querySelector("#active-summary")).toBeNull();
         expect(container.querySelector("#tab-notice")).toBeNull();
+        expect(container.querySelector("#userscripts-notice")).toBeNull();
     });
 
     it("explains a tab TangiTweak isn't running in and reloads it", async () => {
@@ -88,6 +95,18 @@ describe("Popup", () => {
         await screen.findByText("TangiTweak isn't running on this tab.");
         fireEvent.click(screen.getByRole("button", { name: "Reload tab" }));
         expect(api.calls).toContainEqual(["fixTab", "reload"]);
+    });
+
+    it("explains user scripts being off and walks through turning them on", async () => {
+        const api = fakeApi([script("a", "Alpha")], {}, [], "ok", "no-permission");
+        const { container } = render(<Popup api={api} />);
+        await screen.findByText(/until TangiTweak has the "user scripts" permission/);
+        fireEvent.click(screen.getByRole("button", { name: "Grant permission" }));
+        // granted: the next step is the browser's switch
+        await screen.findByRole("button", { name: "Open extension details" });
+        expect(container.querySelector("#userscripts-notice")?.getAttribute("data-status")).toBe("off");
+        fireEvent.click(screen.getByRole("button", { name: "Open extension details" }));
+        expect(api.calls).toEqual([["fixUserScripts", "no-permission"], ["fixUserScripts", "off"]]);
     });
 
     it("shows the empty state", async () => {

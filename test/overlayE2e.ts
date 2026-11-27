@@ -408,7 +408,18 @@ export async function checkOverlays(ctx: any, mgr: any, origin: string, check: C
             () => false
         );
         check(t("user scripts off: the Editor's banner offers the permission"), banner);
+        // the toolbar icon: "!" on every tab while they're off (tab URLs aren't always visible to the worker: every tab's icon)
+        const icons = async (): Promise<{ text: string; title: string }[]> => {
+            const w = ctx.serviceWorkers().find((x: any) => new URL(x.url()).host === new URL(mgr.url()).host);
+            return w
+                ? w.evaluate(async () => Promise.all((await chrome.tabs.query({})).map(async (tab) => ({ text: await chrome.action.getBadgeText({ tabId: tab.id }), title: await chrome.action.getTitle({ tabId: tab.id }) }))))
+                : [];
+        };
+        const offIcons = await icons();
+        check(t("user scripts off: the toolbar icon shows ! on every tab and says why"), offIcons.length > 0 && offIcons.every((x) => x.text === "!" && x.title.includes("User scripts are off")), JSON.stringify(offIcons));
         await opts.userScripts.grant();
+        const onIcons = await waitFor(icons, (xs) => xs.length > 0 && !xs.some((x) => x.title.includes("User scripts are off")), 8000);
+        check(t("granting user scripts clears the toolbar icon's !"), onIcons.length > 0 && !onIcons.some((x) => x.text === "!" || x.title.includes("User scripts are off")), JSON.stringify(onIcons));
         const gone = await mgr.waitForSelector("#userscripts-banner", { state: "detached", timeout: 8000 }).then(
             () => true,
             () => false
@@ -419,12 +430,12 @@ export async function checkOverlays(ctx: any, mgr: any, origin: string, check: C
             8000
         );
         check(t("granting user scripts clears the banner and the Problems error"), gone && !listed.some((x) => x.includes("user scripts are off")), JSON.stringify({ gone, listed }));
-        // a newly registered user script runs from the next page load
+        // a newly registered user script runs from the next page load: a URL of its own, since the code
+        // also just ran on the open page and Network folds a same-URL page load into that row (while idle)
         const reloadedAt = Date.now();
-        await page.reload({ waitUntil: "load", timeout: 15000 });
+        await page.goto(`${origin}/ov-app?granted=1`, { waitUntil: "load", timeout: 15000 });
         navFrame = await overlayFrame(page, "#nav");
-        // (the page is at ?nav=1 since the pushState above)
-        await siteChecks(reloadedAt, "/ov-app?nav=1");
+        await siteChecks(reloadedAt, "/ov-app?granted=1");
     }
     if (opts.isolated || opts.userScripts) {
         const probe = await probeOf(navFrame);

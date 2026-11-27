@@ -24,6 +24,7 @@ Handlers from several tweaks now stack predictably: they run from general to spe
 - **[`tweak.toastPane(name, render)`](docs/scripting.md#toast-panes)** lets a toast draw its own React layout.
 - The Editor has a **Schedules** view (⌥⇧S) with Run now and Pause, and its Preview draws toast panes. The popup can mute a tweak's toasts and shows its last 20; Settings has a Toasts section.
 - `tangitweak/test`: `t.trigger("every")`, `t.trigger("toastAction", event)` and `t.toasts`.
+- **The toolbar icon shows an amber "!" while user scripts are off** (Chrome MV3), on every tab, because `onPage` and `onSite` code don't run then. Hovering the icon says why. The popup explains it too, with a button for the next step: grant the `userScripts` permission, then open TangiTweak's details to turn on "Allow User Scripts".
 
 ### Changed
 

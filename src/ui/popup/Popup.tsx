@@ -10,6 +10,7 @@ import { ParamTreeFields } from "../components/ParamField";
 import { IconBell, IconPen } from "../components/icons";
 import type { PopupApi, ScriptInfo, ScriptLayer, ScriptParams, SiteTabState, ToastActivity } from "./api";
 import { TAB_NOTICE, type TabStatus } from "../../shared/tabStatus";
+import { USER_SCRIPTS_NOTICE, type UserScriptsStatus } from "../../shared/userScriptsStatus";
 
 type Load = { state: "loading" } | { state: "ready"; scripts: ScriptInfo[] } | { state: "error" };
 
@@ -40,10 +41,13 @@ export function Popup({ api }: { api: PopupApi }) {
     const [siteTab, setSiteTab] = useState<SiteTabState | null>(null);
     const refreshSiteTab = () =>
         api.siteTabState?.().then(setSiteTab, () => {});
+    const [us, setUs] = useState<UserScriptsStatus>("ok");
+    const refreshUs = () => api.userScripts().then(setUs, () => {});
     useEffect(() => {
         void refresh();
         void refreshSiteTab();
         api.tabStatus().then(setTab, () => {});
+        void refreshUs();
         let t: ReturnType<typeof setTimeout> | undefined;
         const off = api.onChange?.(() => {
             clearTimeout(t);
@@ -114,13 +118,24 @@ export function Popup({ api }: { api: PopupApi }) {
                 </div>
             )}
             {tab !== "ok" && (
-                <div id="tab-notice" role="alert">
+                <div id="tab-notice" className="notice" role="alert">
                     {TAB_NOTICE[tab].lines.map((l, i) => (
                         <div key={i} className={i ? undefined : "tab-notice-head"}>
                             {l}
                         </div>
                     ))}
                     <button onClick={() => void api.fixTab(tab)}>{TAB_NOTICE[tab].action}</button>
+                </div>
+            )}
+            {us !== "ok" && (
+                <div id="userscripts-notice" className="notice" role="alert" data-status={us}>
+                    {USER_SCRIPTS_NOTICE[us].lines.map((l, i) => (
+                        <div key={i} className={i ? undefined : "tab-notice-head"}>
+                            {l}
+                        </div>
+                    ))}
+                    {/* after the grant the next step ("Allow User Scripts") shows */}
+                    <button onClick={() => void api.fixUserScripts(us).then(refreshUs)}>{USER_SCRIPTS_NOTICE[us].action}</button>
                 </div>
             )}
             <ul id="script-list">

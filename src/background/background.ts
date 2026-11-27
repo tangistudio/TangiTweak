@@ -22,6 +22,8 @@ import { createBadgeCounter, badgeLook, withToastDot, BADGE_WARN } from "./badge
 import { onUnreadToastsChanged, unreadToastTabs } from "./engine/toastCenter";
 import { frameHasHook } from "../shared/missedTap";
 import { tabStatus, TAB_NOTICE, type TabStatus } from "../shared/tabStatus";
+import { onUserScriptsStatus, userScriptsStatus } from "./userScripts";
+import { USER_SCRIPTS_NOTICE } from "../shared/userScriptsStatus";
 import { actionIconView, createBusyIndicator } from "./busyIcon";
 import { onBusyChange } from "./engine/busy";
 import { addBridgePort } from "./engine/bridgePorts";
@@ -368,9 +370,12 @@ async function updateTabBadge(tabId: number, url: string | undefined): Promise<v
     const problems = ids.length ? await getScriptProblems() : new Map();
     const names = ids.map((id) => cachedScripts.find((s) => s.id === id)?.meta.name || id);
     const look = badgeLook(names, ids.map((id) => problems.get(id)));
-    const notice = tabNotices.get(tabId);
+    // the tab's own notice first (its fix is a reload); user scripts off holds on every tab (Chrome MV3)
+    const tabNotice = tabNotices.get(tabId);
+    const us = await userScriptsStatus();
+    const notice = tabNotice ? TAB_NOTICE[tabNotice] : us !== "ok" ? USER_SCRIPTS_NOTICE[us] : undefined;
     const waiting = [...unreadToastTabs()].filter(([id]) => id !== tabId).map(([, accent]) => accent);
-    const shown = notice ? { text: "!", color: BADGE_WARN, title: TAB_NOTICE[notice].lines.join("\n") } : withToastDot({ text: ids.length ? String(ids.length) : "", color: look.color, title: look.title }, waiting);
+    const shown = notice ? { text: "!", color: BADGE_WARN, title: notice.lines.join("\n") } : withToastDot({ text: ids.length ? String(ids.length) : "", color: look.color, title: look.title }, waiting);
     await badgeSetColor(shown.color, tabId);
     await badgeSetText(shown.text, tabId);
     await actionSetTitle(shown.title, tabId);
@@ -400,6 +405,8 @@ chrome.tabs.onUpdated.addListener((tabId, info, tab) => {
 });
 onScriptsChanged(() => void updateAllTabs());
 onUnreadToastsChanged(() => void updateAllTabs(false));
+// granted, allowed or taken back: noticed on permission changes and on tab events (the status is re-checked every 2 s at most)
+onUserScriptsStatus(() => void updateAllTabs(false));
 void updateAllTabs(true, true);
 
 // opening a *.tangitweak.ts URL or any package URL marked with

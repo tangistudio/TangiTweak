@@ -187,15 +187,15 @@ body.resizing * { pointer-events: none; }
     color: #fff;
 }
 
-#tab-notice {
+.notice {
     flex: none;
     padding: 10px 12px;
     background: var(--warn-tint);
     border-bottom: 1px solid var(--border);
     color: var(--fg-dim);
 }
-#tab-notice .tab-notice-head { color: var(--warn); font-weight: 600; }
-#tab-notice button {
+.notice .tab-notice-head { color: var(--warn); font-weight: 600; }
+.notice button {
     margin-top: 8px;
     background: var(--warn);
     border: none;
