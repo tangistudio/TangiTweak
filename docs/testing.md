@@ -27,7 +27,7 @@ It needs Node.js 23.8 or later and Vitest 2, 3 or 4. React, ReactDOM and
 valtio are the copies the tests share with the tweak's code (in the browser,
 TangiTweak provides them). The SDK's version is the extension's, so install
 the one that matches the TangiTweak you run
-(`npm install -D tangitweak@0.41.0-alpha`).
+(`npm install -D tangitweak@0.41.1-alpha`).
 
 **Without npm's copy:** in a [synced folder](editor.md#folder-sync), Folder
 Sync writes the SDK of the extension you're running to
@@ -37,7 +37,7 @@ Sync writes the SDK of the extension you're running to
 copy, which always matches your extension. Each
 [GitHub release](https://github.com/tangistudio/TangiTweak/releases) also
 attaches it as `tangitweak-sdk-v<version>.tgz`
-(`npm install -D ./tangitweak-sdk-v0.41.0-alpha.tgz`).
+(`npm install -D ./tangitweak-sdk-v0.41.1-alpha.tgz`).
 
 Put the tests inside the tweak's folder, for example in `__tests__/`:
 

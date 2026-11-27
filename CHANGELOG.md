@@ -7,9 +7,15 @@ its section below.
 
 ## [Unreleased]
 
+## [0.41.1-alpha] - 2026-11-27
+
 ### Added
 
 - **[Debugger-friendly overlays](docs/scripting.md#debugger-friendly-overlays)** in Settings → Overlays (off by default, `debuggerFriendlyOverlays` in `settings.json`). Every `tweak.onOverlay` and toast pane draws in a closed shadow root in the page instead of an extension frame, so Playwriter and other `chrome.debugger` extensions can attach without removing them. The page can see keys typed into them. On Chrome MV3 it needs user scripts (toast panes also Chrome 135); without them Problems says so. `tweak.site` keeps its own `debuggerSafe` option.
+
+### Fixed
+
+- Toast panes show their source and close button above the pane instead of squeezed beside it.
 
 ## [0.41.0-alpha] - 2026-11-25
 
@@ -1238,7 +1244,8 @@ Before `0.0.1-alpha` was tagged, the extension grew from an initial TypeScript p
 - Built the initial TypeScript script engine (in-browser Sucrase transpilation, `res.onRequest` / `res.onDom` / `res.log`, script `console.*` capture), embedded Monaco editor with bundled API typings, movable log panel, popup with per-tab active-script badge, sample scripts, and bundle import/export.
 - Implemented three initial interception tiers (`MAIN`-world `fetch`/XHR hook, MV2 blocking `webRequest`, and `chrome.debugger` `Fetch` for main-frame HTML and subresources with adaptive idle detach), two-way local folder sync via the File System Access API, and the headless Chromium E2E suite.
 
-[Unreleased]: https://github.com/tangistudio/TangiTweak/compare/v0.41.0-alpha...HEAD
+[Unreleased]: https://github.com/tangistudio/TangiTweak/compare/v0.41.1-alpha...HEAD
+[0.41.1-alpha]: https://github.com/tangistudio/TangiTweak/compare/v0.41.0-alpha...v0.41.1-alpha
 [0.41.0-alpha]: https://github.com/tangistudio/TangiTweak/compare/v0.40.2-alpha...v0.41.0-alpha
 [0.40.2-alpha]: https://github.com/tangistudio/TangiTweak/compare/v0.36.1-alpha...v0.40.2-alpha
 [0.40.1-alpha]: https://github.com/tangistudio/TangiTweak/compare/v0.37.0-alpha...v0.40.1-alpha
