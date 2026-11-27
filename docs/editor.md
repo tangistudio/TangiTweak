@@ -195,9 +195,9 @@ at the right of the toolbar do the same.
   error, with a quick fix (Ctrl+. / ⌘.) that moves the handler to
   `tweak.onPage`; a route with the removed `js`, `dom` or `unsafe` option gets
   one to `tweak.onSite` / `tweak.onOverlay`.
-  On Chrome, `onPage` or `onSite` code while
-  [user scripts are off](scripting.md#user-scripts-on-chrome) is an error
-  whose `chrome://extensions` link opens TangiTweak's details page; the
+  `onPage` or `onSite` code while
+  [user scripts are off](scripting.md#user-scripts) is an error
+  (on Chrome its `chrome://extensions` link opens TangiTweak's details page); the
   Editor also shows a one-time banner with a **Grant permission** (or
   **Open extension details**) button.
 - **Log view** — engine and script log lines with a [filter bar](#log-filter)
@@ -515,7 +515,7 @@ gets a ⚠ and the Problems view a warning.
 **Settings → About** shows the installed version and the latest
 [release](https://github.com/tangistudio/TangiTweak/releases) (checked on
 GitHub when About opens, with a download link when there's an update), commit and build time,
-the build (MV2/MV3), browser, OS, extension ID and the local helper's state.
+the build, browser, OS, extension ID and the local helper's state.
 **Copy** puts that on the clipboard as text — paste it into bug reports.
 **Help…** opens the samples and keyboard shortcuts (the
 editor toolbar's **?**).

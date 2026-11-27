@@ -339,7 +339,6 @@ Fixture and `mount` tests close these gaps between Node and the browser.
 | Chrome checks each rule's regex with RE2. | Each generated rule regex is checked with [`re2js`](https://www.npmjs.com/package/re2js), a port of RE2, and a rejected one is a load error with the extension's text. Chrome's 2 KB compiled-size limit is estimated: clearly over is an error, close to it a warning. |
 | Chrome allows 5,000 session rules and 1,000 regex rules. | Loading fails when the tweak's own rules go over. |
 | `onSite` (the MAIN world) and `onPage` (the isolated world) share the DOM, not JavaScript globals. | Each has its own `window` globals: a `window.foo` one sets is invisible to the other, and the website's globals (`goto`'s `setup`) are visible to `onSite` only. |
-| A page's Content-Security-Policy without `'unsafe-eval'` sends `onSite` to the isolated world on Firefox. | `page.goto(url, { csp: "script-src 'self'" })` does the same and reports it in `tweak.problems`. |
 | The `debugger` strategy can miss the first page load in a new tab. | `res.skipped` lists the handler as "may miss it" for a tab's first document request (it still runs). |
 
 Not covered; these stay with TangiTweak's own real-browser tests:

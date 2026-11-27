@@ -229,7 +229,7 @@ declare namespace TangiTweak {
          * default. A single value, no fallback. See {@link Strategy}.
          *
          * @example { url: "*://example.com/app/*.js", resourceTypes: ["script"], strategy: "debugger" }
-         * @example { url: "*://ads.example.com/*", strategy: tweak.isMV3 ? "rules" : "extension" }
+         * @example { url: "*://ads.example.com/*", strategy: tweak.isChrome ? "rules" : "extension" }
          */
         strategy: Strategy;
         /**
@@ -2306,17 +2306,18 @@ declare namespace TangiTweak {
         readonly isFirefox: boolean;
 
         /**
-         * `true` in the Manifest V2 build (`dist/`: Firefox, and Chromium browsers
-         * that still load MV2 extensions). Always the opposite of {@link isMV3}.
+         * Always `false`: every build is Manifest V3.
+         *
+         * @deprecated Use {@link isChrome} or {@link isFirefox} to pick a strategy.
          */
         readonly isMV2: boolean;
 
         /**
-         * `true` in the Manifest V3 build (`dist-mv3/`: current Chrome / Edge),
-         * where the `extension` strategy isn't available.
+         * Always `true`: every build is Manifest V3, Firefox's too.
          *
+         * @deprecated Use {@link isChrome} or {@link isFirefox} to pick a strategy.
          * @example
-         * tweak.onRequest({ url: "*://api.example.com/*", strategy: tweak.isMV3 ? "debugger" : "extension" }, fn);
+         * tweak.onRequest({ url: "*://api.example.com/*", strategy: tweak.isChrome ? "debugger" : "extension" }, fn);
          */
         readonly isMV3: boolean;
 

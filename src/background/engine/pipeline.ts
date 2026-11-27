@@ -622,9 +622,9 @@ export function createPipeline(
         return { responseHeaders: applyHeaderChanges(details.responseHeaders || [], merged) };
     };
 
-    if (!__MV3__) {
-        // MV2-only: blocking webRequest is the extension strategy's dispatch path. MV3
-        // forbids "blocking" — the page strategy (below) carries interception.
+    if (!__MV3__ || __FIREFOX__) {
+        // blocking webRequest is the extension strategy's dispatch path: Firefox keeps it
+        // in MV3, Chrome MV3 forbids "blocking" (the page strategy carries interception there)
         const addBlocking = (event: string, fn: any, extra: string[]) => {
             try {
                 try {
@@ -686,7 +686,7 @@ export function createPipeline(
             log(t?.tabId ?? -1, `[extension] the browser IGNORED this extension's "${d.action}"${t ? ` for ${t.url}` : ""} — another extension's change to the same request took precedence (disable other request-modifying extensions, e.g. a second TangiTweak install)`, "warn");
         });
     } else {
-        dlog("pipeline", "MV3: no blocking webRequest — the page strategy carries page fetch/XHR; the debugger or helper strategy carries browser-initiated loads");
+        dlog("pipeline", "Chrome MV3: no blocking webRequest — the page strategy carries page fetch/XHR; the debugger or helper strategy carries browser-initiated loads");
     }
 
     // ---- manager protocol ----

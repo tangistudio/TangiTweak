@@ -161,11 +161,11 @@ jobs:
       - name: Package zip
         run: |
           VERSION=$(node -p "const m = require('./dist-mv3/manifest.json'); m.version_name || m.version")
-          (cd dist-mv3 && zip -qr "../tangitweak-mv3-v${VERSION}.zip" .)
+          (cd dist-mv3 && zip -qr "../tangitweak-chrome-v${VERSION}.zip" .)
           # the SDK, the npm package `tangitweak` (also published to npm below)
           TGZ=$(npm pack ./dist-sdk --quiet)
           mv "$TGZ" "tangitweak-sdk-v${VERSION}.tgz"
-          echo "ZIP_MV3_NAME=tangitweak-mv3-v${VERSION}.zip" >> "$GITHUB_ENV"
+          echo "ZIP_CHROME_NAME=tangitweak-chrome-v${VERSION}.zip" >> "$GITHUB_ENV"
           echo "SDK_TGZ=tangitweak-sdk-v${VERSION}.tgz" >> "$GITHUB_ENV"
           echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
 
@@ -176,14 +176,14 @@ jobs:
           if [ -z "$CRX_PRIVATE_KEY" ]; then echo "::warning::CRX_PRIVATE_KEY secret not set — skipping .crx"; exit 0; fi
           KEY="$RUNNER_TEMP/crx-key.pem"
           printf '%s\n' "$CRX_PRIVATE_KEY" > "$KEY"
-          npx -y crx3@2.0.0 -p "$KEY" -o "tangitweak-mv3-v${VERSION}.crx" -- dist-mv3
+          npx -y crx3@2.0.0 -p "$KEY" -o "tangitweak-chrome-v${VERSION}.crx" -- dist-mv3
           rm -f "$KEY"
           ls -la *.crx
 
-      - name: Upload build artifact (every run)
+      - name: Upload the Chrome build (every run)
         uses: actions/upload-artifact@v4
         with:
-          name: tangitweak
+          name: tangitweak-chrome
           path: dist-mv3/**
 
       - name: Upload the Firefox build (signed by the firefox job)
@@ -220,7 +220,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            ${{ env.ZIP_MV3_NAME }}
+            ${{ env.ZIP_CHROME_NAME }}
             ${{ env.SDK_TGZ }}
             tangitweak-*.crx
             helper-dist/*

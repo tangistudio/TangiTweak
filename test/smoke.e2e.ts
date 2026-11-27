@@ -2,8 +2,8 @@
  * The cross-browser smoke suite: the same few checks on Chrome (dist-mv3)
  * and Firefox (dist-firefox), through the launcher in e2eBrowsers.ts.
  * It covers what each browser does its own way: the background, a save
- * (compile), the page strategy, the browser's network strategy and page
- * code. The per-browser suites (mv3.e2e.ts and the others) go deep on
+ * (compile), the page strategy, the browser's network strategy, an overlay
+ * frame and page code. The per-browser suites (mv3.e2e.ts and the others) go deep on
  * Chrome; this one keeps both browsers honest.
  *
  * Usage: npm run build && npx tsx test/smoke.e2e.ts
@@ -31,6 +31,10 @@ const server = http.createServer((req, res) => {
     if (req.url?.startsWith("/script")) {
         res.writeHead(200, { "content-type": "text/html" });
         return res.end(`<html><body><script src="/app.js"></script></body></html>`);
+    }
+    if (req.url?.startsWith("/overlay")) {
+        res.writeHead(200, { "content-type": "text/html" });
+        return res.end(`<html><body><script>addEventListener("message",(e)=>{if(e.data==="TT-OVERLAY")document.documentElement.dataset.overlay="RAN"})</script></body></html>`);
     }
     if (req.url?.startsWith("/doc")) {
         res.writeHead(200, { "content-type": "text/html" });
@@ -86,12 +90,20 @@ async function suite(ext: ExtBrowser): Promise<void> {
     check(`the ${ext.networkStrategy} strategy rewrites a script load`, script === "NET", script);
     await deleteTweak(ext.send, "smoke net");
 
+    // an overlay frame (a sandbox page on both browsers) runs its code and reaches the page
+    await saveTweak(ext.send, "s_smoke_ov", "smoke overlay", `import { tweak } from "tangitweak"; tweak.onOverlay("${ORIGIN}/overlay*", () => { parent.postMessage("TT-OVERLAY", "*"); });`);
+    const overlay = await readPage(`${ORIGIN}/overlay`, () => document.documentElement.dataset.overlay ?? "", "RAN");
+    check("onOverlay code runs in its frame", overlay === "RAN", overlay);
+    await deleteTweak(ext.send, "smoke overlay");
+
     // the Editor asks for the permission once a tweak has page code
-    await saveTweak(ext.send, "s_smoke_doc", "smoke doc", `import { tweak } from "tangitweak"; tweak.onPage("${ORIGIN}/doc*", () => { document.documentElement.dataset.onpage = "RAN"; });`);
+    await saveTweak(ext.send, "s_smoke_doc", "smoke doc", `import { tweak } from "tangitweak"; tweak.onPage("${ORIGIN}/doc*", () => { document.documentElement.dataset.onpage = "RAN"; }); tweak.onSite("${ORIGIN}/doc*", () => { (window as any).__ttSmokeSite = "RAN"; });`);
     const editor = await ext.extPage("editor.html");
     await ext.grantUserScripts(editor);
     const doc = await readPage(`${ORIGIN}/doc`, () => document.documentElement.dataset.onpage ?? "", "RAN");
     check("onPage code runs (user scripts granted)", doc === "RAN", doc);
+    const site = await readPage(`${ORIGIN}/doc`, () => (window as any).__ttSmokeSite ?? "", "RAN");
+    check("onSite code runs in the page's world", site === "RAN", site);
     await deleteTweak(ext.send, "smoke doc");
     await editor.close();
 }

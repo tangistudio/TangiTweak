@@ -289,7 +289,8 @@ export function replacementBody(r: any, url: string, resourceType: string): Repl
  * both, `replacedBy` (`{ tweak, handler }`) when the response is a mock:
  * handlers get it as `ctx.replacedBy`. For `requestDecision`, `mockFlows`
  * `false` returns a mock without running the response handlers on it (a
- * strategy that serves it by redirect).
+ * strategy that serves it by redirect, or runs them itself), and `rawMock`
+ * keeps a `Uint8Array` mock body as bytes.
  *
  * @returns `null` when no handler changed anything. Otherwise, by op:
  * - `requestDecision`: the last decision: `{ kind: "respond", mime, content,
@@ -385,7 +386,7 @@ export async function runOp(scripts: OpScript[], op: BodyOp, args: any, env: OpE
                     const next: Decision = { who: { ...who, outcome }, h, result };
                     if (outcome === "replace") {
                         const r = result.replaceResponse;
-                        const { mime, content } = replacementBody(r, url, resourceType);
+                        const { mime, content }: { mime: string; content: string | Uint8Array } = r.body instanceof Uint8Array && args.rawMock ? { mime: replacementBody({ ...r, body: "" }, url, resourceType).mime, content: r.body } : replacementBody(r, url, resourceType);
                         next.result = { kind: "respond", mime, content, status: r.status, headers: r.headers?.set, scriptId: s.id, scriptName: s.name, who };
                         env.log(s.id, "info", `[${s.name}] onRequest → replaceResponse ${r.status || 200} ${mime} (${content.length}b) ${url}`);
                     } else if (outcome === "redirect") {
@@ -415,8 +416,12 @@ export async function runOp(scripts: OpScript[], op: BodyOp, args: any, env: OpE
                 env.log(s.id, "error", formatScriptError(s.name, e, "onRequest"));
             }
         }
-        if (decision?.result.kind === "respond" && args.mockFlows !== false) return flowMock(decision.result, routeLabel(decision.h.route));
-        if (decision) return decision.result;
+        if (decision?.result.kind === "respond") {
+            if (args.mockFlows !== false) return flowMock(decision.result, routeLabel(decision.h.route));
+            return { ...decision.result, replacedBy: { tweak: decision.result.scriptName, handler: routeLabel(decision.h.route) }, ...(stack.empty ? {} : { changes: stack.result() }) };
+        }
+        // an earlier handler's request header edits still apply to the redirected request (webRequest keeps its requestId)
+        if (decision) return stack.empty ? decision.result : { ...decision.result, changes: stack.result() };
         return stack.empty ? null : { kind: "headers", changes: stack.result() };
     }
 
@@ -430,7 +435,7 @@ export async function runOp(scripts: OpScript[], op: BodyOp, args: any, env: OpE
                 ranOnMock(s, h);
                 const result = await withPage(args.page, () => h.fn({ ...base(h), status: args.status, statusLine: args.statusLine || "", responseHeaders, ...(replacedBy ? { replacedBy } : {}) }), callTab);
                 if (hasHeaderMods(result?.headers)) {
-                    env.log(s.id, "info", `[${s.name}] onResponseHeaders → ${Object.keys(result.headers.set || {}).length} set, ${(result.headers.remove || []).length} removed ${url}`);
+                    env.log(s.id, "info", `[${s.name}] onResponseHeaders → ${[Object.keys(result.headers.set || {}).length ? `set ${Object.keys(result.headers.set).join(", ")}` : "", result.headers.remove?.length ? `remove ${result.headers.remove.join(", ")}` : ""].filter(Boolean).join("; ")} ${url}`);
                     stackHeaders(stack, result.headers, who, "response", url, env);
                     responseHeaders = editPairs(responseHeaders, result.headers);
                 } else observed(s, "onResponseHeaders");

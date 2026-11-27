@@ -44,57 +44,57 @@ const details = () => ({
 // ---------- stacking: multiple scripts, same hook ----------
 
 describe("handler stacking", () => {
-    it("onRequest: every script runs and the last redirect wins", () => {
+    it("onRequest: every script runs and the last redirect wins", async () => {
         const s = new ExtensionStrategy();
         s.reload([
             makeScript("first", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*", strategy: "extension" }, () => ({ redirect: "https://first.com" }));`),
             makeScript("second", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*", strategy: "extension" }, () => ({ redirect: "https://second.com" }));`),
         ]);
-        const d = s.handleBeforeRequest(details(), null) as any;
+        const d = await s.handleBeforeRequest(details(), null) as any;
         expect(d).toEqual({ kind: "redirect", url: "https://second.com" });
     });
 
-    it("onRequest: non-terminal results don't stop later scripts", () => {
+    it("onRequest: non-terminal results don't stop later scripts", async () => {
         const s = new ExtensionStrategy();
         s.reload([
             makeScript("logger", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*", strategy: "extension" }, () => { tweak.log("just logging"); });`),
             makeScript("redirector", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*", strategy: "extension" }, () => ({ redirect: "https://second.com" }));`),
         ]);
-        const d = s.handleBeforeRequest(details(), null) as any;
+        const d = await s.handleBeforeRequest(details(), null) as any;
         expect(d).toEqual({ kind: "redirect", url: "https://second.com" });
     });
 
-    it("onRequest: header changes from MULTIPLE scripts merge (later set wins, removes accumulate)", () => {
+    it("onRequest: header changes from MULTIPLE scripts merge (later set wins, removes accumulate)", async () => {
         const s = new ExtensionStrategy();
         s.reload([
             makeScript("a", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*", strategy: "extension" }, () => ({ headers: { set: { "x-a": "1", "x-b": "old" }, remove: ["x-r1"] } }));`),
             makeScript("b", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*", strategy: "extension" }, () => ({ headers: { set: { "x-b": "new", "x-c": "3" }, remove: ["x-r2"] } }));`),
         ]);
-        s.handleBeforeRequest(details(), null); // runs both, caches merged mods
-        const c = s.handleBeforeSendHeaders(details(), null) as any;
+        await s.handleBeforeRequest(details(), null); // runs both, caches merged mods
+        const c = await s.handleBeforeSendHeaders(details(), null) as any;
         expect(c.set).toEqual({ "x-a": "1", "x-b": "new", "x-c": "3" });
         expect(c.remove).toEqual(["x-r1", "x-r2"]);
     });
 
-    it("onRequest: headers from an earlier non-terminal script APPLY even when a later script redirects", () => {
+    it("onRequest: headers from an earlier non-terminal script APPLY even when a later script redirects", async () => {
         const s = new ExtensionStrategy();
         s.reload([
             makeScript("a", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*", strategy: "extension" }, () => ({ headers: { set: { "x-keep": "yes" } } }));`),
             makeScript("b", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*", strategy: "extension" }, () => ({ redirect: "https://win.com" }));`),
         ]);
-        const d = s.handleBeforeRequest(details(), null) as any;
+        const d = await s.handleBeforeRequest(details(), null) as any;
         expect(d.kind).toBe("redirect");
-        const c = s.handleBeforeSendHeaders(details(), null) as any;
+        const c = await s.handleBeforeSendHeaders(details(), null) as any;
         expect(c.set).toEqual({ "x-keep": "yes" });
     });
 
-    it("onResponseHeaders: multiple scripts MERGE — set overwritten by later, removes accumulate", () => {
+    it("onResponseHeaders: multiple scripts MERGE — set overwritten by later, removes accumulate", async () => {
         const s = new ExtensionStrategy();
         s.reload([
             makeScript("a", `import { tweak } from "tangitweak"; tweak.onResponseHeaders({ url: "*", strategy: "extension" }, () => ({ headers: { set: { "x-a": "1", "x-b": "old" }, remove: ["x-r1"] } }));`),
             makeScript("b", `import { tweak } from "tangitweak"; tweak.onResponseHeaders({ url: "*", strategy: "extension" }, () => ({ headers: { set: { "x-b": "new", "x-c": "3" }, remove: ["x-r2"] } }));`),
         ]);
-        const c = s.handleHeadersReceived(details(), null) as any;
+        const c = await s.handleHeadersReceived(details(), null) as any;
         expect(c.set).toEqual({ "x-a": "1", "x-b": "new", "x-c": "3" });
         expect(c.remove).toEqual(["x-r1", "x-r2"]);
     });

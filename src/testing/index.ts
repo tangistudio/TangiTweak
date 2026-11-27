@@ -493,9 +493,8 @@ export interface OpenPageOptions {
      */
     interceptFetch?: boolean;
     /**
-     * The page's Content-Security-Policy. On `"firefox"`, without `'unsafe-eval'` in `script-src` (or `default-src`),
-     * `onSite` handlers run in the isolated world instead (as in the
-     * extension) and a warning says so ({@link LoadedTweak.warnings}).
+     * The page's Content-Security-Policy. It doesn't change where handlers
+     * run: both browsers inject `onSite` code without `eval`.
      */
     csp?: string;
     /**
@@ -741,8 +740,7 @@ export interface LoadedTweak {
     /**
      * The problems shown as warnings: `rules` handler warnings, rules near
      * Chrome's limits, handlers the browser turns off (with
-     * {@link LoadTweakOptions.realLimits}) and page notices, such as a CSP
-     * that moved `onSite` to the isolated world.
+     * {@link LoadTweakOptions.realLimits}) and page notices.
      */
     readonly warnings: string[];
     /** Everything the tweak logged so far, in order. The array is live: it grows as the tweak logs. */
@@ -1744,13 +1742,6 @@ export async function loadTweak(source: TweakSource, options: LoadTweakOptions =
         const siteScope = pageScope(win, { label: "site" });
         const isoScope = windowScope(win, { label: "iso" });
         pageOpts.setup?.(win);
-        // Firefox injects onSite with eval: a page CSP without 'unsafe-eval' sends it to the isolated world (hook.ts)
-        const cspNoEval = browser !== "chrome" && pageOpts.csp !== undefined && !cspAllowsEval(pageOpts.csp);
-        if (cspNoEval && entryScripts.some((s) => (compiledMap.get(s.id)?.meta.routes || []).some((r) => r.kind === "onDocument" && pageWorld(r) === "page"))) {
-            const line = "page CSP blocks eval in the page world — running onSite handlers in the isolated world instead";
-            logSink(primaryScript.name, "info", "", line);
-            pageWarnings.add(line);
-        }
 
         // SiteStoreHost <-> SiteMirrors (async message hop matching window.postMessage)
         const mirrorListeners = new Set<(m: SiteDown) => void>();
@@ -1968,7 +1959,7 @@ export async function loadTweak(source: TweakSource, options: LoadTweakOptions =
                             },
                         });
                     const shim = makeSiteShim(undefined, undefined, true);
-                    inScope(cspNoEval ? isoScope : siteScope, () => {
+                    inScope(siteScope, () => {
                         const requireFrom = makeLibRequire(libs, (lib, req, mod) => scriptFunction(lib.src!, lib.name)(shim.host, consoleSite, wrapReq(req), mod, mod.exports), { builtin: siteBuiltin, onSite: true });
                         const mod = { exports: {} as any };
                         shim.top(() => scriptFunction(src, s.name)(shim.host, consoleSite, wrapReq(requireFrom(s.name)), mod, mod.exports));

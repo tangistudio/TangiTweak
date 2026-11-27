@@ -51,7 +51,7 @@ current version has no changelog section. The release notes are that section
 [install.md](install.md); install steps live there, not in the notes.
 
 Pushing a `vX.Y.Z` tag runs the GitHub Action (typecheck → tests → build →
-zips + signed `.crx` → helper binaries → GitHub release), so the artifacts
+Chrome zip + signed `.crx` → helper binaries → GitHub release), so the artifacts
 always match the tagged `manifest.json` version. The Firefox `.xpi` is signed
 by Mozilla (AMO) in a separate job, which can take a while: the release is
 published without it, and the `.xpi` is added to it when signing finishes (an
@@ -245,30 +245,33 @@ the frame's code, stores and `from: "page"` fetches go through the
 bridge's extension port (`src/background/engine/overlayLinks.ts`
 authorizes each script on it). Calls between the overlay, `onPage` and
 `onSite` code (handles) use `src/shared/rpc.ts`; a save re-runs handlers
-in place through `src/shared/runLifecycle.ts`. On Chrome the manifest lists
+in place through `src/shared/runLifecycle.ts`. The manifest lists
 `overlay.html` as a sandbox page, so it runs scripts without the extension
-CSP and has an opaque origin; Firefox has no manifest sandbox, so there it's
-a normal extension page that checks a one-time nonce with the background
-before it accepts a port. If something else removes a frame (another
+CSP and has an opaque origin. If something else removes a frame (another
 extension's debugger attach; the page can't reach the shadow root), the
 bridge logs a warning and closes that overlay, and doesn't start it again
 until its code hash changes or the page reloads.
 
 ## How the MV3 build works
 
-`npm run build` produces both bundles:
+`npm run build` produces both bundles, both Manifest V3:
 
-- **`dist-firefox/`** — the MV2 build for Firefox (the `.xpi`): its
-  manifest registers the page hook as a MAIN-world content script.
-  It's built with `__FIREFOX__`, which leaves out what Firefox lacks
-  (`chrome.debugger`, `webRequest.onActionIgnored`) so AMO's
-  linter doesn't flag it; the build fails if such a call gets back in. Check
-  it with `npx addons-linter dist-firefox`.
-- **`dist-mv3/`** — the Manifest V3 build (`manifest_version: 3`,
-  background service worker, `action`, `host_permissions`).
+- **`dist-mv3/`** — Chrome, Edge and Brave (the release's
+  `tangitweak-chrome-vX.Y.Z.zip`): a background service worker.
+- **`dist-firefox/`** — Firefox 154 or later (the `.xpi`). Firefox has no
+  background service worker, so `background.scripts` runs `background.js`
+  as an event page, and there's no `chrome.offscreen`: the event page hosts
+  the sandbox iframe itself (`src/background/compileHost.ts`). It keeps
+  blocking `webRequest` (`webRequestBlocking`, `webRequestFilterResponse`)
+  for the `extension` strategy, and `userScripts` can only be an optional
+  permission there. It's built with `__FIREFOX__`, which leaves out what
+  Firefox lacks (`chrome.debugger`, `chrome.offscreen`,
+  `webRequest.onActionIgnored`) so AMO's linter doesn't flag it; the build
+  fails if such a call gets back in. Check it with
+  `npx web-ext lint -s dist-firefox`.
 
-How MV3 differs (Chrome forbids `eval` in service workers and extension
-pages, and drops blocking `webRequest`):
+How MV3 differs (no `eval` in the background or extension pages, and no
+blocking `webRequest` on Chrome):
 
 - **User scripts compile and run in a sandbox page.** The manifest's
   `sandbox` key exempts `sandbox.html` from the extension CSP — it's the
@@ -279,7 +282,7 @@ pages, and drops blocking `webRequest`):
   channel.
 - **The `page` strategy carries page fetch/XHR interception** (patching in the
   page's MAIN world — same behavior, transforms execute in the sandbox).
-  The `extension` strategy is gone (no blocking webRequest in MV3).
+  The `extension` strategy is Firefox only (Chrome MV3 has no blocking webRequest).
 - **Browser-initiated loads (`<script src>`, `<img>`, stylesheets, fonts,
   main-frame HTML) go through the `debugger` strategy** for handlers whose
   strategy is `debugger` (or through the local helper with `helper`).
@@ -309,9 +312,7 @@ pages, and drops blocking `webRequest`):
   keep-alive ping (any extension API call resets the SW's ~30s idle
   timer) holds the worker open while a folder is connected, with a 30s
   `chrome.alarms` poll as the fallback if the worker is reaped anyway.
-- onPage runs in the isolated world (MV3: a `chrome.userScripts`
-  world); onSite runs in the MAIN world (MV2: when the page CSP allows,
-  isolated fallback otherwise).
+- onPage runs in a `userScripts` world; onSite runs in the MAIN world.
 - **No `eval` in content scripts (MV3).** The Chrome Web Store allows
   running code that isn't in the package only through `chrome.userScripts`
   and `chrome.debugger`, so `hook.js` and `bridge.js` are built with
@@ -324,10 +325,8 @@ pages, and drops blocking `webRequest`):
   while it was open, a page back from the back/forward cache) asks for it
   through its bridge, and the background runs it in that document
   (`userScripts.execute`, Chrome 135+). With user scripts off, onSite
-  code doesn't run. **`document_start` timing caveat:** in MV2 the
-  always-alive background answers the bundle in ~1ms, so onPage handlers
-  reliably beat the page's own scripts. In MV3 the service worker must
-  wake first — analyses are cached in `chrome.storage.session` (and
+  code doesn't run. **`document_start` timing caveat:** the service
+  worker (Firefox: the event page) must wake first — analyses are cached in `chrome.storage.session` (and
   refreshed on every script change), so the bundle is served from storage
   without waking the sandbox, but a cold SW still costs ~50-100ms; inline
   page scripts may run before an onPage handler does. Fetch/XHR

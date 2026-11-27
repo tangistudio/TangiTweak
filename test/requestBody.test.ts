@@ -223,7 +223,7 @@ describe("extension strategy: webRequest requestBody", () => {
         expect(requestBodyFromWebRequest(undefined)).toBeUndefined();
     });
 
-    it("onRequest sees it; onResponseHeaders gets it from onBeforeRequest; pruned after", () => {
+    it("onRequest sees it; onResponseHeaders gets it from onBeforeRequest; pruned after", async () => {
         const s = new ExtensionStrategy();
         s.reload([
             makeScript(
@@ -233,11 +233,11 @@ tweak.onResponseHeaders({ url: "*://x.test/*", strategy: "extension" }, (c) => (
             ),
         ]);
         const details = { url: "https://x.test/a", method: "POST", tabId: 1, type: "xmlhttprequest", requestId: "r1", requestHeaders: [], responseHeaders: [], statusCode: 200, statusLine: "HTTP/1.1 200 OK" };
-        const d: any = s.handleBeforeRequest({ ...details, requestBody: { raw: [{ bytes: enc('{"k":2}').buffer }] } }, null);
+        const d: any = await s.handleBeforeRequest({ ...details, requestBody: { raw: [{ bytes: enc('{"k":2}').buffer }] } }, null);
         expect(seen(d.url)).toEqual({ kind: "text", body: '{"k":2}', json: { k: 2 } });
-        expect((s.handleHeadersReceived(details, null) as any).set["x-req"]).toBe('{"k":2}');
+        expect((await s.handleHeadersReceived(details, null) as any).set["x-req"]).toBe('{"k":2}');
         s.pruneRequest("r1");
-        expect((s.handleHeadersReceived(details, null) as any).set["x-req"]).toBe("none");
+        expect((await s.handleHeadersReceived(details, null) as any).set["x-req"]).toBe("none");
     });
 });
 

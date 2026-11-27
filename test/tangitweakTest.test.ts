@@ -116,18 +116,11 @@ describe("browsers", () => {
     const onSite = { name: "c", code: src(`tweak.onSite("*://a.test/*", () => { document.body.dataset.ran = "1"; });`) };
     const CSP_LINE = "page CSP blocks eval in the page world";
 
-    it("a CSP without 'unsafe-eval' moves onSite to the isolated world on Firefox", async () => {
-        const t = await loadTweak(onSite, { browser: "firefox" });
+    it.each(["chrome", "firefox"] as const)("%s injects onSite without eval: the CSP doesn't matter", async (browser) => {
+        const t = await loadTweak(onSite, { browser });
         const page = await t.openPage("https://a.test/", { csp: "script-src 'self'" });
         await page.flush();
         expect(page.document.body.dataset.ran).toBe("1");
-        expect(t.warnings.join("\n")).toContain(CSP_LINE);
-        await t.dispose();
-    });
-
-    it("Chrome injects onSite without eval: the CSP doesn't matter", async () => {
-        const t = await loadTweak(onSite);
-        await t.openPage("https://a.test/", { csp: "script-src 'self'" });
         expect(t.warnings.join("\n")).not.toContain(CSP_LINE);
         await t.dispose();
     });

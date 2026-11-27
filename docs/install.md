@@ -5,16 +5,16 @@
 ## From a release (recommended)
 
 1. Grab a zip from [Releases](https://github.com/tangistudio/TangiTweak/releases) and unzip it:
-   `tangitweak-mv3-vX.Y.Z.zip` for Chrome / Edge / Brave.
+   `tangitweak-chrome-vX.Y.Z.zip` for Chrome / Edge / Brave.
    Firefox uses the `.xpi` instead — see [Firefox](#firefox).
 2. Open `chrome://extensions`.
 3. Enable **Developer mode** (top-right), click **Load unpacked**, and select the unzipped folder.
-4. Pin the 🧩 icon — the badge shows how many scripts are active on the current tab: a network handler matched one of its requests, or `onPage` code ran on it (a script saved while the page is open counts once its code runs there — an `onPage` script that only runs at `document_start` waits for the next load). The popup marks them with a green dot. The badge turns red when one of them has an error and amber for a warning; hover the icon for the list, and see **Problems** in the Editor. While a saved script is compiled and hot-reloaded, the icon fades and shows a spinner. An amber **!** means something needs fixing, explained when you hover the icon and in the popup, with a button to fix it: the tab was open before TangiTweak started (reload it), TangiTweak has no access to the site, or (Chrome MV3) user scripts are off, so `onPage` and `onSite` code don't run. That last one shows on every tab until the `userScripts` permission is granted and **Allow User Scripts** is on in TangiTweak's details (Developer mode before Chrome 138).
+4. Pin the 🧩 icon — the badge shows how many scripts are active on the current tab: a network handler matched one of its requests, or `onPage` code ran on it (a script saved while the page is open counts once its code runs there — an `onPage` script that only runs at `document_start` waits for the next load). The popup marks them with a green dot. The badge turns red when one of them has an error and amber for a warning; hover the icon for the list, and see **Problems** in the Editor. While a saved script is compiled and hot-reloaded, the icon fades and shows a spinner. An amber **!** means something needs fixing, explained when you hover the icon and in the popup, with a button to fix it: the tab was open before TangiTweak started (reload it), TangiTweak has no access to the site, or user scripts are off, so `onPage` and `onSite` code don't run. That last one shows on every tab until the `userScripts` permission is granted and, on Chrome, **Allow User Scripts** is on in TangiTweak's details (Developer mode before Chrome 138).
 
 ## Firefox
 
 Each release ships `tangitweak-firefox-vX.Y.Z.xpi` (add-on id
-`tangitweak@tangistudio`) for Firefox 140 or later (142 or later on Android). When the release was signed through AMO, drag the
+`tangitweak@tangistudio`) for Firefox 154 or later, on desktop and Android. When the release was signed through AMO, drag the
 file onto Firefox to install it. An unsigned `.xpi` (the release notes say
 which) installs permanently only on Developer Edition, Nightly or ESR with
 `xpinstall.signatures.required` set to `false` in `about:config`; on regular
@@ -28,7 +28,7 @@ unlisted (self-distributed) add-on.
 
 ## Signed `.crx`
 
-Each release also ships a signed `tangitweak-mv3-vX.Y.Z.crx`
+Each release also ships a signed `tangitweak-chrome-vX.Y.Z.crx`
 package with a fixed extension id (`jcoealmhehnajkglhfchcnjdpkhnkdei`). Chrome
 keeps a `.crx` from outside the Web Store enabled only when it's allowed by
 enterprise policy (`ExtensionInstallAllowlist` / `ExtensionInstallForcelist`,

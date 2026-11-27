@@ -81,86 +81,86 @@ const details = (over: Partial<any> = {}) => ({
 });
 
 describe("ExtensionStrategy", () => {
-    it("onRequest redirect", () => {
+    it("onRequest redirect", async () => {
         const s = new ExtensionStrategy();
         s.reload([
             makeScript("a", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*://api.example.com/*", strategy: "extension" }, (ctx) => ({ redirect: "https://mocked.example.com/data" }));`),
         ]);
-        const d = s.handleBeforeRequest(details(), "https://app.example.com/") as any;
+        const d = await s.handleBeforeRequest(details(), "https://app.example.com/") as any;
         expect(d).toEqual({ kind: "redirect", url: "https://mocked.example.com/data" });
     });
 
-    it("non-matching url → allow", () => {
+    it("non-matching url → allow", async () => {
         const s = new ExtensionStrategy();
         s.reload([
             makeScript("a", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*://other.com/*", strategy: "extension" }, () => ({ redirect: "https://x.com" }));`),
         ]);
-        expect((s.handleBeforeRequest(details(), null) as any).kind).toBe("allow");
+        expect((await s.handleBeforeRequest(details(), null) as any).kind).toBe("allow");
     });
 
-    it("disabled script does nothing", () => {
+    it("disabled script does nothing", async () => {
         const s = new ExtensionStrategy();
         s.reload([
             makeScript("a", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*", strategy: "extension" }, () => ({ block: true }));`, false),
         ]);
-        expect((s.handleBeforeRequest(details(), null) as any).kind).toBe("allow");
+        expect((await s.handleBeforeRequest(details(), null) as any).kind).toBe("allow");
     });
 
-    it("static onRequest replaceResponse is served in place: the request goes on", () => {
+    it("static onRequest replaceResponse is served in place: the request goes on", async () => {
         const s = new ExtensionStrategy();
         s.reload([
             makeScript("a", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*://api.example.com/v1/data", strategy: "extension" }, () => ({ replaceResponse: { body: { mocked: true } } }));`),
         ]);
-        expect((s.handleBeforeRequest(details(), null) as any).kind).toBe("allow");
+        expect((await s.handleBeforeRequest(details(), null) as any).kind).toBe("allow");
         s.pruneRequest("r1");
     });
 
-    it("onResponseHeaders modifies headers", () => {
+    it("onResponseHeaders modifies headers", async () => {
         const s = new ExtensionStrategy();
         s.reload([
             makeScript("a", `import { tweak } from "tangitweak"; tweak.onResponseHeaders({ url: "*://api.example.com/*", strategy: "extension" }, () => ({ headers: { set: { "access-control-allow-origin": "*" }, remove: ["x-frame-options"] } }));`),
         ]);
-        const changes = s.handleHeadersReceived(details(), null) as any;
+        const changes = await s.handleHeadersReceived(details(), null) as any;
         expect(changes).not.toBeNull();
         expect(changes!.set).toEqual({ "access-control-allow-origin": "*" });
         expect(changes!.remove).toEqual(["x-frame-options"]);
     });
 
-    it("request header modification via onRequest (run once, cached for header phase)", () => {
+    it("request header modification via onRequest (run once, cached for header phase)", async () => {
         const s = new ExtensionStrategy();
         const code = `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*://api.example.com/*", strategy: "extension" }, () => ({ headers: { set: { authorization: "Bearer x" } } }));`;
         s.reload([makeScript("a", code)]);
         // header phase alone does nothing (cache empty — onRequest hasn't run)
-        expect(s.handleBeforeSendHeaders(details(), null)).toBeNull();
+        expect(await s.handleBeforeSendHeaders(details(), null)).toBeNull();
         // request phase runs onRequest and caches the header mods
-        s.handleBeforeRequest(details(), null);
-        const changes = s.handleBeforeSendHeaders(details(), null) as any;
+        await s.handleBeforeRequest(details(), null);
+        const changes = await s.handleBeforeSendHeaders(details(), null) as any;
         expect(changes!.set).toEqual({ authorization: "Bearer x" });
     });
 
-    it("every onRequest runs: a later block overrules an earlier mock", () => {
+    it("every onRequest runs: a later block overrules an earlier mock", async () => {
         const s = new ExtensionStrategy();
         s.reload([
             makeScript("a", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*://api.example.com/*", strategy: "extension" }, () => ({ replaceResponse: { body: "mocked" } }));`),
             makeScript("b", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*://api.example.com/*", strategy: "extension" }, () => ({ block: true }));`),
         ]);
-        expect((s.handleBeforeRequest(details(), null) as any).kind).toBe("cancel");
+        expect((await s.handleBeforeRequest(details(), null) as any).kind).toBe("cancel");
     });
 
-    it("the later handler wins per header, and the override is a warning", () => {
+    it("the later handler wins per header, and the override is a warning", async () => {
         const s = new ExtensionStrategy();
         s.reload([
             named("a", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*://api.example.com/*", strategy: "extension" }, () => ({ headers: { set: { "X-Mode": "a" }, remove: ["cookie"] } }));`),
             named("b", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*://api.example.com/*", strategy: "extension" }, () => ({ headers: { remove: ["x-mode"], set: { Cookie: "b=1" } } }));`),
         ]);
-        s.handleBeforeRequest(details({ requestId: "hdr" }), null);
-        const changes = s.handleBeforeSendHeaders(details({ requestId: "hdr" }), null) as any;
+        await s.handleBeforeRequest(details({ requestId: "hdr" }), null);
+        const changes = await s.handleBeforeSendHeaders(details({ requestId: "hdr" }), null) as any;
         expect(changes).toEqual({ set: { Cookie: "b=1" }, remove: ["x-mode"] });
         const warns = allLogs().filter((e) => e.level === "warn" && e.message.includes("overrides request header"));
         expect(warns.map((e) => e.message.split(" from ")[0])).toEqual(expect.arrayContaining([`[b] onRequest #1 overrides request header "x-mode"`, `[b] onRequest #1 overrides request header "cookie"`]));
     });
 
-    it("a final result warns for each handler it kept from running (every onRequest still runs)", () => {
+    it("a final result warns for each handler it kept from running (every onRequest still runs)", async () => {
         const scripts = [
             named("a", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*://api.example.com/*", strategy: "extension" }, () => ({ block: true }));`),
             named("b", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*://api.example.com/*", strategy: "extension" }, () => ({ headers: { set: { x: "1" } } })); tweak.onResponseHeaders({ url: "*://api.example.com/*", strategy: "extension" }, () => null);`),
@@ -168,28 +168,28 @@ describe("ExtensionStrategy", () => {
         setSkipRoutes(scripts);
         const s = new ExtensionStrategy();
         s.reload(scripts);
-        expect((s.handleBeforeRequest(details({ url: "https://api.example.com/skip" }), null) as any).kind).toBe("cancel");
+        expect((await s.handleBeforeRequest(details({ url: "https://api.example.com/skip" }), null) as any).kind).toBe("cancel");
         const lines = allLogs().filter((e) => e.message.includes("→ skipped: ") && e.message.endsWith("https://api.example.com/skip")).map((e) => e.message);
         expect(lines).toHaveLength(1);
         expect(lines[0]).toMatch(/^\[b\] onResponseHeaders #1 → skipped: \[a\] onRequest #1 → block took priority \(the request ended there\)/);
         setSkipRoutes([]);
     });
 
-    it("script throwing does not break the pipeline", () => {
+    it("script throwing does not break the pipeline", async () => {
         const s = new ExtensionStrategy();
         s.reload([
             makeScript("a", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*", strategy: "extension" }, () => { throw new Error("boom"); });`),
         ]);
-        expect((s.handleBeforeRequest(details(), null) as any).kind).toBe("allow");
+        expect((await s.handleBeforeRequest(details(), null) as any).kind).toBe("allow");
     });
 });
 
 describe("PageStrategy (hook tier)", () => {
-    it("owns only hook routes and never asks for the debugger itself", () => {
+    it("owns only hook routes and never asks for the debugger itself", async () => {
         const s = new PageStrategy();
         s.reload([makeScript("a", `import { tweak } from "tangitweak"; tweak.onResponseBody({ url: "*", strategy: "page" }, (ctx, body) => body);`)]);
         expect(s.hasOwners()).toBe(true);
-        expect((s.handleBeforeRequest(details({ type: "script" }), null) as any).kind).toBe("allow");
+        expect((await s.handleBeforeRequest(details({ type: "script" }), null) as any).kind).toBe("allow");
         s.reload([makeScript("a", `import { tweak } from "tangitweak"; tweak.onResponseBody({ url: "*", strategy: "debugger" }, (ctx, body) => body);`)]);
         expect(s.hasOwners()).toBe(false);
     });

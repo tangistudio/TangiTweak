@@ -111,9 +111,9 @@ onResponseBody #1: onResponseBody never runs with strategy "extension" on Chromi
 
 Cases warned about as soon as scripts load:
 
-- the strategy doesn't exist in this build — `extension` on Chrome MV3,
+- the strategy doesn't exist in this build — `extension` on Chrome,
   `helper` or `debugger` on Firefox, `rules` in a browser without
-  `declarativeNetRequest` (Firefox before 113);
+  `declarativeNetRequest`;
 - `onResponseBody` on `extension` on Chromium (its webRequest can't read bodies);
 - `onResponseHeaders` on `page` (the page can't change response headers
   before the browser enforces them);
@@ -177,7 +177,7 @@ tweak.onResponseHeaders({ url: "https://example.com/*", strategy: "rules" }, () 
     headers: { remove: ["content-security-policy"] },
 }));
 // rules where the browser has them, the per-request extension strategy elsewhere
-tweak.onRequest({ url: "*://tracker.example.com/*", strategy: tweak.isMV3 ? "rules" : "extension" }, () => ({ block: true }));
+tweak.onRequest({ url: "*://tracker.example.com/*", strategy: tweak.isChrome ? "rules" : "extension" }, () => ({ block: true }));
 ```
 
 ### Captures in a redirect
@@ -377,8 +377,8 @@ strategy picker disables the ones the current browser can't use.
 
 | | `helper` (local helper) | `page` (page fetch/XHR) | `extension` (blocking webRequest) | `debugger` (chrome.debugger) | `rules` (browser-native rules) | page code (`tweak.onSite`, `tweak.onPage`, `tweak.onOverlay`) |
 |---|---|---|---|---|---|---|
-| **Chrome / Edge / Brave / Vivaldi, current** — `dist-mv3/` | ✅ no banner | ✅ | ❌ | ✅ banner shown | ✅ | ✅ (`tweak.onPage`, `tweak.onSite` and `onOverlay({ debuggerSafe: true })` need [user scripts](scripting.md#user-scripts-on-chrome); `tweak.onOverlay` and `tweak.site` don't) |
-| **Firefox** — `dist-firefox/` | ❌ (not needed: `extension` reaches everything) | ✅ | ✅ no banner | ❌ | ✅ 113+ | ✅ |
+| **Chrome / Edge / Brave / Vivaldi, current** — `dist-mv3/` | ✅ no banner | ✅ | ❌ | ✅ banner shown | ✅ | ✅ (`tweak.onPage`, `tweak.onSite` and `onOverlay({ debuggerSafe: true })` need [user scripts](scripting.md#user-scripts); `tweak.onOverlay` and `tweak.site` don't) |
+| **Firefox** — `dist-firefox/` | ❌ (not needed: `extension` reaches everything) | ✅ | ✅ no banner | ❌ | ✅ | ✅ (`tweak.onPage`, `tweak.onSite` and `onOverlay({ debuggerSafe: true })` need the [user scripts](scripting.md#user-scripts) permission) |
 
 What reaches what on Chrome:
 

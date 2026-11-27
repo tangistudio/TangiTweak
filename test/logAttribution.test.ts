@@ -93,10 +93,10 @@ const RESPOND_500 = `import { tweak } from "tangitweak"; tweak.onRequest({ url: 
 });`;
 
 describe("extension strategy: log lines use the stored script name", () => {
-    it("sync respond with non-200 status → not served + named warning", () => {
+    it("sync respond with non-200 status → not served + named warning", async () => {
         const s = new ExtensionStrategy();
         s.reload([storedScript("a", "API mocker", RESPOND_500)]);
-        const d = s.handleBeforeRequest(details(), null) as any;
+        const d = await s.handleBeforeRequest(details(), null) as any;
         expect(d.kind).toBe("allow");
         const line = entries.find((e) => e.message.includes("replaceResponse 500"));
         expect(line, "a respond-500 log line must exist").toBeTruthy();
@@ -104,10 +104,10 @@ describe("extension strategy: log lines use the stored script name", () => {
         expect(entries.some((e) => e.message.includes("[Untitled script]"))).toBe(false);
     });
 
-    it("sync respond 200 → served in place + named serve log", () => {
+    it("sync respond 200 → served in place + named serve log", async () => {
         const s = new ExtensionStrategy();
         s.reload([storedScript("a", "API mocker", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*", strategy: "extension" }, () => ({ replaceResponse: { body: "ok", mime: "text/plain" } }));`)]);
-        const d = s.handleBeforeRequest(details(), null) as any;
+        const d = await s.handleBeforeRequest(details(), null) as any;
         expect(d.kind).toBe("allow"); // served in place, at the response
         s.pruneRequest(details().requestId);
         const line = entries.find((e) => e.message.includes("replaceResponse 200"));
@@ -115,19 +115,19 @@ describe("extension strategy: log lines use the stored script name", () => {
         expect(line!.message).toContain("[API mocker]");
     });
 
-    it("redirect/cancel log uses the stored name", () => {
+    it("redirect/cancel log uses the stored name", async () => {
         const s = new ExtensionStrategy();
         s.reload([storedScript("a", "API mocker", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*", strategy: "extension" }, () => ({ redirect: "https://mocked.example.com/x" }));`)]);
-        s.handleBeforeRequest(details(), null);
+        await s.handleBeforeRequest(details(), null);
         const line = entries.find((e) => e.message.includes("onRequest →"));
         expect(line, "a redirect log line must exist").toBeTruthy();
         expect(line!.message).toContain("[API mocker]");
     });
 
-    it("a mock's log uses the stored name", () => {
+    it("a mock's log uses the stored name", async () => {
         const s = new ExtensionStrategy();
         s.reload([storedScript("a", "API mocker", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*", strategy: "extension" }, () => ({ replaceResponse: { body: { mocked: true } } }));`)]);
-        const d = s.handleBeforeRequest(details(), null) as any;
+        const d = await s.handleBeforeRequest(details(), null) as any;
         expect(d.kind).toBe("allow"); // served in place, at the response
         s.pruneRequest(details().requestId);
         const line = entries.find((e) => e.message.includes("onRequest → replaceResponse"));
@@ -136,25 +136,25 @@ describe("extension strategy: log lines use the stored script name", () => {
     });
 
 
-    it("no-match (handler returns undefined) logs only a DEBUG 'observed (no change)' line", () => {
+    it("no-match (handler returns undefined) logs only a DEBUG 'observed (no change)' line", async () => {
         const s = new ExtensionStrategy();
         s.reload([storedScript("a", "API mocker", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*", strategy: "extension" }, () => undefined);`)]);
-        const d = s.handleBeforeRequest(details(), null) as any;
+        const d = await s.handleBeforeRequest(details(), null) as any;
         expect(d.kind).toBe("allow");
         const lines = entries.filter((e) => e.message.includes("onRequest →"));
         expect(lines.map((e) => [e.level, e.kind, e.scriptId])).toEqual([["debug", "observed", "a"]]);
         expect(lines[0].message).toMatch(/^\[API mocker\] onRequest → observed \(no change\) https:\/\//);
     });
 
-    it("onRequest → null and no-op onResponseHeaders are observed; header changes stay INFO", () => {
+    it("onRequest → null and no-op onResponseHeaders are observed; header changes stay INFO", async () => {
         const s = new ExtensionStrategy();
         s.reload([
             storedScript("a", "Looker", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*", strategy: "extension" }, () => null);
 tweak.onResponseHeaders({ url: "*", strategy: "extension" }, () => undefined);`),
             storedScript("b", "Hdr", `import { tweak } from "tangitweak"; tweak.onResponseHeaders({ url: "*", strategy: "extension" }, () => ({ headers: { set: { "x-a": "1" } } }));`),
         ]);
-        s.handleBeforeRequest(details(), null);
-        s.handleHeadersReceived(details(), null);
+        await s.handleBeforeRequest(details(), null);
+        await s.handleHeadersReceived(details(), null);
         expect(entries.filter((e) => e.scriptId).map((e) => [e.level, e.message.replace(/ https:.*/, "")])).toEqual([
             ["debug", "[Looker] onRequest → observed (no change)"],
             ["debug", "[Looker] onResponseHeaders → observed (no change)"],
@@ -187,10 +187,10 @@ describe("CDP tier: request-stage respond fulfillment", () => {
         expect(entries.filter((e) => e.scriptId === "a")).toHaveLength(1);
     });
 
-    it("a cdp route is never run by the extension strategy", () => {
+    it("a cdp route is never run by the extension strategy", async () => {
         const w = new ExtensionStrategy();
         w.reload([storedScript("a", "API mocker", CDP_500)]);
-        expect((w.handleBeforeRequest(details(), null) as any).kind).toBe("allow");
+        expect((await w.handleBeforeRequest(details(), null) as any).kind).toBe("allow");
         expect(entries.filter((e) => e.scriptId === "a")).toEqual([]);
     });
 
@@ -213,7 +213,7 @@ describe("CDP tier: request-stage respond fulfillment", () => {
         const c = new DebuggerStrategy();
         w.reload([storedScript("a", "Page mock", code)]);
         c.reload([storedScript("a", "Page mock", code)]);
-        expect((w.handleBeforeRequest(details({ type: "main_frame" }), null) as any).kind).toBe("allow");
+        expect((await w.handleBeforeRequest(details({ type: "main_frame" }), null) as any).kind).toBe("allow");
         expect(entries.filter((e) => e.scriptId === "a")).toEqual([]);
         await c.handlePaused("tab:1", paused({ resourceType: "Document" }));
         const fulfill = debuggerCalls.find((x) => x.command === "Fetch.fulfillRequest");
@@ -297,10 +297,10 @@ describe("per-script TypeScript error tracking", () => {
 });
 
 describe("extension strategy: other strategies' routes", () => {
-    it("a route on another strategy is left alone", () => {
+    it("a route on another strategy is left alone", async () => {
         const s = new ExtensionStrategy();
         s.reload([storedScript("a", "Cdp api", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*", strategy: "debugger" }, () => ({ replaceResponse: { body: "<h1>x</h1>" } }));`)]);
-        expect((s.handleBeforeRequest(details(), null) as any).kind).toBe("allow");
+        expect((await s.handleBeforeRequest(details(), null) as any).kind).toBe("allow");
         expect(entries.filter((e) => e.scriptId === "a")).toEqual([]);
     });
 });

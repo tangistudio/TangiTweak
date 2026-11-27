@@ -1,10 +1,10 @@
 /**
  * Build: bundles TS entries with Rolldown, copies static assets.
  *
- * Two targets:
- *   dist-mv3/            Chrome MV3 (service worker, sandbox-based compile,
- *                        webRequest tier disabled at runtime)
- *   dist-firefox/        the MV2 build for Firefox (the .xpi), built with
+ * Two targets, both Manifest V3 with the sandbox-based compile:
+ *   dist-mv3/            Chrome (service worker and an offscreen document)
+ *   dist-firefox/        Firefox, the .xpi (event page that frames the
+ *                        sandbox host, blocking webRequest), built with
  *                        __FIREFOX__ so Chromium-only APIs are left out
  *
  * Both manifests are derived from manifest.json at build time.
@@ -31,8 +31,8 @@ function gitCommit() {
 const WATCH = process.argv.includes("--watch");
 
 /**
- * `firefox`: the MV2 build for Firefox, where `__FIREFOX__` drops what Firefox
- * lacks (chrome.debugger, webRequest.onActionIgnored) so AMO's linter doesn't flag it
+ * `firefox`: the Firefox build, where `__FIREFOX__` drops what Firefox lacks
+ * (chrome.debugger, chrome.offscreen, webRequest.onActionIgnored) so AMO's linter doesn't flag it
  * @type {import('rolldown').InputOptions[]}
  */
 function entriesFor(dist, mv3, firefox = false) {
@@ -115,14 +115,34 @@ function entriesFor(dist, mv3, firefox = false) {
  */
 const HOOK_MAIN = { matches: ["*://*/*"], js: ["hook.js"], all_frames: true, match_about_blank: true, match_origin_as_fallback: true, run_at: "document_start", world: "MAIN" };
 
-/** manifest.json → Firefox manifest object */
+/**
+ * The sandbox pages' CSP in Firefox, which (unlike Chrome) doesn't let them
+ * eval by default: they compile and run scripts
+ */
+const FIREFOX_SANDBOX_CSP = "sandbox allow-scripts allow-forms allow-popups allow-modals; script-src 'self' 'unsafe-inline' 'unsafe-eval'; child-src 'self';";
+
+/**
+ * manifest.json → Firefox manifest object: the MV3 one, where
+ * - the background is an event page (Firefox has no background service
+ *   worker) that frames offscreen.html itself (no chrome.offscreen)
+ * - blocking webRequest stays, for the extension strategy
+ * - chrome.debugger and version_name don't exist (the xpi is named after the release tag instead)
+ * - the manifest sandbox needs Firefox 154
+ */
 function firefoxManifest(mv2) {
-    // Firefox has no manifest sandbox: overlay.html is a normal extension page there (overlayRuntime.ts checks its nonce with the background)
-    // and no version_name (the xpi is named after the release tag instead)
-    const { sandbox: _sandbox, version_name: _versionName, ...rest } = mv2;
-    // nor chrome.debugger (the debugger strategy is Chromium only)
-    const permissions = mv2.permissions.filter((p) => p !== "debugger");
-    return { ...rest, permissions, content_scripts: [HOOK_MAIN, ...mv2.content_scripts] };
+    const { version_name: _versionName, minimum_chrome_version: _minChrome, background: _background, ...mv3 } = mv3Manifest(mv2);
+    const permissions = mv3.permissions.filter((p) => p !== "debugger" && p !== "offscreen").concat("webRequestBlocking", "webRequestFilterResponse");
+    return {
+        ...mv3,
+        background: { scripts: ["background.js"] },
+        permissions,
+        content_security_policy: { sandbox: FIREFOX_SANDBOX_CSP },
+        browser_specific_settings: {
+            ...mv2.browser_specific_settings,
+            gecko: { ...mv2.browser_specific_settings.gecko, strict_min_version: "154.0" },
+            gecko_android: { ...mv2.browser_specific_settings.gecko_android, strict_min_version: "154.0" },
+        },
+    };
 }
 
 /** manifest.json → MV3 manifest object */
@@ -320,16 +340,10 @@ async function copyStatic(dist, mv3, firefox = false) {
 
     // storeIcon.png is for the store listing only — no manifest references it
     await cp(path.join(root, "icons"), path.join(dist, "icons"), { recursive: true, filter: (src) => path.basename(src) !== "storeIcon.png" });
-    if (mv3) {
-        const mv2 = JSON.parse(await readFile(path.join(root, "manifest.json"), "utf8"));
-        await writeFile(path.join(dist, "manifest.json"), JSON.stringify(mv3Manifest(mv2), null, 4) + "\n");
-        await copyFile(path.join(root, "src/background/offscreen.html"), path.join(dist, "offscreen.html"));
-        await copyFile(path.join(root, "src/background/sandbox.html"), path.join(dist, "sandbox.html"));
-    } else {
-        const mv2 = JSON.parse(await readFile(path.join(root, "manifest.json"), "utf8"));
-        await writeFile(path.join(dist, "manifest.json"), JSON.stringify(firefoxManifest(mv2), null, 4) + "\n");
-        await copyFile(path.join(root, "src/background/background.html"), path.join(dist, "background.html"));
-    }
+    const mv2 = JSON.parse(await readFile(path.join(root, "manifest.json"), "utf8"));
+    await writeFile(path.join(dist, "manifest.json"), JSON.stringify(firefox ? firefoxManifest(mv2) : mv3Manifest(mv2), null, 4) + "\n");
+    await copyFile(path.join(root, "src/background/offscreen.html"), path.join(dist, "offscreen.html"));
+    await copyFile(path.join(root, "src/background/sandbox.html"), path.join(dist, "sandbox.html"));
     await copyFile(path.join(root, "src/ui/editor.html"), path.join(dist, "editor.html"));
     await copyFile(path.join(root, "src/overlay/overlay.html"), path.join(dist, "overlay.html"));
     await copyFile(path.join(root, "src/ui/ui.css"), path.join(dist, "ui.css"));
@@ -533,7 +547,7 @@ async function getSdkJson() {
 }
 
 /** Firefox lacks these: AMO's linter flags each call (UNSUPPORTED_API), so `__FIREFOX__` must leave them out */
-const CHROMIUM_ONLY_CALL = /\bchrome\.debugger\.\w|\bonActionIgnored\??\.addListener|\bonUserScriptConnect\??\.addListener/;
+const CHROMIUM_ONLY_CALL = /\bchrome\.debugger\.\w|\bonActionIgnored\??\.addListener|\bchrome\.offscreen\b|\.offscreen\.(createDocument|closeDocument)/;
 
 async function checkFirefoxBuild(dir) {
     const bad = [];
@@ -550,10 +564,9 @@ async function buildAll() {
     const firefox = path.join(root, "dist-firefox");
     await rm(firefox, { recursive: true, force: true });
     await mkdir(firefox, { recursive: true });
-    await buildOnce(firefox, false, true);
+    await buildOnce(firefox, true, true);
     await checkFirefoxBuild(firefox);
 
-    // MV3: service worker + sandbox compile host
     await rm(path.join(root, "dist-mv3"), { recursive: true, force: true });
     await mkdir(path.join(root, "dist-mv3"), { recursive: true });
     await buildOnce(path.join(root, "dist-mv3"), true);

@@ -124,13 +124,18 @@ async function sandboxCallSafe(payload: any): Promise<any | null> {
     }
 }
 
+/** Firefox: no chrome.offscreen, so the event page frames the sandbox host itself */
+const HOST_FRAME_ID = "tt-sandbox-host";
+
 async function closeOffscreen(): Promise<void> {
-    await new Promise<void>((resolve) => {
-        (chrome as any).offscreen.closeDocument(() => {
-            void chrome.runtime.lastError;
-            resolve();
+    if (__FIREFOX__) document.getElementById(HOST_FRAME_ID)?.remove();
+    else
+        await new Promise<void>((resolve) => {
+            (chrome as any).offscreen.closeDocument(() => {
+                void chrome.runtime.lastError;
+                resolve();
+            });
         });
-    });
 }
 
 let readyPromise: Promise<void> | null = null;
@@ -140,11 +145,19 @@ async function ensureOffscreen(force = false): Promise<void> {
     const runtime = chrome.runtime as any;
     if (!force && readyPromise) return readyPromise;
     readyPromise = (async () => {
-        if (!force && runtime.getContexts) {
+        if (__FIREFOX__) {
+            if (force || !document.getElementById(HOST_FRAME_ID)) {
+                document.getElementById(HOST_FRAME_ID)?.remove();
+                const frame = document.createElement("iframe");
+                frame.id = HOST_FRAME_ID;
+                frame.src = "offscreen.html";
+                document.body.appendChild(frame);
+            }
+        } else if (!force && runtime.getContexts) {
             const ctx = await runtime.getContexts({ contextTypes: ["OFFSCREEN_DOCUMENT"] });
             if (ctx && ctx.length) return;
         }
-        await new Promise<void>((resolve) => {
+        if (!__FIREFOX__) await new Promise<void>((resolve) => {
             (chrome as any).offscreen.createDocument(
                 {
                     url: "offscreen.html",

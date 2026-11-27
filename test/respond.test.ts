@@ -37,13 +37,13 @@ const details = () => ({
 });
 
 describe("onRequest respond", () => {
-    it("every onRequest runs: a later decision overrules an earlier mock", () => {
+    it("every onRequest runs: a later decision overrules an earlier mock", async () => {
         const s = new ExtensionStrategy();
         s.reload([
             makeScript("a", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*", strategy: "extension" }, () => ({ replaceResponse: { body: "first" } }));`),
             makeScript("b", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*", strategy: "extension" }, () => ({ redirect: "https://second.com" }));`),
         ]);
-        const d = s.handleBeforeRequest(details(), null) as any;
+        const d = await s.handleBeforeRequest(details(), null) as any;
         expect(d.kind).toBe("redirect");
         expect(d.url).toBe("https://second.com");
     });
@@ -76,11 +76,11 @@ describe("onRequest respond", () => {
         expect((await s2.runRequestDecision("https://x.com/", "GET"))!.kind).toBe("cancel");
     });
 
-    it("extension strategy: a result is one thing — replaceResponse + headers drops the headers (like every strategy)", () => {
+    it("extension strategy: a result is one thing — replaceResponse + headers drops the headers (like every strategy)", async () => {
         const s = new ExtensionStrategy();
         s.reload([makeScript("a", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*", strategy: "extension" }, () => ({ replaceResponse: { body: "x" }, headers: { set: { "x-m": "1" } } }));`)]);
-        s.handleBeforeRequest(details(), null);
-        expect(s.handleBeforeSendHeaders(details(), null)).toBeNull();
+        await s.handleBeforeRequest(details(), null);
+        expect(await s.handleBeforeSendHeaders(details(), null)).toBeNull();
     });
 });
 

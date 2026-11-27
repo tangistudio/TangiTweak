@@ -108,9 +108,14 @@ async function launchFirefox(): Promise<ExtBrowser> {
     await browser.installExtension(dist);
     return common(browser, "firefox", `moz-extension://${FIREFOX_UUID}`, "extension", {
         async grantUserScripts(editor) {
-            // MV2: page code needs no permission. MV3: the Editor's banner asks for it
-            const banner = await editor.waitForSelector("#userscripts-grant", { timeout: 3000 }).catch(() => null);
-            await banner?.click();
+            // the Editor's banner asks for the optional permission (granted at once by the pref above)
+            await (await editor.waitForSelector("#userscripts-grant", { timeout: 10000 }))!.click();
+            for (let i = 0; i < 50; i++) {
+                const r: any = await editor.evaluate(() => new Promise((res) => chrome.runtime.sendMessage({ type: "userScriptsStatus" }, res)));
+                if (r?.status === "ok") return;
+                await new Promise((r) => setTimeout(r, 200));
+            }
+            throw new Error("user scripts didn't turn on");
         },
     });
 }

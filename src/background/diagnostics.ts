@@ -102,7 +102,7 @@ async function environment(): Promise<Record<string, unknown>> {
         if (info) env.browserInfo = info;
     } catch {}
     env.apis = {
-        webRequestBlocking: !__MV3__ && !!chrome.webRequest?.onBeforeRequest,
+        webRequestBlocking: (!__MV3__ || __FIREFOX__) && !!chrome.webRequest?.onBeforeRequest,
         onActionIgnored: !__FIREFOX__ && !!(chrome.webRequest as any)?.onActionIgnored,
         debugger: !__FIREFOX__ && !!chrome.debugger,
         proxy: !!chrome.proxy,

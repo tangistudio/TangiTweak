@@ -23,7 +23,7 @@ import { substitute, type RuleSpec } from "../shared/dnrRules";
 import type { Routed } from "../shared/compile";
 import { NET_KINDS } from "../shared/route";
 
-/** The browser a test pretends to be: Chrome (MV3) or Firefox. */
+/** The browser a test pretends to be: Chrome or Firefox (both Manifest V3). */
 export type BrowserName = "chrome" | "firefox";
 
 /** What each {@link BrowserName} is, in the terms `routeProblem` checks a route against. */
@@ -32,12 +32,12 @@ export const BROWSER_ENV: Record<
     {
         /** Whether the browser is Firefox. */
         firefox: boolean;
-        /** Whether the extension runs as Manifest V3 (only `"chrome"`). */
+        /** Whether the extension runs as Manifest V3 (both do). */
         mv3: boolean;
     }
 > = {
     chrome: { firefox: false, mv3: true },
-    firefox: { firefox: true, mv3: false },
+    firefox: { firefox: true, mv3: true },
 };
 
 /** A handler that didn't run for a request and why. */

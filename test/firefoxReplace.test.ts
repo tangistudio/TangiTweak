@@ -84,7 +84,7 @@ describe("Firefox extension strategy: in-place replacement", () => {
     it("a sync mock on a page load: no redirect, body swapped, headers fixed", async () => {
         const s = await load();
         s.reload([makeScript("a", "Page swap", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*", strategy: "extension" }, () => ({ replaceResponse: { body: "<h1>NEW</h1>" } }));`)]);
-        expect((s.handleBeforeRequest(page(), null) as any).kind).toBe("allow");
+        expect((await s.handleBeforeRequest(page(), null) as any).kind).toBe("allow");
         expect(filters.size).toBe(0); // wired when the response headers arrive
         const h = (await s.handleHeadersReceived(page(), null)) as any;
         expect(h.set["Content-Type"]).toBe("text/html; charset=utf-8");
@@ -112,7 +112,7 @@ describe("Firefox extension strategy: in-place replacement", () => {
     it("respond 200 in place; a redirect hop keeps the replacement for the final response", async () => {
         const s = await load();
         s.reload([makeScript("a", "Mock", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*", strategy: "extension" }, () => ({ replaceResponse: { body: { m: true } } }));`)]);
-        expect((s.handleBeforeRequest(page(), null) as any).kind).toBe("allow");
+        expect((await s.handleBeforeRequest(page(), null) as any).kind).toBe("allow");
         await s.handleHeadersReceived(page({ statusCode: 302, responseHeaders: [{ name: "Location", value: "/other" }] }), null);
         expect(filters.size).toBe(0);
         const h = (await s.handleHeadersReceived(page(), null)) as any;
@@ -126,7 +126,7 @@ describe("Firefox extension strategy: in-place replacement", () => {
     it("respond with a non-200 status isn't served (no status control) and says so", async () => {
         const s = await load();
         s.reload([makeScript("a", "Mock", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*", strategy: "extension" }, () => ({ replaceResponse: { status: 404, body: "no" } }));`)]);
-        expect((s.handleBeforeRequest(page(), null) as any).kind).toBe("allow");
+        expect((await s.handleBeforeRequest(page(), null) as any).kind).toBe("allow");
         await s.handleHeadersReceived(page(), null);
         expect(filters.size).toBe(0);
         expect(entries.find((e) => e.scriptId === "a" && e.level === "warn")?.message).toContain("replaceResponse 404 not served");
@@ -135,7 +135,7 @@ describe("Firefox extension strategy: in-place replacement", () => {
     it("a pruned request leaves nothing behind", async () => {
         const s = await load();
         s.reload([makeScript("a", "Page swap", `import { tweak } from "tangitweak"; tweak.onRequest({ url: "*", strategy: "extension" }, () => ({ replaceResponse: { body: "x" } }));`)]);
-        s.handleBeforeRequest(page(), null);
+        await s.handleBeforeRequest(page(), null);
         s.pruneRequest("f1");
         await s.handleHeadersReceived(page(), null);
         expect(filters.size).toBe(0);
@@ -149,7 +149,7 @@ describe("Firefox extension strategy: in-place replacement", () => {
 tweak.onResponseBody({ url: "*", strategy: "extension" }, (c, body) => body + " via " + c.replacedBy.tweak + " " + c.replacedBy.handler);`),
         ]);
         const api = page({ type: "xmlhttprequest", url: "https://site.example/api" });
-        s.handleBeforeRequest(api, null);
+        await s.handleBeforeRequest(api, null);
         const h = (await s.handleHeadersReceived(api, null)) as any;
         expect(h.set["x-by"]).toBe("Mock");
         const f = filters.get("f1")!;

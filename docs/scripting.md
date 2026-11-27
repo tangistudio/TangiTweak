@@ -158,15 +158,15 @@ tweak.onResponseBody(
   `"rules"`. There is no default — a route without one (or a bare URL
   pattern) makes the script fail to load. There is no fallback: when the strategy
   isn't available, the handler doesn't run and the Log view says why.
-  To pick per browser or build, use `tweak.isChrome`, `tweak.isFirefox`,
-  `tweak.isMV2` and `tweak.isMV3` (Chromium-based browsers count as Chrome);
+  To pick per browser, use `tweak.isChrome` and `tweak.isFirefox`
+  (Chromium-based browsers count as Chrome);
   per OS, `tweak.isMac`, `tweak.isWindows` and
   `tweak.isLinux`:
 
   ```ts
   tweak.onResponseBody({ url: "*://example.com/app.js", strategy: tweak.isFirefox ? "extension" : "helper" }, (ctx, body) => body.replace("DEBUG=false", "DEBUG=true"));
-  tweak.onRequest({ url: "*://api.example.com/*", strategy: tweak.isMV3 ? "debugger" : "extension" }, fn);
-  tweak.onRequest({ url: "*://ads.example.com/*", strategy: tweak.isMV3 ? "rules" : "extension" }, () => ({ block: true }));
+  tweak.onRequest({ url: "*://api.example.com/*", strategy: tweak.isFirefox ? "extension" : "debugger" }, fn);
+  tweak.onRequest({ url: "*://ads.example.com/*", strategy: tweak.isFirefox ? "extension" : "rules" }, () => ({ block: true }));
   ```
 
   On `rules` the handler runs once when scripts load and its fixed result
@@ -1049,10 +1049,9 @@ so one handler can add an early listener and a late mount.
 
 - **Already past that moment?** (slow bundle, bfcache restore) The
   handler runs immediately.
-- **`document_start` race:** in the Firefox build the bundle arrives in ~1ms
-  and reliably beats page scripts. In the Chrome build a cold service
-  worker can take ~50-100ms, so early inline `<script>`s may already
-  have run. When page code *must* see your change, rewrite the response
+- **`document_start` race:** a sleeping background (Chrome's service
+  worker, Firefox's event page) can take ~50-100ms to wake, so early
+  inline `<script>`s may already have run. When page code *must* see your change, rewrite the response
   with `onResponseBody` instead.
 - **`document_idle` always waits for the page's `load` event**, unlike
   Chrome's content-script `run_at: "document_idle"` (which can fire
@@ -1164,17 +1163,15 @@ tweak.onPage("*://app.example.com/*", (ctx) => {
 });
 ```
 
-#### User scripts on Chrome
+#### User scripts
 
-Firefox runs `onPage` code in the extension's
-content-script world and `onSite` code in the site's. The Chrome (MV3)
-build runs both through Chrome's user scripts API, which is off until you
-turn it on:
+TangiTweak runs `onPage` and `onSite` code through the browser's user
+scripts API, which is off until you turn it on:
 
 1. **Grant the permission.** When a script has `onPage` or `onSite` code, the Editor
    shows a banner: click **Grant permission** (the optional "user
-   scripts" permission).
-2. **Allow user scripts.** Chrome 138 and later: turn on **Allow User
+   scripts" permission). On Firefox that's all it takes.
+2. **Allow user scripts (Chrome).** Chrome 138 and later: turn on **Allow User
    Scripts** on TangiTweak's details page (`chrome://extensions/?id=…`; the
    banner's **Open extension details** button and the Problems error link
    there). Chrome 120–137: turn on **Developer mode** at the top right of
@@ -1369,8 +1366,7 @@ tweak.onPage("*://app.example.com/*", (ctx) => {
   - **`shadow: true`**: also look inside shadow roots. Each part of the
     selector matches within one root, so `"x-app .bar"` can't reach into
     `<x-app>`'s shadow root; write `".bar"`. Closed shadow roots are found
-    too in `onSite` and in MV2 (Firefox) `onPage`; in MV3 (Chrome)
-    `onPage` only open ones are.
+    too in `onSite`; in `onPage` only open ones are.
   - **`root`**: where to look (an element, document or shadow root).
   - **`key`**: tells apart two `fn` calls with the same selector.
   - What it notices: elements added or removed, and changes to the
@@ -1693,9 +1689,8 @@ tweak.onOverlay("*://app.example.com/*", (ctx) => {
   });
   ```
 - **Several scripts.** If two overlays use the same keys, the one higher
-  in the script list gets them; the other's Log says so. The same goes
-  for two `onPage` scripts on Firefox. On Chrome each `onPage` script
-  runs on its own, so the first to add the keys gets them, with no
+  in the script list gets them; the other's Log says so. Each `onPage`
+  script runs on its own, so the first to add the keys gets them, with no
   warning. An `onPage` shortcut and an overlay's with the same keys
   aren't ranked either: give them different keys.
 - `ctx.shortcut` returns a function that removes the shortcut. Shortcuts
@@ -1804,7 +1799,7 @@ tweak.onOverlay("*://app.example.com/*", async () => {
   reloads and is the same in every tab.
 - **Per-tab switch (kept across reloads):** a `tweak.tabStore` field — works with `strategy: "rules"` too.
 - **Per-page switch (resets on reload):** a `tweak.pageStore` field, so turning it on affects only this document load.
-- **Surviving Chrome debugger extensions (such as Playwriter):** Chrome blocks `chrome-extension://` iframes inside a tab while another extension attaches `chrome.debugger`. Pass `debuggerSafe: true` in the `onOverlay` route options to mount your overlay in an isolated-world closed shadow root instead. On Chrome MV3, this option requires [user scripts](#user-scripts-on-chrome) to be enabled.
+- **Surviving Chrome debugger extensions (such as Playwriter):** Chrome blocks `chrome-extension://` iframes inside a tab while another extension attaches `chrome.debugger`. Pass `debuggerSafe: true` in the `onOverlay` route options to mount your overlay in an isolated-world closed shadow root instead. This option requires [user scripts](#user-scripts) to be enabled.
 
 ### Debugger-friendly overlays
 
@@ -1823,11 +1818,11 @@ The trade-offs:
 - Keys typed into an overlay or pane bubble out of its shadow root, so
   the page can see them. Don't type secrets into them on sites you don't
   trust.
-- On Chrome MV3 they need [user scripts](#user-scripts-on-chrome); toast
-  panes also need Chrome 135. Without them, overlays and panes stay in
+- They need [user scripts](#user-scripts); toast
+  panes also need Chrome 135 on Chrome. Without them, overlays and panes stay in
   their frames and Problems says why.
 
-Turning it on reloads the tabs whose overlays move (Chrome MV3). Turning
+Turning it on reloads the tabs whose overlays move. Turning
 it off moves open overlays back into their frames right away.
 
 ## Full-page replacement: `tweak.site`

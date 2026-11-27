@@ -151,10 +151,10 @@ describe("formatScriptError / rewriteFrame", () => {
 });
 
 describe("extension strategy: error logs carry name + user line:col", () => {
-    it("handler throws → [name] + mapped line", () => {
+    it("handler throws → [name] + mapped line", async () => {
         const s = new ExtensionStrategy();
         s.reload([storedScript("a", "Thrower", THROWS)]);
-        s.handleBeforeRequest(details(), null);
+        await s.handleBeforeRequest(details(), null);
         const line = entries.find((e) => e.level === "error");
         expect(line, "an error log line must exist").toBeTruthy();
         expect(line!.message).toContain("[Thrower]");

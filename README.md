@@ -54,7 +54,7 @@ React + `valtio` GUI overlay on the page.
 ## Install
 
 1. Download from [Releases](https://github.com/tangistudio/TangiTweak/releases):
-   `tangitweak-mv3-vX.Y.Z.zip` for Chrome / Edge / Brave or
+   `tangitweak-chrome-vX.Y.Z.zip` for Chrome / Edge / Brave or
    `tangitweak-firefox-vX.Y.Z.xpi` for Firefox.
 2. Chromium: unzip, open `chrome://extensions`, enable **Developer mode** and
    **Load unpacked** the folder. Firefox: drag the `.xpi` onto Firefox (see
