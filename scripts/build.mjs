@@ -113,67 +113,42 @@ function entriesFor(dist, mv3, firefox = false) {
  * The page hook as a MAIN-world content script, so it patches fetch/XHR
  * before the page's own scripts run (Firefox 128+, Chrome MV3).
  */
-const HOOK_MAIN = { matches: ["*://*/*"], js: ["hook.js"], all_frames: true, match_about_blank: true, match_origin_as_fallback: true, run_at: "document_start", world: "MAIN" };
-
 /**
  * The sandbox pages' CSP in Firefox, which (unlike Chrome) doesn't let them
  * eval by default: they compile and run scripts
  */
 const FIREFOX_SANDBOX_CSP = "sandbox allow-scripts allow-forms allow-popups allow-modals; script-src 'self' 'unsafe-inline' 'unsafe-eval'; child-src 'self';";
 
+/*
+ * manifest.json is the Chrome manifest, with Firefox's browser_specific_settings. In it:
+ * - optional userScripts: onPage/onSite code (src/background/userScripts.ts), asked for
+ *   from the Editor; nativeMessaging + browsingData: the local helper only, asked for
+ *   from Settings → Local helper (debugger and proxy can't be optional in Chrome)
+ * - sandbox pages are exempt from the extension CSP: sandbox.html hosts the script
+ *   compiler/runner (src/background/sandbox.ts), overlay.html a script's overlay
+ *   (src/overlay/overlayRuntime.ts)
+ */
+
+/** manifest.json → Chrome manifest object (Chrome warns about browser_specific_settings) */
+function chromeManifest(m) {
+    const { browser_specific_settings: _gecko, ...chrome } = m;
+    return chrome;
+}
+
 /**
- * manifest.json → Firefox manifest object: the MV3 one, where
+ * manifest.json → Firefox manifest object, where
  * - the background is an event page (Firefox has no background service
  *   worker) that frames offscreen.html itself (no chrome.offscreen)
  * - blocking webRequest stays, for the extension strategy
  * - chrome.debugger and version_name don't exist (the xpi is named after the release tag instead)
- * - the manifest sandbox needs Firefox 154
  */
-function firefoxManifest(mv2) {
-    const { version_name: _versionName, minimum_chrome_version: _minChrome, background: _background, ...mv3 } = mv3Manifest(mv2);
-    const permissions = mv3.permissions.filter((p) => p !== "debugger" && p !== "offscreen").concat("webRequestBlocking", "webRequestFilterResponse");
+function firefoxManifest(m) {
+    const { version_name: _versionName, minimum_chrome_version: _minChrome, background: _background, ...ff } = m;
     return {
-        ...mv3,
+        ...ff,
         background: { scripts: ["background.js"] },
-        permissions,
+        permissions: ff.permissions.filter((p) => p !== "debugger" && p !== "offscreen").concat("webRequestBlocking", "webRequestFilterResponse"),
         content_security_policy: { sandbox: FIREFOX_SANDBOX_CSP },
-        browser_specific_settings: {
-            ...mv2.browser_specific_settings,
-            gecko: { ...mv2.browser_specific_settings.gecko, strict_min_version: "154.0" },
-            gecko_android: { ...mv2.browser_specific_settings.gecko_android, strict_min_version: "154.0" },
-        },
-    };
-}
-
-/** manifest.json → MV3 manifest object */
-function mv3Manifest(mv2) {
-    return {
-        name: mv2.name,
-        version: mv2.version,
-        version_name: mv2.version_name,
-        description: mv2.description,
-        icons: mv2.icons,
-        action: {
-            default_title: mv2.browser_action.default_title,
-            default_popup: mv2.browser_action.default_popup,
-            default_icon: mv2.browser_action.default_icon,
-        },
-        options_ui: mv2.options_ui,
-        background: { service_worker: "background.js" },
-        content_scripts: [HOOK_MAIN, ...mv2.content_scripts],
-        permissions: ["storage", "unlimitedStorage", "tabs", "debugger", "offscreen", "webNavigation", "webRequest", "alarms", "proxy", "declarativeNetRequestWithHostAccess"],
-        host_permissions: ["<all_urls>"],
-        // userScripts: world: "isolated" onPage code (src/background/userScripts.ts), asked for from the Editor;
-        // nativeMessaging + browsingData: the local helper only, asked for from Settings → Local helper
-        // (debugger and proxy can't be optional in Chrome)
-        optional_permissions: [...mv2.optional_permissions, "userScripts", "nativeMessaging", "browsingData"],
-        web_accessible_resources: [{ resources: mv2.web_accessible_resources, matches: ["<all_urls>"] }],
-        // sandbox pages are exempt from the extension CSP — sandbox.html hosts
-        // the script compiler/runner (see src/background/sandbox.ts), overlay.html
-        // a script's overlay (src/overlay/overlayRuntime.ts)
-        sandbox: { pages: ["sandbox.html", ...mv2.sandbox.pages] },
-        minimum_chrome_version: "120",
-        manifest_version: 3,
     };
 }
 
@@ -340,8 +315,8 @@ async function copyStatic(dist, mv3, firefox = false) {
 
     // storeIcon.png is for the store listing only — no manifest references it
     await cp(path.join(root, "icons"), path.join(dist, "icons"), { recursive: true, filter: (src) => path.basename(src) !== "storeIcon.png" });
-    const mv2 = JSON.parse(await readFile(path.join(root, "manifest.json"), "utf8"));
-    await writeFile(path.join(dist, "manifest.json"), JSON.stringify(firefox ? firefoxManifest(mv2) : mv3Manifest(mv2), null, 4) + "\n");
+    const manifest = JSON.parse(await readFile(path.join(root, "manifest.json"), "utf8"));
+    await writeFile(path.join(dist, "manifest.json"), JSON.stringify(firefox ? firefoxManifest(manifest) : chromeManifest(manifest), null, 4) + "\n");
     await copyFile(path.join(root, "src/background/offscreen.html"), path.join(dist, "offscreen.html"));
     await copyFile(path.join(root, "src/background/sandbox.html"), path.join(dist, "sandbox.html"));
     await copyFile(path.join(root, "src/ui/editor.html"), path.join(dist, "editor.html"));

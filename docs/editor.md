@@ -42,8 +42,8 @@ the pointer is over them; click one to copy its text (error messages
 included) — links in a hover keep working.
 
 Explorer layout, panel visibility and word wrap are remembered. To debug the
-engine itself, open `chrome://extensions` and click the service worker /
-background page under *Inspect views*.
+engine itself, open `chrome://extensions` and click the service worker
+under *Inspect views* (Firefox: `about:debugging`, then **Inspect** on TangiTweak).
 
 If the stored script (or data file) changed since you opened it (synced folder, another tab),
 ⌘S shows a **save conflict** diff instead of saving. It takes the keyboard:

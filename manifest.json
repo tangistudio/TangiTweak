@@ -9,7 +9,7 @@
         "48": "icons/icon-48x48.png",
         "128": "icons/icon-128x128.png"
     },
-    "browser_action": {
+    "action": {
         "default_title": "TangiTweak",
         "default_popup": "popup.html",
         "default_icon": {
@@ -22,10 +22,18 @@
         "open_in_tab": true
     },
     "background": {
-        "page": "background.html",
-        "persistent": true
+        "service_worker": "background.js"
     },
     "content_scripts": [
+        {
+            "matches": ["*://*/*"],
+            "js": ["hook.js"],
+            "all_frames": true,
+            "match_about_blank": true,
+            "match_origin_as_fallback": true,
+            "run_at": "document_start",
+            "world": "MAIN"
+        },
         {
             "matches": ["*://*/*"],
             "js": ["bridge.js"],
@@ -36,34 +44,50 @@
         }
     ],
     "permissions": [
-        "webRequest",
-        "webRequestBlocking",
         "storage",
-        "alarms",
         "unlimitedStorage",
         "tabs",
         "debugger",
+        "offscreen",
+        "webNavigation",
+        "webRequest",
+        "alarms",
         "proxy",
-        "nativeMessaging",
-        "browsingData",
-        "declarativeNetRequestWithHostAccess",
-        "<all_urls>"
+        "declarativeNetRequestWithHostAccess"
     ],
-    "optional_permissions": ["management"],
-    "web_accessible_resources": ["hook.js", "overlay.html", "overlay.js", "builtins-react.js"],
-    "sandbox": { "pages": ["overlay.html"] },
-    "content_security_policy": "script-src 'self' 'unsafe-eval' blob:; worker-src 'self' blob:; object-src 'self'",
-    "manifest_version": 2,
+    "host_permissions": ["<all_urls>"],
+    "optional_permissions": [
+        "management",
+        "userScripts",
+        "nativeMessaging",
+        "browsingData"
+    ],
+    "web_accessible_resources": [
+        {
+            "resources": [
+                "hook.js",
+                "overlay.html",
+                "overlay.js",
+                "builtins-react.js"
+            ],
+            "matches": ["<all_urls>"]
+        }
+    ],
+    "sandbox": {
+        "pages": ["sandbox.html", "overlay.html"]
+    },
+    "minimum_chrome_version": "120",
+    "manifest_version": 3,
     "browser_specific_settings": {
         "gecko": {
             "id": "tangitweak@tangistudio",
-            "strict_min_version": "140.0",
+            "strict_min_version": "154.0",
             "data_collection_permissions": {
                 "required": ["none"]
             }
         },
         "gecko_android": {
-            "strict_min_version": "142.0"
+            "strict_min_version": "154.0"
         }
     }
 }
