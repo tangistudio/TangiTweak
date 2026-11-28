@@ -1,5 +1,5 @@
 /**
- * MV3 bundle e2e: loads dist-mv3 (service worker + sandbox compile host)
+ * MV3 bundle e2e: loads dist-chrome (service worker + sandbox compile host)
  * and verifies the platform-allowed surface:
  *   1. the extension service worker registers and answers messages
  *   2. the manager opens; scripts save + list (SW ⇄ offscreen ⇄ sandbox
@@ -34,7 +34,7 @@ import { checkPlaces, checkOverlayPreview, checkOverlays, checkEarlyRequests, ch
 import { checkPackages, packagesServerRoute } from "./packagesE2e";
 import { readExportZip } from "../src/shared/exportZip";
 
-const EXT_ROOT = path.join(new URL("..", import.meta.url).pathname, "dist-mv3");
+const EXT_ROOT = path.join(new URL("..", import.meta.url).pathname, "dist-chrome");
 // unpacked extension id = sha256 of the absolute path (hex digits → a-p)
 const EXT_ID = crypto.createHash("sha256").update(EXT_ROOT, "utf8").digest("hex").split("").map((c) => String.fromCharCode(parseInt(c, 16) + 97)).join("").slice(0, 32);
 
@@ -131,7 +131,7 @@ try {
     browser = await chromium.connectOverCDP(`http://127.0.0.1:${port}`, { timeout: 90000 });
     const ctx = browser.contexts()[0];
     const extId = EXT_ID;
-    check("extension id derived from the dist-mv3 path", /^[a-p]{32}$/.test(extId), extId);
+    check("extension id derived from the dist-chrome path", /^[a-p]{32}$/.test(extId), extId);
 
     // 1. the MV3 service worker is up: it's NOT a page target (MV3 service
     // workers never appear in /json/list) — verify it

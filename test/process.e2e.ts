@@ -27,9 +27,9 @@ const ROOT = path.join(new URL("..", import.meta.url).pathname);
 // The store build asks for nativeMessaging from Settings → Local helper → Allow
 // (test/process.test.ts covers that wait); headless Chrome can't answer the
 // permission prompt, so this loads a copy with it granted up front.
-const BUILT = JSON.parse(readFileSync(path.join(ROOT, "dist-mv3/manifest.json"), "utf8"));
+const BUILT = JSON.parse(readFileSync(path.join(ROOT, "dist-chrome/manifest.json"), "utf8"));
 const EXT_ROOT = mkdtempSync(path.join(tmpdir(), "reso-proc-ext-"));
-cpSync(path.join(ROOT, "dist-mv3"), EXT_ROOT, { recursive: true });
+cpSync(path.join(ROOT, "dist-chrome"), EXT_ROOT, { recursive: true });
 const OPTIONAL_HELPER = ["nativeMessaging", "browsingData"].every((p) => BUILT.optional_permissions.includes(p) && !BUILT.permissions.includes(p));
 writeFileSync(path.join(EXT_ROOT, "manifest.json"), JSON.stringify({ ...BUILT, permissions: [...BUILT.permissions, "nativeMessaging", "browsingData"] }));
 const HELPER = path.join(ROOT, "helper/target/release", process.platform === "win32" ? "tangitweak-helper.exe" : "tangitweak-helper");

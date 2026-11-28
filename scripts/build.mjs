@@ -2,7 +2,7 @@
  * Build: bundles TS entries with Rolldown, copies static assets.
  *
  * Two targets, both Manifest V3 with the sandbox-based compile:
- *   dist-mv3/            Chrome (service worker and an offscreen document)
+ *   dist-chrome/         Chrome (service worker and an offscreen document)
  *   dist-firefox/        Firefox, the .xpi (event page that frames the
  *                        sandbox host, blocking webRequest), built with
  *                        __FIREFOX__ so Chromium-only APIs are left out
@@ -539,9 +539,9 @@ async function buildAll() {
     await buildOnce(firefox, true);
     await checkFirefoxBuild(firefox);
 
-    await rm(path.join(root, "dist-mv3"), { recursive: true, force: true });
-    await mkdir(path.join(root, "dist-mv3"), { recursive: true });
-    await buildOnce(path.join(root, "dist-mv3"));
+    await rm(path.join(root, "dist-chrome"), { recursive: true, force: true });
+    await mkdir(path.join(root, "dist-chrome"), { recursive: true });
+    await buildOnce(path.join(root, "dist-chrome"));
 }
 
 await buildAll();

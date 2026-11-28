@@ -41,7 +41,7 @@ in Developer mode; otherwise use the zip.
 git clone https://github.com/tangistudio/TangiTweak.git
 cd tangitweak
 npm install && npm run build
-# then: chrome://extensions → Developer mode → Load unpacked → dist-mv3/
+# then: chrome://extensions → Developer mode → Load unpacked → dist-chrome/
 # Firefox: about:debugging#/runtime/this-firefox → Load Temporary Add-on… → dist-firefox/manifest.json
 ```
 

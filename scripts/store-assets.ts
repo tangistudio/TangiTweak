@@ -21,7 +21,7 @@ import { chromium } from "playwright-core";
 import { resolveBrowser } from "../test/browserSetup";
 
 const ROOT = path.resolve(new URL("..", import.meta.url).pathname);
-const EXT_ROOT = path.join(ROOT, "dist-mv3");
+const EXT_ROOT = path.join(ROOT, "dist-chrome");
 const OUT = path.join(ROOT, "docs/store");
 const ICON_SVG = readFileSync(path.join(ROOT, "icons/icon.svg"), "utf8").trim();
 

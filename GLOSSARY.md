@@ -213,7 +213,7 @@ _Avoid_: "never ran" warning
 ## Builds
 
 **MV3 build**:
-The Manifest V3 package for Chrome, Edge and Brave (`dist-mv3/`, the release's `tangitweak-chrome-vX.Y.Z.zip`). The Firefox build is Manifest V3 too.
+The Manifest V3 package for Chrome, Edge and Brave (`dist-chrome/`, the release's `tangitweak-chrome-vX.Y.Z.zip`). The Firefox build is Manifest V3 too.
 
 **Firefox build**:
 The Manifest V3 package for Firefox (`dist-firefox/`, the `.xpi`).

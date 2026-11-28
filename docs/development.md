@@ -4,7 +4,7 @@
 
 ```bash
 npm install
-npm run build        # bundle to dist-mv3/ (Chrome) and dist-firefox/
+npm run build        # bundle to dist-chrome/ (Chrome) and dist-firefox/
 npm run watch        # rebuild on change
 npm test             # vitest unit tests
 npm run typecheck
@@ -19,7 +19,7 @@ in an iframe. `src/background/sandboxLink.ts` is the one seam between the
 background and its sandbox, so compiles, handler calls, store traffic and
 the sandbox's reverse calls take the same path as in the browser.
 
-The e2e suites (`test/*.e2e.ts`) launch a fresh Chromium, load `dist-mv3/`
+The e2e suites (`test/*.e2e.ts`) launch a fresh Chromium, load `dist-chrome/`
 and drive the real Editor page against a local HTTP server. They need a
 Chromium that still accepts `--load-extension` (branded Chrome 137+ doesn't);
 `test/browserSetup.ts` finds ungoogled-chromium or an old Chrome for Testing,
@@ -30,7 +30,7 @@ E2E_CHROMIUM="/path/to/Chromium" npm run test:e2e
 ```
 
 `test/smoke.e2e.ts` is the cross-browser suite. It runs one set of checks on
-Chrome (`dist-mv3/`, over CDP) and on Firefox (`dist-firefox/`, over WebDriver
+Chrome (`dist-chrome/`, over CDP) and on Firefox (`dist-firefox/`, over WebDriver
 BiDi): the background answers, a tweak saves and is listed, the `page`
 strategy, the browser's network strategy (`debugger` on Chrome, `extension` on
 Firefox) and onPage code after the user scripts grant. `test/e2eBrowsers.ts`
@@ -42,7 +42,7 @@ one, or set `E2E_FIREFOX`. `E2E_BROWSERS=firefox` (or `chrome`) runs one:
 E2E_BROWSERS=firefox E2E_FIREFOX="/path/to/firefox" npm run test:smoke
 ```
 
-Load the extension from `dist-mv3/` ("Load unpacked") in Chrome, or
+Load the extension from `dist-chrome/` ("Load unpacked") in Chrome, or
 `dist-firefox/` in Firefox.
 
 ## Releases
@@ -263,7 +263,7 @@ until its code hash changes or the page reloads.
 
 `npm run build` produces both bundles, both Manifest V3:
 
-- **`dist-mv3/`** — Chrome, Edge and Brave (the release's
+- **`dist-chrome/`** — Chrome, Edge and Brave (the release's
   `tangitweak-chrome-vX.Y.Z.zip`): a background service worker.
 - **`dist-firefox/`** — Firefox 154 or later (the `.xpi`). Firefox has no
   background service worker, so `background.scripts` runs `background.js`

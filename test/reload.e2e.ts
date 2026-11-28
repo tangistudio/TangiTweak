@@ -17,7 +17,7 @@ import { chromium } from "playwright-core";
 import { resolveBrowser, unpackedExtensionId } from "./browserSetup";
 import { saveTweak } from "./e2eTweak";
 
-const EXT_ROOT = path.join(new URL("..", import.meta.url).pathname, "dist-mv3");
+const EXT_ROOT = path.join(new URL("..", import.meta.url).pathname, "dist-chrome");
 
 const PORT = 8911;
 const ORIGIN = `http://127.0.0.1:${PORT}`;

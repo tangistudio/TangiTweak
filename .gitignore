@@ -1,6 +1,6 @@
 node_modules/
 dist-firefox/
-dist-mv3/
+dist-chrome/
 dist-sdk/
 helper/target/
 dist-helper/

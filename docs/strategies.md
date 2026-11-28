@@ -376,7 +376,7 @@ strategy picker disables the ones the current browser can't use.
 
 | | `helper` (local helper) | `page` (page fetch/XHR) | `extension` (blocking webRequest) | `debugger` (chrome.debugger) | `rules` (browser-native rules) | page code (`tweak.onSite`, `tweak.onPage`, `tweak.onOverlay`) |
 |---|---|---|---|---|---|---|
-| **Chrome / Edge / Brave / Vivaldi, current** — `dist-mv3/` | ✅ no banner | ✅ | ❌ | ✅ banner shown | ✅ | ✅ (`tweak.onPage`, `tweak.onSite` and `onOverlay({ debuggerSafe: true })` need [user scripts](scripting.md#user-scripts); `tweak.onOverlay` and `tweak.site` don't) |
+| **Chrome / Edge / Brave / Vivaldi, current** — `dist-chrome/` | ✅ no banner | ✅ | ❌ | ✅ banner shown | ✅ | ✅ (`tweak.onPage`, `tweak.onSite` and `onOverlay({ debuggerSafe: true })` need [user scripts](scripting.md#user-scripts); `tweak.onOverlay` and `tweak.site` don't) |
 | **Firefox** — `dist-firefox/` | ❌ (not needed: `extension` reaches everything) | ✅ | ✅ no banner | ❌ | ✅ | ✅ (`tweak.onPage`, `tweak.onSite` and `onOverlay({ debuggerSafe: true })` need the [user scripts](scripting.md#user-scripts) permission) |
 
 What reaches what on Chrome:

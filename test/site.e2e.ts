@@ -17,7 +17,7 @@ import { chromium } from "playwright-core";
 import { resolveBrowser } from "./browserSetup";
 import { saveTweak, deleteTweak } from "./e2eTweak";
 
-const EXT_ROOT = path.join(new URL("..", import.meta.url).pathname, "dist-mv3");
+const EXT_ROOT = path.join(new URL("..", import.meta.url).pathname, "dist-chrome");
 const EXT_ID = crypto.createHash("sha256").update(EXT_ROOT, "utf8").digest("hex").split("").map((c) => String.fromCharCode(parseInt(c, 16) + 97)).join("").slice(0, 32);
 
 // Create a minimal second MV3 extension with the `debugger` permission to

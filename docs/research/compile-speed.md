@@ -210,8 +210,8 @@ Native (non-WASM) builds cannot run in a browser. They are listed only to show t
 | oxc `transform.wasm32-wasi.wasm` | 3.3 MB |
 | @swc/wasm-typescript | 4.05 MB, as one **JS** file with inlined wasm, so it counts toward AMO's 5 MB text-file limit |
 | TypeScript 7.1 dev `tsc.wasm` | 52.8 MB |
-| our current `dist-mv3/sandbox.js` (includes Sucrase) | 636 KB |
-| our `dist-mv3/lib/monaco/ts.worker.js` | 3,486,733 bytes (its lib `.d.ts` files are in `ts.libs.js`, 2,833,543 bytes), under the 5 MiB per-file cap that `buildMonaco` in `scripts/build.mjs` enforces |
+| our current `dist-chrome/sandbox.js` (includes Sucrase) | 636 KB |
+| our `dist-chrome/lib/monaco/ts.worker.js` | 3,486,733 bytes (its lib `.d.ts` files are in `ts.libs.js`, 2,833,543 bytes), under the 5 MiB per-file cap that `buildMonaco` in `scripts/build.mjs` enforces |
 
 ### What the numbers say
 

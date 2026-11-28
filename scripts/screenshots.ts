@@ -13,7 +13,7 @@ import { resolveBrowser } from "../test/browserSetup";
 import { SAMPLES } from "../src/ui/samples";
 
 const ROOT = new URL("..", import.meta.url).pathname;
-const EXT_ROOT = path.join(ROOT, "dist-mv3");
+const EXT_ROOT = path.join(ROOT, "dist-chrome");
 const OUT = path.join(ROOT, "docs/shots");
 const EXT_ID = crypto.createHash("sha256").update(EXT_ROOT, "utf8").digest("hex").split("").map((c) => String.fromCharCode(parseInt(c, 16) + 97)).join("").slice(0, 32);
 const SHOWN = ["Replace a fetch/XHR response", "CORS unlock", "DOM / title changes", "Rewrite page HTML"];

@@ -7,6 +7,10 @@ its section below.
 
 ## [Unreleased]
 
+### Changed
+
+- The Chrome build folder is now `dist-chrome/` (it was `dist-mv3/`). Load unpacked from there.
+
 ## [0.42.0-alpha] - 2026-11-27
 
 ### Changed

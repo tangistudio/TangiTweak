@@ -13,7 +13,7 @@ import { chromium } from "playwright-core";
 import { resolveBrowser, unpackedExtensionId } from "./browserSetup";
 import { saveTweak } from "./e2eTweak";
 
-const EXT_ROOT = path.join(new URL("..", import.meta.url).pathname, "dist-mv3");
+const EXT_ROOT = path.join(new URL("..", import.meta.url).pathname, "dist-chrome");
 const profile = mkdtempSync(path.join(tmpdir(), "reso-defnav-"));
 const proc = spawn(await resolveBrowser(), [
     "--headless=new",

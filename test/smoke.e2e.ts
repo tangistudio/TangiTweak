@@ -1,5 +1,5 @@
 /**
- * The cross-browser smoke suite: the same few checks on Chrome (dist-mv3)
+ * The cross-browser smoke suite: the same few checks on Chrome (dist-chrome)
  * and Firefox (dist-firefox), through the launcher in e2eBrowsers.ts.
  * It covers what each browser does its own way: the background, a save
  * (compile), the page strategy, the browser's network strategy, an overlay

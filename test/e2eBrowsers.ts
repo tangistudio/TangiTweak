@@ -1,5 +1,5 @@
 /**
- * One launcher for the cross-browser e2e suites: Chrome (dist-mv3) over CDP
+ * One launcher for the cross-browser e2e suites: Chrome (dist-chrome) over CDP
  * and Firefox (dist-firefox) over WebDriver BiDi, both through puppeteer.
  * Each suite then talks to the extension the same way, whichever browser
  * it runs in: open an extension page, message the background, open web
@@ -70,7 +70,7 @@ async function launchChrome(): Promise<ExtBrowser> {
         userDataDir: profile,
         args: ["--no-first-run", "--no-default-browser-check"],
     });
-    const id = await browser.installExtension(path.join(ROOT, "dist-mv3"));
+    const id = await browser.installExtension(path.join(ROOT, "dist-chrome"));
     const origin = `chrome-extension://${id}`;
     return common(browser, "chrome", origin, "debugger", {
         async grantUserScripts(editor) {
