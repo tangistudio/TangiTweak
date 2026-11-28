@@ -74,6 +74,8 @@ export const actions = {
     folderButton(): void {},
     /** Settings → Disconnect: stop syncing the folder */
     folderDisconnect(): void {},
+    /** Settings → Cancel: stop a just-picked folder's first sync */
+    folderCancel(): void {},
     setVscodePath(_path: string): void {},
     setLaunchMode(_mode: LaunchMode): void {},
     setEditorUrl(_url: string): void {},

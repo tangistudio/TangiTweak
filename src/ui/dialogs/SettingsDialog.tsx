@@ -153,20 +153,33 @@ function SyncedFolder() {
                 <span className="setting-label">Folder</span>
                 <div className="setting-control">
                     <div id="settings-folder-row" className="setting-inline">
-                        <button
-                            id="btn-vscode"
-                            disabled={!folder.supported}
-                            title={folder.supported ? undefined : "File System Access API unavailable (Firefox) — use Import/Export"}
-                            onClick={() => actions.folderButton()}
-                        >
-                            {label}
-                        </button>
-                        {folder.mode !== "off" && (
+                        {folder.syncing ? (
                             <>
-                                {" "}
-                                <button id="btn-folder-disconnect" title="Stop syncing this folder; its files stay" onClick={() => actions.folderDisconnect()}>
-                                    Disconnect
+                                <button id="btn-vscode" disabled>
+                                    Sync In Progress
+                                </button>{" "}
+                                <button id="btn-folder-cancel" title="Stop this folder's first sync" disabled={folder.syncing === "cancelling"} onClick={() => actions.folderCancel()}>
+                                    {folder.syncing === "cancelling" ? "Cancelling…" : "Cancel"}
                                 </button>
+                            </>
+                        ) : (
+                            <>
+                                <button
+                                    id="btn-vscode"
+                                    disabled={!folder.supported}
+                                    title={folder.supported ? undefined : "File System Access API unavailable (Firefox) — use Import/Export"}
+                                    onClick={() => actions.folderButton()}
+                                >
+                                    {label}
+                                </button>
+                                {folder.mode !== "off" && (
+                                    <>
+                                        {" "}
+                                        <button id="btn-folder-disconnect" title="Stop syncing this folder; its files stay" onClick={() => actions.folderDisconnect()}>
+                                            Disconnect
+                                        </button>
+                                    </>
+                                )}
                             </>
                         )}
                         {" "}

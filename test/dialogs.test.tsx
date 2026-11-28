@@ -392,6 +392,28 @@ describe("settings dialog", () => {
         await act(async () => void (settings.folder.mode = "off"));
     });
 
+    it("while a picked folder syncs: a disabled Sync In Progress and a Cancel", async () => {
+        const { SettingsDialog } = await import("../src/ui/dialogs/SettingsDialog");
+        const { settings } = await import("../src/ui/state/settings");
+        const { actions } = await import("../src/ui/shell/actions");
+        const folderCancel = vi.fn();
+        Object.assign(actions, { folderCancel });
+        Object.assign(settings.folder, { supported: true, mode: "synced", path: "old", syncing: true });
+        render(<SettingsDialog />);
+        expect($("#btn-vscode").textContent).toBe("Sync In Progress");
+        expect(($("#btn-vscode") as HTMLButtonElement).disabled).toBe(true);
+        expect($("#btn-folder-disconnect")).toBeNull();
+        fireEvent.click($("#btn-folder-cancel"));
+        expect(folderCancel).toHaveBeenCalledTimes(1);
+        await act(async () => void (settings.folder.syncing = "cancelling"));
+        expect($("#btn-folder-cancel").textContent).toBe("Cancelling…");
+        expect(($("#btn-folder-cancel") as HTMLButtonElement).disabled).toBe(true);
+        await act(async () => void (settings.folder.syncing = false));
+        expect($("#btn-vscode").textContent).toBe("Change Folder…");
+        expect($("#btn-folder-cancel")).toBeNull();
+        await act(async () => void Object.assign(settings.folder, { mode: "off", path: "" }));
+    });
+
     it("Debugger-friendly overlays starts off and its box writes the setting", async () => {
         const set = vi.fn();
         const remove = vi.fn();

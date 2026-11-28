@@ -9,6 +9,7 @@ its section below.
 
 ### Changed
 
+- **Settings → Synced folder shows when a sync is running.** After you pick a folder the buttons read **Sync In Progress** and **Cancel** until the first sync ends, and **Folder path** lights up right after the pick instead of after the sync.
 - The Chrome build folder is now `dist-chrome/` (it was `dist-mv3/`). Load unpacked from there.
 
 ## [0.42.0-alpha] - 2026-11-27

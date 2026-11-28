@@ -19,10 +19,12 @@ const store: Record<string, any> = {};
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const files = new Map<string, { text: string; t: number }>();
 let clock = 1;
+/** runs as the folder is listed */
+let onList: (() => void) | null = null;
 const dir = {
     name: "d",
     async *values() {
-        for (const [name, f] of files) yield { kind: "file", name, getFile: async () => ({ lastModified: f.t, size: f.text.length, text: async () => f.text }) };
+        for (const [name, f] of files) onList?.(), yield { kind: "file", name, getFile: async () => ({ lastModified: f.t, size: f.text.length, text: async () => f.text }) };
     },
     async getFileHandle(name: string, o?: any) {
         if (!files.has(name)) {
@@ -52,6 +54,25 @@ beforeEach(async () => {
 });
 
 describe("scripts folder sync", () => {
+    it("Settings → Cancel stops a picked folder's first sync and forgets the folder", async () => {
+        put("a.ts", "// a");
+        put("b.ts", "// b");
+        const sync = await import("../src/background/folderSync");
+        onList = () => sync.cancelPick("pick-1");
+        try {
+            await expect(sync.startFromStoredHandle({ fresh: true, token: "pick-1" })).rejects.toMatchObject({ name: "AbortError" });
+        } finally {
+            onList = null;
+        }
+        expect(sync.getStatus().active).toBe(false);
+        expect(await names()).toEqual([]);
+        // the next pick isn't affected
+        await sync.startFromStoredHandle({ fresh: true, token: "pick-2" });
+        expect(sync.getStatus().active).toBe(true);
+        expect(await names()).toEqual(["a", "b"]);
+        await sync.stop();
+    });
+
     it("imports files added while the worker was stopped", async () => {
         put("a.ts", "// a");
         let sync = await import("../src/background/folderSync");

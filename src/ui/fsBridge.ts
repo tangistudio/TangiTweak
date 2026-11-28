@@ -10,15 +10,8 @@
  * (user gesture), the permission re-grant, and the status plumbing.
  */
 
-import { loadSavedHandle, clearSavedHandle, saveHandle } from "../shared/folderSync";
+import { describeHandle, loadSavedHandle, clearSavedHandle, saveHandle } from "../shared/folderSync";
 import { scriptFileName } from "../shared/scriptName";
-
-export interface FolderSyncHandlers {
-    onFileChanged(fileName: string, js: string): void;
-    onFileAdded(fileName: string, js: string): void;
-    onFileRemoved(fileName: string): void;
-    onRenamed(oldName: string, newName: string, js: string): void;
-}
 
 export function isSupported(): boolean {
     return typeof (window as any).showDirectoryPicker === "function";
@@ -57,36 +50,64 @@ export async function adoptForWatch(handle: any): Promise<boolean> {
     });
 }
 
+/** the picked folder being synced (openFolder), until it's synced or cancelled */
+let pick: { token: string; cancelled: boolean } | null = null;
+
+function cancelled(): DOMException {
+    return new DOMException("folder sync cancelled", "AbortError");
+}
+
 /**
  * Pick a folder (user gesture required) and hand it to the background
  * watcher, which runs a two-way initial sync and writes the support files.
- * It replaces the folder synced so far; cancelling keeps that one.
+ * It replaces the folder synced so far; cancelling the pick, the conflict
+ * confirm or (cancelPick) the preview keeps that one. `onPicked` gets the
+ * folder as the sync reports it, right after the pick.
  */
-export async function openFolder(handlers?: FolderSyncHandlers): Promise<void> {
-    void handlers;
+export async function openFolder(onPicked?: (path: string) => unknown): Promise<void> {
     const dirHandle = await (window as any).showDirectoryPicker({ mode: "readwrite" } as any);
+    const me = (pick = { token: crypto.randomUUID(), cancelled: false });
+    try {
+        await onPicked?.(await describeHandle(dirHandle));
+        await startPicked(dirHandle, me);
+    } finally {
+        if (pick === me) pick = null;
+    }
+}
+
+async function startPicked(dirHandle: any, me: { token: string; cancelled: boolean }): Promise<void> {
     // dry run first: say which scripts/files will be overwritten before anything is
     await saveHandle(dirHandle, "pendingFolder");
-    const preview = await sendRaw({ type: "folderSyncPreview" }).catch(() => null);
+    const preview = await sendRaw({ type: "folderSyncPreview", token: me.token }).catch(() => null);
     await clearSavedHandle("pendingFolder");
+    if (me.cancelled) throw cancelled();
     if (preview?.conflicts?.length) {
         const lines = preview.conflicts.map((c: any) => `• ${c.name} — keeping the ${c.winner === "file" ? "file in the folder" : "script in the extension"}`);
         const ok = confirm(
             `${preview.conflicts.length} script(s) differ between the extension and "${dirHandle.name}":\n\n${lines.join("\n")}\n\n` +
                 `The newer copy wins; the other is saved to .tangitweak-backup/ in the folder. Continue?`
         );
-        if (!ok) throw new DOMException("folder sync cancelled", "AbortError");
+        if (!ok) throw cancelled();
     }
     // the old folder (if any) stops only now: a cancelled pick keeps it synced
     if (cachedActive) await sendRaw({ type: "folderSyncStop" });
     await saveHandle(dirHandle);
-    const started = await sendRaw({ type: "folderSyncStart", fresh: true });
+    const started = await sendRaw({ type: "folderSyncStart", fresh: true, token: me.token });
+    // the background forgot the folder already
+    if (started?.cancelled) throw cancelled();
     if (!started || !started.ok) {
         await clearSavedHandle();
         throw new Error("folder sync could not start in the background (see the extension logs)");
     }
 
     // scripts ⇄ files and the support files (typings, tsconfig, schema): the background writes them
+}
+
+/** Settings → Cancel: stop the picked folder's preview or first sync. */
+export function cancelPick(): void {
+    if (!pick) return;
+    pick.cancelled = true;
+    void sendRaw({ type: "folderSyncCancel", token: pick.token });
 }
 
 export function stopSync(): Promise<void> {

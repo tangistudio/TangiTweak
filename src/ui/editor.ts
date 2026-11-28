@@ -1647,10 +1647,10 @@ async function refreshSyncPath(): Promise<void> {
 /**
  * Flag Settings → Folder path while it's missing, or doesn't end in the name of
  * the folder that's synced (likely another folder's). `flash`: just picked —
- * draw the eye to it.
+ * draw the eye to it. `picked`: the folder just picked, while its sync hasn't started.
  */
-async function checkFolderPath(flash = false): Promise<boolean> {
-    const st = await fsBridge.queryStatus();
+async function checkFolderPath(flash = false, picked?: string): Promise<boolean> {
+    const st = picked === undefined ? await fsBridge.queryStatus() : { active: true, path: picked };
     const typed = settings.vscodePath.trim();
     const name = st.path && !st.path.startsWith("/") ? st.path : "";
     const need = !!st.active && !st.path?.startsWith("/") && (!typed || (!!name && baseName(typed.replace(/\\/g, "/")).toLowerCase() !== name.toLowerCase()));
@@ -1673,16 +1673,24 @@ async function folderButtonClicked(): Promise<void> {
         return;
     }
     try {
-        await fsBridge.openFolder();
+        // the first sync can take a while: flag Folder path now, not when it ends
+        await fsBridge.openFolder(async (path) => {
+            settings.folder.syncing = true;
+            await checkFolderPath(true, path);
+        });
     } catch (e: any) {
         if (e?.name === "AbortError") {
-            managerLog("folder pick cancelled", "warn");
+            managerLog(settings.folder.syncing ? "folder sync cancelled" : "folder pick cancelled", "warn");
+            if (settings.folder.syncing) status("folder sync cancelled");
+            await checkFolderPath();
             return;
         }
+        await checkFolderPath();
         throw e;
+    } finally {
+        settings.folder.syncing = false;
     }
     await markFolderSynced();
-    await checkFolderPath(true);
 }
 
 /** Settings → Disconnect: stop syncing and forget the folder (its files stay) */
@@ -2056,6 +2064,10 @@ async function main(): Promise<void> {
         },
         folderButton: () => void folderButtonClicked(),
         folderDisconnect: () => void folderDisconnectClicked(),
+        folderCancel: () => {
+            settings.folder.syncing = "cancelling";
+            fsBridge.cancelPick();
+        },
         setVscodePath: (path: string) => {
             settings.vscodePath = path;
             chrome.storage.local.set({ resVscodePath: path }, () => void refreshSyncPath());

@@ -928,7 +928,8 @@ body.dock-dragging iframe, body.dock-dragging #monaco-host { pointer-events: non
     border-radius: 2px; font: inherit; font-size: 12px; height: 26px; padding: 0 8px;
 }
 .settings-body button { background: var(--bg-hover); cursor: pointer; }
-.settings-body button:hover { border-color: var(--fg-faint); }
+.settings-body button:hover:not(:disabled) { border-color: var(--fg-faint); }
+.settings-body button:disabled { opacity: 0.5; cursor: default; }
 .settings-body button[hidden] { display: none; }
 .settings-body select { min-width: 180px; }
 .settings-body input[type="text"] { width: 100%; }

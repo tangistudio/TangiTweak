@@ -121,8 +121,16 @@ chrome.runtime.onMessage.addListener((msg: any, _s, sendResponse) => {
         return true;
     }
     if (msg && msg.type === "folderSyncStart") {
-        folderSync.startFromStoredHandle({ fresh: !!msg.fresh }).then((ok) => sendResponse({ ok })).catch((e) => sendResponse({ ok: false, error: String(e) }));
+        folderSync
+            .startFromStoredHandle({ fresh: !!msg.fresh, token: msg.token })
+            .then((ok) => sendResponse({ ok }))
+            .catch((e) => sendResponse({ ok: false, cancelled: e?.name === "AbortError", error: String(e) }));
         return true;
+    }
+    if (msg && msg.type === "folderSyncCancel") {
+        folderSync.cancelPick(String(msg.token));
+        sendResponse({});
+        return false;
     }
     if (msg && msg.type === "folderSyncStop") {
         folderSync.stop().then(() => sendResponse({}));
@@ -133,7 +141,7 @@ chrome.runtime.onMessage.addListener((msg: any, _s, sendResponse) => {
         return false;
     }
     if (msg && msg.type === "folderSyncPreview") {
-        folderSync.previewStoredHandle().then((p) => sendResponse(p)).catch((e) => sendResponse({ error: String(e) }));
+        folderSync.previewStoredHandle(msg.token).then((p) => sendResponse(p)).catch((e) => sendResponse({ error: String(e) }));
         return true;
     }
     return false;

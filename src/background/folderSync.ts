@@ -27,7 +27,7 @@
  *    and saved stores: `dataSigs` tracks those files apart from `known`,
  *    and the scan skips the folder.
  */
-import { computeEvents, contentHash, loadSavedHandle, clearSavedHandle, saveHandle, type FileSig } from "../shared/folderSync";
+import { computeEvents, contentHash, describeHandle, loadSavedHandle, clearSavedHandle, saveHandle, type FileSig } from "../shared/folderSync";
 import {
     saveScript, saveScriptsBatch, holdingChanges, deleteScript, newId, listScripts, onScriptsChanged, type Script,
     listDataFiles, saveDataFile, deleteDataFile, newDataFileId, listFolders, createFolder, deleteFolder,
@@ -129,15 +129,29 @@ async function writingAs<T>(kind: Exclude<SyncActivity, "idle">, fn: () => Promi
     }
 }
 
-function describeHandle(handle: any): Promise<string> {
-    return (async () => {
-        try {
-            if (typeof handle.getPath === "function") {
-                return await handle.getPath(); // Chrome 129+: full path
-            }
-        } catch {}
-        return handle.name || "(synced folder)";
-    })();
+// ---- Settings → Cancel: stop a just-picked folder's first sync ----
+/** the pick being synced (its preview or fresh start) and the last pick cancelled */
+let runningPick = "";
+let cancelledPick = "";
+
+/** The manager cancelled pick `token`: its preview or first sync stops at the next step. */
+export function cancelPick(token: string): void {
+    cancelledPick = token;
+}
+
+/** Throw AbortError when the running pick was cancelled. Called between steps. */
+function checkCancel(): void {
+    if (runningPick && runningPick === cancelledPick) throw new DOMException("folder sync cancelled", "AbortError");
+}
+
+async function asPick<T>(token: string | undefined, fn: () => Promise<T>): Promise<T> {
+    runningPick = token ?? "";
+    try {
+        checkCancel();
+        return await fn();
+    } finally {
+        runningPick = "";
+    }
 }
 
 async function refreshKnown(): Promise<void> {
@@ -191,6 +205,7 @@ async function clearPersistedState(): Promise<void> {
  */
 async function scanFolder(handle: any = dirHandle, prefix = "", seen = new Map<string, FileSig>(), progress?: ProgressReporter): Promise<Map<string, FileSig>> {
     for await (const entry of handle.values()) {
+        checkCancel();
         const path = prefix + entry.name;
         if (entry.kind === "directory") {
             if (entry.name.startsWith(".") || entry.name === "node_modules" || entry.name === "__tests__" || folderPathProblem(path)) continue;
@@ -911,6 +926,7 @@ async function reconcile(opts: { dry?: boolean; handle?: any; base?: Map<string,
     const files = [...all.keys()].filter((f) => isScriptFile(f) || isDataFile(f));
     const texts = new Map<string, string>();
     for (const [i, f] of files.entries()) {
+        checkCancel();
         progress.step("reading", i, files.length);
         texts.set(f, await readDiskContent(f, handle));
     }
@@ -923,6 +939,7 @@ async function reconcile(opts: { dry?: boolean; handle?: any; base?: Map<string,
     /** files of scripts renamed while the folder wasn't watched (unchanged on disk since): script id → old file */
     const movedFrom = new Map<string, string>();
     for (const [fileName, sig] of seen) {
+        checkCancel();
         const text = await readFrom(fileName);
         const s = byFile.get(fileName);
         byFile.delete(fileName);
@@ -976,6 +993,7 @@ async function reconcile(opts: { dry?: boolean; handle?: any; base?: Map<string,
         }
     }
     for (const [fileName, s] of byFile) {
+        checkCancel();
         if (caseClash(fileName, scripts, s.id) && [...seen.keys()].some((f) => f.toLowerCase() === fileName.toLowerCase())) continue;
         out.written.push(fileName);
         if (dry) continue;
@@ -1054,11 +1072,11 @@ async function initialSyncData(all: Map<string, FileSig>, readFrom: (f: string) 
 }
 
 /** What picking the saved folder would do (the manager confirms conflicts first). */
-export async function previewStoredHandle(): Promise<FolderPreview | null> {
+export async function previewStoredHandle(token?: string): Promise<FolderPreview | null> {
     const handle = await loadSavedHandle("pendingFolder");
     if (!handle) return null;
     // a newly picked folder has no merge base
-    return serial(() => initialSync({ dry: true, handle, base: new Map() }));
+    return serial(() => asPick(token, () => initialSync({ dry: true, handle, base: new Map() })));
 }
 
 // ---- settings.json: canonical text generated from storage ----
@@ -1619,8 +1637,19 @@ async function ensureSyncAlarm(): Promise<void> {
  * this is a resume (worker restart, permission re-grant): diff against the
  * persisted snapshot so changes made while not watching are applied.
  */
-export function startFromStoredHandle(opts: { fresh?: boolean } = {}): Promise<boolean> {
-    return serial(() => start(opts));
+export function startFromStoredHandle(opts: { fresh?: boolean; token?: string } = {}): Promise<boolean> {
+    return serial(async () => {
+        try {
+            return await asPick(opts.token, () => start(opts));
+        } catch (e: any) {
+            // cancelled: forget the half-synced folder (what was already copied stays, on both sides)
+            if (e?.name === "AbortError") {
+                await stopNow();
+                dlogLevel("sync", "warn", "Folder sync: cancelled, the folder is no longer synced");
+            }
+            throw e;
+        }
+    });
 }
 
 async function start(opts: { fresh?: boolean }): Promise<boolean> {
@@ -1636,6 +1665,7 @@ async function start(opts: { fresh?: boolean }): Promise<boolean> {
         owned = new Map(); // a different folder: no merge base
         ownedData = new Map();
         await initialSync();
+        checkCancel();
         await refreshKnown();
     } else if (!resumingSame) {
         const persisted = await loadPersistedState();
@@ -1673,8 +1703,10 @@ async function start(opts: { fresh?: boolean }): Promise<boolean> {
     if (await readSettingsFile()) await pollSettings();
     else await exportSettings();
     // the data folders on disk win; then the missing files are written
+    checkCancel();
     await pollTweakData();
     await exportTweakDataNow();
+    checkCancel();
     await ensureSupportFiles();
     broadcastStatus();
     dlogLevel("sync", "info", `Folder sync: watching "${displayPath}"`);

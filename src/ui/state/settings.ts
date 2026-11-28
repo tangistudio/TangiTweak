@@ -48,6 +48,8 @@ export const settings = proxy({
         pathWarning: "",
         /** bumped to draw the eye to Folder path */
         flash: 0,
+        /** a just-picked folder is syncing (Cancel shows); "cancelling" once Cancel is clicked */
+        syncing: false as boolean | "cancelling",
     },
     helper: null as HelperReport | null,
     /** About's rows, Latest included */

@@ -92,3 +92,11 @@ export async function clearSavedHandle(key = "scriptFolder"): Promise<void> {
         });
     } catch {}
 }
+
+/** How the folder sync reports a folder: its absolute path when the browser exposes one (getPath), else its name. */
+export async function describeHandle(handle: any): Promise<string> {
+    try {
+        if (typeof handle.getPath === "function") return await handle.getPath();
+    } catch {}
+    return handle.name || "(synced folder)";
+}

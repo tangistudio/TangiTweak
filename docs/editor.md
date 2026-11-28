@@ -411,7 +411,10 @@ pick **Debug+** there to see `level:debug` lines.
 In **Settings → Synced folder**, click **Choose Folder…** and pick a folder
 (e.g. `~/TangiTweaks`) — that becomes your synced folder. **Change Folder…**
 switches to another one (cancelling the picker keeps the current folder),
-and **Disconnect** stops syncing; the folder's files stay. Its subfolders mirror the explorer's folders (empty ones too),
+and **Disconnect** stops syncing; the folder's files stay. While a newly
+picked folder does its first sync the buttons read **Sync In Progress** and
+**Cancel**. Cancel keeps the old folder if it hasn't stopped yet; otherwise no
+folder stays synced, and files already copied stay on both sides. Its subfolders mirror the explorer's folders (empty ones too),
 `.ts` and `.tsx` files are scripts and `.json`, `.md`, `.svg` and image files are
 [data files](scripting.md#imports-folders-and-data-files), at their relative
 paths. Dot entries (`.git`, `.vscode`, `.tangitweak-backup`, …),
