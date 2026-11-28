@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { HelperStrategy, applyHeaderMods, base64ToBytes, bytesToBase64, filterUrlsFor, helperRouteOf, pairsToObject } from "../src/background/engine/strategies/helperStrategy";
 import { helperActive, setHelperActive, strategyUnavailable } from "../src/background/engine/strategies/helperState";
 import { ownedRoutes } from "../src/background/engine/strategies/strategyScripts";
@@ -217,9 +217,10 @@ describe("HelperStrategy ⇄ helper protocol", () => {
         expect(st.routing?.mode).toBe("fixed_servers");
 
         // upstream questions are answered from the user's setting
+        // answered by the sandbox, which takes a variable number of turns
         fake.deliver({ t: "needUpstream", id: 9, url: "https://api.x.com/a", host: "api.x.com" });
-        await settle();
-        expect(fake.sent.find((m) => m.t === "upstream" && m.id === 9).proxy).toBe("PROXY corp:3128; DIRECT");
+        const answer = await vi.waitFor(() => fake.sent.find((m) => m.t === "upstream" && m.id === 9) ?? Promise.reject(new Error("no upstream answer yet")));
+        expect(answer.proxy).toBe("PROXY corp:3128; DIRECT");
     });
 
     it("blocked proxy control → inactive, fall through", async () => {
