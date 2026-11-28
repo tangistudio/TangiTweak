@@ -1,12 +1,9 @@
 /**
  * SW-side access to script compilation/execution.
  *
- * MV2: compileScript runs right here in the persistent background page
- * (eval allowed) — identical to the pre-MV3 behavior.
- *
- * MV3: the service worker's CSP forbids eval, so compilation and handler
- * execution are RPCs into the sandbox page (bridged by the offscreen
- * document) — the ONLY eval-permitted context in MV3:
+ * The background's CSP forbids eval, so compilation and handler execution
+ * are RPCs into the sandbox (src/background/sandboxLink.ts), the only
+ * eval-permitted context:
  *
  *   compileForStorage                  → sandbox 'compileOne'
  *   compileManyForStorage              → sandbox 'compileMany'
@@ -17,19 +14,17 @@
  * scriptStore and the pipeline never call compileScript directly; they go
  * through this module.
  */
-import { compileManyWithLibs, compileScript, compileWithLibs, makeModuleResolver, withData, type DataFileSource } from "../shared/compile";
+import { withData, type DataFileSource } from "../shared/compile";
 import { defaultMeta, type ResMeta } from "../shared/metaParser";
 import type { ParamTree } from "../shared/scriptDef";
 import { dlogLevel } from "../shared/debugLog";
-import { compileDecision } from "../shared/pac";
-import { packBytes, unpackBytes } from "../shared/bytesPack";
+import { sandboxLink, serveSandbox } from "./sandboxLink";
 import type { ScriptRules } from "../shared/rulesProbe";
 import { dataFilesSig, ensureDataFiles } from "./engine/dataFiles";
 import { dataReader, gateCompiled } from "../shared/tweakBundle";
 import { ensurePackages, loadPackages, packagesSig, packagesSnapshot } from "./engine/packageImports";
-import { ensureBuiltins } from "../shared/builtins";
 import { SW_EPOCH } from "./engine/stores";
-import { watchCall } from "../shared/callWatch";
+import { log } from "./engine/logs";
 
 interface PlainScript {
     id: string;
@@ -58,39 +53,20 @@ function paramSig(v: ParamValues | undefined): string {
     return h.toString(36);
 }
 
-// ---- low-level RPC (MV3) ----
+// ---- RPC ----
 
-let seq = 0;
-
-function sandboxCall(payload: any): Promise<any> {
-    return new Promise((resolve, reject) => {
-        // unique across SW restarts: the offscreen document may outlive us
-        const reqId = `sw_${SW_EPOCH}_${++seq}`;
-        // no time limit while the offscreen document says the call is still
-        // running (a handler may wait for the user) — only lost calls fail
-        const watch = watchCall({
-            checkMs: 20000,
-            graceMs: 5000,
-            ask: () =>
-                chrome.runtime.sendMessage({ type: "__resSandboxAlive?", reqId }, (r: any) => {
-                    if (!chrome.runtime.lastError && r?.alive) watch.alive();
-                }),
-            onLost: () => reject(new Error("sandbox RPC timeout")),
-        });
-        // the epoch tells the sandbox when the SW (the store owner) restarted
-        chrome.runtime.sendMessage({ type: "__resSandbox", reqId, extId: chrome.runtime.id, payload: { ...payload, epoch: SW_EPOCH } }, (resp: any) => {
-            watch.stop();
-            if (chrome.runtime.lastError) return reject(new Error(chrome.runtime.lastError.message));
-            if (resp?.error) return reject(new Error(resp.error));
-            resolve(resp);
-        });
-    });
+/** one call; rejects when the sandbox reports an error or the call is lost */
+async function sandboxCall(payload: any): Promise<any> {
+    // the epoch tells the sandbox when the background (the store owner) restarted
+    const resp = await sandboxLink().call({ ...payload, epoch: SW_EPOCH });
+    if (resp?.error) throw new Error(resp.error);
+    return resp;
 }
 
 /**
  * RPC that compiles against the data files and package modules: the
  * sandbox keeps the last set it got and answers `needDataFiles` when its
- * signature differs — then (only) the files ride along.
+ * signature differs; then (only) the files ride along.
  */
 async function sandboxCallWithData(payload: any): Promise<any | null> {
     const dataFiles = await ensureDataFiles();
@@ -101,19 +77,21 @@ async function sandboxCallWithData(payload: any): Promise<any | null> {
 }
 
 /**
- * RPC with a null fallback — callers treat null as graceful passthrough.
- * On failure the offscreen document is torn down and the call retried once
- * with a fresh one (heals a dead/zombie document, e.g. after an extension
- * reload or a Chrome shutdown race).
+ * RPC with a null fallback: callers treat null as graceful passthrough.
+ * On failure the host is torn down and the call retried once with a fresh
+ * one (heals a dead/zombie document, e.g. after an extension reload or a
+ * Chrome shutdown race).
  */
 async function sandboxCallSafe(payload: any): Promise<any | null> {
+    const link = sandboxLink();
     try {
+        await link.ensure();
         return await sandboxCall(payload);
     } catch (e: any) {
-        dlogLevel("compile", "warn", `sandbox RPC failed (${payload?.op}) — recreating offscreen host: ${e?.message || e}`);
-        await closeOffscreen();
+        dlogLevel("compile", "warn", `sandbox RPC failed (${payload?.op}) — recreating the sandbox host: ${e?.message || e}`);
+        await link.close();
         try {
-            await ensureOffscreen(true);
+            await link.ensure(true);
             const out = await sandboxCall(payload);
             dlogLevel("compile", "info", `sandbox RPC recovered after host recreation (${payload?.op})`);
             return out;
@@ -124,100 +102,24 @@ async function sandboxCallSafe(payload: any): Promise<any | null> {
     }
 }
 
-/** Firefox: no chrome.offscreen, so the event page frames the sandbox host itself */
-const HOST_FRAME_ID = "tt-sandbox-host";
-
-async function closeOffscreen(): Promise<void> {
-    if (__FIREFOX__) document.getElementById(HOST_FRAME_ID)?.remove();
-    else
-        await new Promise<void>((resolve) => {
-            (chrome as any).offscreen.closeDocument(() => {
-                void chrome.runtime.lastError;
-                resolve();
-            });
-        });
-}
-
-let readyPromise: Promise<void> | null = null;
-
-/** Ensure the offscreen document (the sandbox host) exists AND its listener answers. */
-async function ensureOffscreen(force = false): Promise<void> {
-    const runtime = chrome.runtime as any;
-    if (!force && readyPromise) return readyPromise;
-    readyPromise = (async () => {
-        if (__FIREFOX__) {
-            if (force || !document.getElementById(HOST_FRAME_ID)) {
-                document.getElementById(HOST_FRAME_ID)?.remove();
-                const frame = document.createElement("iframe");
-                frame.id = HOST_FRAME_ID;
-                frame.src = "offscreen.html";
-                document.body.appendChild(frame);
-            }
-        } else if (!force && runtime.getContexts) {
-            const ctx = await runtime.getContexts({ contextTypes: ["OFFSCREEN_DOCUMENT"] });
-            if (ctx && ctx.length) return;
-        }
-        if (!__FIREFOX__) await new Promise<void>((resolve) => {
-            (chrome as any).offscreen.createDocument(
-                {
-                    url: "offscreen.html",
-                    reasons: ["IFRAME_SCRIPTING"],
-                    justification: "Compile and run user scripts in the MV3 sandbox (eval is forbidden in service workers)",
-                },
-                () => {
-                    void chrome.runtime.lastError;
-                    resolve();
-                }
-            );
-        });
-        // readiness ping: the offscreen listener must actually answer (the
-        // document loads html + script + a sandbox iframe — a blind fixed
-        // sleep raced it and corrupted first saves)
-        for (let i = 0; i < 25; i++) {
-            try {
-                await sandboxCall({ op: "ping" });
-                return;
-            } catch {
-                await new Promise((r) => setTimeout(r, 200));
-            }
-        }
-        throw new Error("sandbox host not ready");
-    })().finally(() => {
-        readyPromise = null;
-    });
-    return readyPromise;
-}
-
-if (__MV3__) {
-    // reverse calls from the sandbox: storage + logging
-    chrome.runtime.onMessage.addListener((msg: any, _s, sendResponse) => {
-        if (!msg || msg.type !== "__resReverse") return false;
-        const payload = msg.payload || {};
+// reverse calls from the sandbox: storage + logging
+serveSandbox({
+    reverse: async (payload: any) => {
         if (payload.op === "log") {
-            import("./engine/logs").then(({ log }) => log(typeof payload.tabId === "number" ? payload.tabId : -1, payload.msg, payload.level || "info", payload.scriptId, payload.netKind === "observed" || payload.netKind === "modified" || payload.netKind === "missed" ? payload.netKind : undefined, undefined, typeof payload.requestId === "string" ? payload.requestId : undefined));
-            sendResponse({});
-            return false;
+            log(typeof payload.tabId === "number" ? payload.tabId : -1, payload.msg, payload.level || "info", payload.scriptId, payload.netKind === "observed" || payload.netKind === "modified" || payload.netKind === "missed" ? payload.netKind : undefined, undefined, typeof payload.requestId === "string" ? payload.requestId : undefined);
+            return {};
         }
         if (payload.op === "paramSet") {
-            import("./engine/scriptStore").then(({ setParamFromCode }) => setParamFromCode(payload.scriptId, payload.key, payload.value)).then(() => sendResponse({}), () => sendResponse({}));
-            return true;
+            const { setParamFromCode } = await import("./engine/scriptStore");
+            await setParamFromCode(payload.scriptId, payload.key, payload.value).catch(() => {});
+            return {};
         }
-        if (payload.op === "storageGet" || payload.op === "storageSet") {
-            void (async () => {
-                const { scriptStorageGet, scriptStorageSet } = await import("./engine/scriptStore");
-                if (payload.op === "storageGet") {
-                    const value = await scriptStorageGet(payload.scriptId, payload.key);
-                    sendResponse({ value });
-                } else {
-                    await scriptStorageSet(payload.scriptId, payload.key, payload.value);
-                    sendResponse({});
-                }
-            })();
-            return true;
-        }
-        return false;
-    });
-}
+        const { scriptStorageGet, scriptStorageSet } = await import("./engine/scriptStore");
+        if (payload.op === "storageGet") return { value: await scriptStorageGet(payload.scriptId, payload.key) };
+        if (payload.op === "storageSet") await scriptStorageSet(payload.scriptId, payload.key, payload.value);
+        return {};
+    },
+});
 
 // ---- public API ----
 
@@ -261,16 +163,6 @@ export async function compileForStorage(
     // a save retries the script's own failed package downloads
     await ensurePackages([target], { retry: true, data: ctx?.data });
     await ensurePackages(scripts, { data: ctx?.data });
-    if (!__MV3__) {
-        await ensureBuiltins([code, ...scripts.map((s) => s.code)], packagesSnapshot()).catch(() => {}); // unloaded: React imports stub
-        const c = compileWithLibs(target, scripts, values, data, packagesSnapshot());
-        dlogLevel(
-            "compile", "debug",
-            `compiled "${label}" → active=${c.meta.active} match=${JSON.stringify(c.meta.match)} params=[${Object.keys(c.paramDefs || {}).join(", ")}] deps=[${c.deps.join(", ")}]${c.error ? " — compile error (in the Problems view)" : ""}`
-        );
-        return gate({ meta: c.meta, paramDefs: c.paramDefs || {}, error: c.error });
-    }
-    await ensureOffscreen();
     const resp = await sandboxCallWithData({ op: "compileOne", target, scripts, paramValues: values, extraData: ctx?.data });
     const r = resp?.result;
     if (!r) {
@@ -308,24 +200,15 @@ export async function compileManyForStorage(
         dlogLevel("compile", "debug", `compiled "${name}" → active=${r.meta.active} match=${JSON.stringify(r.meta.match)} params=[${Object.keys(r.paramDefs || {}).join(", ")}] deps=[${(r.deps || []).join(", ")}]${r.error ? " — compile error (in the Problems view)" : ""}`);
         out.set(id, gateCompiled(name ?? "", { meta: r.meta, paramDefs: r.paramDefs || {}, error: r.error }, names, read));
     };
-    if (!__MV3__) {
-        await ensureBuiltins(scripts.map((s) => s.code), packagesSnapshot()).catch(() => {});
-        for (const [id, c] of compileManyWithLibs(ids, scripts, paramValues, await ensureDataFiles(), packagesSnapshot())) note(id, c);
-    } else {
-        await ensureOffscreen();
-        const resp = await sandboxCallWithData({ op: "compileMany", ids, scripts, paramValues });
-        for (const id of ids) {
-            const r = resp?.results?.[id];
-            if (r) note(id, r);
-            else dlogLevel("compile", "warn", `compileManyForStorage: sandbox returned nothing for "${scripts.find((s) => s.id === id)?.name}" — its meta is NOT updated`);
-        }
+    const resp = await sandboxCallWithData({ op: "compileMany", ids, scripts, paramValues });
+    for (const id of ids) {
+        const r = resp?.results?.[id];
+        if (r) note(id, r);
+        else dlogLevel("compile", "warn", `compileManyForStorage: sandbox returned nothing for "${scripts.find((s) => s.id === id)?.name}" — its meta is NOT updated`);
     }
     dlogLevel("compile", "debug", `timing: compiled ${ids.length} importer(s) in one pass — ${Math.round(performance.now() - t0)} ms`);
     return out;
 }
-
-// MV2: the last analyze (every frame's bundle asks; scripts rarely change in between)
-let mv2Analyzed: { key: string; out: Map<string, Analyzed> } | null = null;
 
 /**
  * Analyze ALL scripts (meta.routes/paramDefs/deps) with the stored param
@@ -350,48 +233,17 @@ async function analyzeUngated(scripts: { id: string; name: string; code: string;
     await ensureDataFiles();
     await ensurePackages(scripts);
     const sig = paramSig(paramValues) + "." + dataFilesSig() + "." + packagesSig();
-    if (__MV3__) {
-        // FAST PATH: chrome.storage.session-cached analyses, valid while no
-        // script's updatedAt changed. A freshly-woken SW serves a page's
-        // getHookBundle from here (one storage read) instead of booting the
-        // offscreen doc + sandbox — the difference between onDocument running at
-        // document_start and after the page already initialized.
-        const cached = await readAnalyzeCache();
-        if (cached && scripts.every((s) => cached[s.id]?.updatedAt === s.updatedAt && cached[s.id]?.paramSig === sig && cached[s.id]?.name === s.name)) {
-            for (const s of scripts) out.set(s.id, cached[s.id].analyzed);
-            dlogLevel("compile", "debug", `analyze cache hit — ${scripts.length} script(s) served from session storage (no sandbox round-trip)`);
-            return out;
-        }
-    }
-    if (!__MV3__) {
-        // MV2: in-page compile, same as before
-        const key = sig + "\n" + JSON.stringify(scripts.map((s) => [s.id, s.name, s.updatedAt]));
-        if (mv2Analyzed?.key === key) {
-            dlogLevel("compile", "debug", `analyze cache hit — ${scripts.length} script(s)`);
-            return new Map(mv2Analyzed.out);
-        }
-        const t0 = performance.now();
-        await ensureBuiltins(scripts.map((s) => s.code), packagesSnapshot()).catch(() => {});
-        const resolver = makeModuleResolver(
-            scripts.map((s) => ({ id: s.id, name: s.name, code: s.code })),
-            (lib) => ({ paramValues: paramValues?.[lib.id] }),
-            { dataFiles: await ensureDataFiles(), packages: packagesSnapshot() }
-        );
-        for (const s of scripts) {
-            resolver.deps.clear();
-            const c = compileScript(s.code, { name: s.name, importModule: resolver.resolveFrom(s.name), paramValues: paramValues?.[s.id] });
-            out.set(s.id, {
-                meta: c.meta,
-                paramDefs: c.paramDefs || {},
-                error: c.error,
-                deps: [...resolver.deps],
-            });
-        }
-        mv2Analyzed = { key, out: new Map(out) };
-        dlogLevel("compile", "debug", `timing: analyzed ${scripts.length} script(s) — ${Math.round(performance.now() - t0)} ms`);
+    // FAST PATH: chrome.storage.session-cached analyses, valid while no
+    // script's updatedAt changed. A freshly-woken SW serves a page's
+    // getHookBundle from here (one storage read) instead of booting the
+    // offscreen doc + sandbox — the difference between onDocument running at
+    // document_start and after the page already initialized.
+    const cached = await readAnalyzeCache();
+    if (cached && scripts.every((s) => cached[s.id]?.updatedAt === s.updatedAt && cached[s.id]?.paramSig === sig && cached[s.id]?.name === s.name)) {
+        for (const s of scripts) out.set(s.id, cached[s.id].analyzed);
+        dlogLevel("compile", "debug", `analyze cache hit — ${scripts.length} script(s) served from session storage (no sandbox round-trip)`);
         return out;
     }
-    await ensureOffscreen();
     const t0 = performance.now();
     const resp = await sandboxCallWithData({ op: "analyze", scripts: scripts.map((s) => ({ ...s, enabled: true })), paramValues: paramValues || {} });
     if (!resp) {
@@ -441,7 +293,7 @@ async function persistAnalyzeCache(entries: { id: string; name: string; updatedA
 
 /**
  * Run a body op (requestDecision / transform / responseHeaders)
- * in the sandbox — MV3 only (MV2 executes handlers in-place). Returns null
+ * in the sandbox. Returns null
  * on any failure (callers treat it as passthrough).
  */
 export async function runBodyOp(
@@ -450,20 +302,17 @@ export async function runBodyOp(
     op: "requestDecision" | "transform" | "responseHeaders",
     args: Record<string, any>
 ): Promise<any | null> {
-    await ensureOffscreen();
-    // bytes are packed for JSON messaging (offscreen.ts unpacks them)
-    const out = unpackBytes(await sandboxCallWithData({ op: "run", runOp: op, scripts, paramValues, args: packBytes(args) }));
+    const out = await sandboxCallWithData({ op: "run", runOp: op, scripts, paramValues, args });
     dlogLevel("compile", "debug", `runBodyOp ${op} → ${JSON.stringify(out)?.slice(0, 120)}`);
     return out;
 }
 
 /**
- * MV3: one background hook of one script in the sandbox: a `tweak.every`
+ * One background hook of one script in the sandbox: a `tweak.every`
  * run, an interval read or the `tweak.onToastAction` handlers
  * (src/shared/everyRun.ts). Throws when the sandbox can't run it.
  */
 export async function runHookOp(scripts: PlainScript[], paramValues: Record<string, any>, args: Record<string, any>): Promise<any> {
-    await ensureOffscreen();
     const out = await sandboxCallWithData({ op: "hook", scripts, paramValues, args });
     if (!out) throw new Error("the sandbox didn't answer");
     if (out.error) throw new Error(out.error);
@@ -471,28 +320,20 @@ export async function runHookOp(scripts: PlainScript[], paramValues: Record<stri
 }
 
 /**
- * MV3: run every enabled script's `rules` handlers once in the sandbox and
+ * Run every enabled script's `rules` handlers once in the sandbox and
  * translate them (src/shared/rulesProbe.ts). null on failure.
  */
 export async function probeRules(scripts: PlainScript[], paramValues: Record<string, any>, tabIds?: number[], storeSnaps?: Record<string, any>): Promise<Record<string, ScriptRules> | null> {
-    await ensureOffscreen();
     const out = await sandboxCallWithData({ op: "rules", scripts, paramValues, tabIds, storeSnaps });
     return out?.results ?? null;
 }
 
-let pacCache: { source: string; fn: (url: string, host: string) => string } | null = null;
-
 /**
  * Evaluate the user's proxy decision (`__resUser` source from shared/pac)
- * for one URL — MV2 in-page, MV3 in the sandbox (needs eval). "DIRECT" on
+ * for one URL in the sandbox (needs eval). "DIRECT" on
  * failure.
  */
 export async function evalProxyDecision(source: string, url: string, host: string): Promise<string> {
-    if (!__MV3__) {
-        if (pacCache?.source !== source) pacCache = { source, fn: compileDecision(source) };
-        return pacCache.fn(url, host);
-    }
-    await ensureOffscreen();
     const out = await sandboxCallSafe({ op: "pac", source, args: { url, host } });
     return typeof out?.result === "string" ? out.result : "DIRECT";
 }

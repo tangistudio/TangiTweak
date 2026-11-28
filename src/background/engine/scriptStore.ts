@@ -10,7 +10,7 @@ import { ensurePackages, packageUrlsIn, prunePackages } from "./packageImports";
 import { dlogLevel } from "../../shared/debugLog";
 import { clearScriptErrors, clearScriptTypeErrors, log } from "./logs";
 import { findParamDef, getParamAtPath, isValidParamValue, resolveParamValues, setParamAtPath, type ParamTree } from "../../shared/scriptDef";
-import { DATA_FILES_KEY, FOLDERS_KEY, MAX_DATA_FILE, setDataFilesSnapshot, type DataFile } from "./dataFiles";
+import { DATA_FILES_KEY, FOLDERS_KEY, MAX_DATA_FILE, localGet, setDataFilesSnapshot, type DataFile } from "./dataFiles";
 import { allFolders, ancestorFolders, isInFolder, movedPath, stackingOrder } from "../../shared/folders";
 import { dataFilePathProblem, folderPathProblem, scriptNameProblem, scriptFileKey } from "../../shared/scriptName";
 
@@ -33,20 +33,7 @@ const ORDER_KEY = "resScriptOrder";
 /** the extension version that compiled the stored meta */
 const META_VERSION_KEY = "resMetaVersion";
 
-// MV2 browsers don't support promise-based chrome.storage — wrap callbacks.
-function storageGet(keys: string | string[] | null): Promise<Record<string, any>> {
-    return new Promise((resolve) => {
-        let settled = false;
-        const finish = (d: any) => {
-            if (settled) return;
-            settled = true;
-            void chrome.runtime?.lastError;
-            resolve(d || {});
-        };
-        const ret: any = chrome.storage.local.get(keys as any, finish);
-        if (ret && typeof ret.then === "function") void ret.then(finish, () => finish({}));
-    });
-}
+const storageGet = localGet;
 
 function storageSet(items: Record<string, any>): Promise<void> {
     return new Promise((resolve) => {

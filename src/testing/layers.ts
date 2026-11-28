@@ -32,12 +32,10 @@ export const BROWSER_ENV: Record<
     {
         /** Whether the browser is Firefox. */
         firefox: boolean;
-        /** Whether the extension runs as Manifest V3 (both do). */
-        mv3: boolean;
     }
 > = {
-    chrome: { firefox: false, mv3: true },
-    firefox: { firefox: true, mv3: true },
+    chrome: { firefox: false },
+    firefox: { firefox: true },
 };
 
 /** A handler that didn't run for a request and why. */
@@ -295,7 +293,6 @@ const dec = new TextDecoder();
  */
 export async function requestThroughLayers(env: LayerEnv, req: LayerRequest): Promise<LayerResult> {
     const { url, method, resourceType: type } = req;
-    const mv3 = env.browser === "chrome";
     // Chromium serves an extension or rules mock by redirect: the layer's response handlers never see it
     const mockFlows = (layer: Strategy) => layer !== "rules" && (layer !== "extension" || env.browser === "firefox");
     const skipped: SkippedHandler[] = [];
@@ -368,7 +365,7 @@ export async function requestThroughLayers(env: LayerEnv, req: LayerRequest): Pr
             continue;
         }
         if (layer === "debugger" && type === "main_frame" && req.firstDocument && mine.length) {
-            const why = `may miss it: ${debuggerMissedLine("page load", url, [...new Set(mine.map((r) => r.scriptName))], mv3)}`;
+            const why = `may miss it: ${debuggerMissedLine("page load", url, [...new Set(mine.map((r) => r.scriptName))])}`;
             for (const r of mine) skip(r, why);
         }
         reached.push(layer);

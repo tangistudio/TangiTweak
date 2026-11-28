@@ -1,8 +1,7 @@
 /**
  * Page strategy — MAIN-world page hook. STATIC file: contains no eval and no user
- * code, so page CSP (however strict) cannot break it. (MV2 compiles onSite
- * code here with `new Function`; Chrome MV3 gets it as user scripts —
- * shared/siteCode.ts — and this build has no eval at all.)
+ * code, so page CSP (however strict) cannot break it. onSite code arrives
+ * as user scripts (shared/siteCode.ts); this build has no eval at all.
  *
  * It patches fetch/XHR and, per request, relays bodies through the
  * isolated-world bridge to the background, where user transforms run.
@@ -10,7 +9,7 @@
  */
 import { formatScriptError } from "../shared/scriptError";
 import { makeScriptConsole, formatLogArgs, scriptLogLine, type ScriptLogLevel } from "../shared/scriptLog";
-import { scriptFunction, withTweak, type RawScriptFn, type ScriptFn } from "../shared/scriptFn";
+import { withTweak, type RawScriptFn, type ScriptFn } from "../shared/scriptFn";
 import { siteUnits, unitsGate, type PackageFn } from "../shared/siteCode";
 import { makeLibRequire, type ShippedLib } from "../shared/scriptImports";
 import { followsNav, indexRoutes, takesBinary, type DocumentWhen, type RouteMeta, type ScriptLayers } from "../shared/route";
@@ -88,10 +87,10 @@ import { watchCall, type CallWatch } from "../shared/callWatch";
     let dead = false;
     let domHandlers: { scriptId: string; name: string; src: string; params?: Record<string, any>; v?: string; fk?: string; layers?: ScriptLayers }[] = [];
     let libSources: ShippedLib[] = [];
-    /** MV3: why onSite code doesn't run (user scripts are off), if it doesn't */
+    /** why onSite code doesn't run (user scripts are off), if it doesn't */
     let siteOff: string | null = null;
     /**
-     * MV3: the onSite code that arrived as user scripts (shared/siteCode.ts).
+     * the onSite code that arrived as user scripts (shared/siteCode.ts).
      * A status naming units that aren't here (a hot update, a page back from
      * the back/forward cache) asks the extension for them, again every
      * UNITS_RETRY_MS while they're missing, and compiles once they are here,
@@ -99,16 +98,16 @@ import { watchCall, type CallWatch } from "../shared/callWatch";
      */
     const UNITS_WAIT_MS = 5000;
     const UNITS_RETRY_MS = 1500;
-    const units = __NO_EVAL__ ? siteUnits(() => gate.unit()) : null;
+    const units = siteUnits(() => gate.unit());
     /** the bundle's units that aren't here: their keys, or the names of what they hold */
     function missingUnits(names = false): string[] {
-        if (!units || siteOff !== null) return [];
+        if (siteOff !== null) return [];
         const out: string[] = [];
         for (const d of domHandlers) if (d.fk && !units.get(d.fk)) out.push(names ? d.name : d.fk);
         for (const l of libSources) if (l.fk && !units.get(l.fk)) out.push(names ? l.name : l.fk);
         return out;
     }
-    /** compiles the onSite code once its units are here (MV3; MV2: at once) */
+    /** compiles the onSite code once its units are here */
     const gate = unitsGate({
         missing: () => missingUnits(),
         ask: (keys) => {
@@ -121,16 +120,15 @@ import { watchCall, type CallWatch } from "../shared/callWatch";
         waitMs: UNITS_WAIT_MS,
         retryMs: UNITS_RETRY_MS,
     });
-    /** a script's or imported module's function (`fk`: its unit, MV3) */
+    /** a script's or imported module's function (`fk`: its unit) */
     function scriptFn(name: string, src: string, fk?: string): ScriptFn {
-        if (!__NO_EVAL__) return scriptFunction(src, name);
-        const fn = fk ? units!.get(fk) : undefined;
+        const fn = fk ? units.get(fk) : undefined;
         if (!fn) throw new Error(`${name}'s onSite code isn't on this page: reload the page to run it`);
         return withTweak(fn as RawScriptFn, name);
     }
-    /** a package module's function (MV3: its unit) */
+    /** a package module's function (its unit) */
     function packageFn(lib: ShippedLib): PackageFn {
-        const fn = lib.fk ? units!.get(lib.fk) : undefined;
+        const fn = lib.fk ? units.get(lib.fk) : undefined;
         if (!fn) throw new Error(`${lib.name} isn't on this page: reload the page to run it`);
         return fn as PackageFn;
     }
@@ -152,7 +150,7 @@ import { watchCall, type CallWatch } from "../shared/callWatch";
     const earlyCalls: [string, RpcCall, (r: RpcResult) => void, string | undefined][] = [];
     /**
      * Calls from onPage code whose onSite code isn't here yet. A save reaches
-     * that code (MV3: a user-script world) and this hook separately, so it can
+     * that code (a user-script world) and this hook separately, so it can
      * call before the status that brings the onSite code. It tags calls to
      * handles whose route matches the page with `v`, its version of the
      * script (`domHandlers[].v`): a call for a version this hook hasn't
@@ -342,7 +340,7 @@ import { watchCall, type CallWatch } from "../shared/callWatch";
      */
     function compileAndScheduleDocument(hot: boolean): void {
         compiled = true;
-        // MV3 with user scripts off: none of it is here (calls say why, answerCall)
+        // user scripts off: none of it is here (calls say why, answerCall)
         if (domHandlers.length === 0 || siteOff !== null) return;
         // module registry over the shipped module sources and data files:
         // the page-side `require` backing ES imports ("./utils" → the script
@@ -353,14 +351,13 @@ import { watchCall, type CallWatch } from "../shared/callWatch";
             libSources,
             (lib, require, moduleObj) =>
                 scriptFn(lib.name, lib.src!, lib.fk)(entry?.host ?? makeDocumentShim(null, lib.name, lib.params || {}).host, scriptConsole(entry?.id ?? null, lib.name), require, moduleObj, moduleObj.exports),
-            { builtin: siteBuiltin, onSite: true, ...(__NO_EVAL__ ? { packageFn } : {}) }
+            { builtin: siteBuiltin, onSite: true, packageFn }
         );
         const compiledDocument: { scriptId: string; name: string; when: DocumentWhen; d: PageDocumentHandler; exposer: Exposer; life: ScriptLife; gen: Generation }[] = [];
         /** each compiled script's handlers, for its NavRoutes */
         const navSets: { scriptId: string; name: string; dom: PageDocumentHandler[]; exposer: Exposer; life: ScriptLife; gen: Generation }[] = [];
         const gens: [ScriptLife, Generation][] = [];
         const commit = () => gens.forEach(([life, gen]) => life.commit(gen));
-        let cspBlocked = false;
         // a repeated status after the handlers fired recompiles but fires nothing: the exposers stay
         const refire = hot || !domFired;
         if (refire)
@@ -419,20 +416,9 @@ import { watchCall, type CallWatch } from "../shared/callWatch";
                     life.discard(gen);
                     gens.pop();
                 }
-                // Chrome names 'unsafe-eval'; Firefox throws "call to Function() blocked by CSP"
-                if (!__NO_EVAL__ && (e?.name === "EvalError" || /Evaluating a string as JavaScript|unsafe-eval|blocked by CSP/i.test(e?.message || ""))) {
-                    cspBlocked = true;
-                } else {
-                    scriptLogUp(d.scriptId, "error", formatScriptError(d.name, e, "onSite compile"));
-                }
+                scriptLogUp(d.scriptId, "error", formatScriptError(d.name, e, "onSite compile"));
             }
             ex?.done();
-        }
-        if (cspBlocked) {
-            logUp("page CSP blocks eval in the page world — running onSite handlers in the isolated world instead", "info");
-            try {
-                window.postMessage({ source: HOOK_SOURCE, kind: "cspBlocked", hot }, "/");
-            } catch {}
         }
         if (compiledDocument.length === 0 && !navSets.some((n) => n.dom.some((h) => followsNav(h.route)))) {
             for (const n of navSets) navsOf(n.scriptId).set({ dom: [], url: location.href, fire: () => {}, stop: () => {}, schedule: scheduleDocument });

@@ -3,11 +3,9 @@ import { defineConfig } from "vitest/config";
 
 const src = (p: string) => fileURLToPath(new URL(`./src/${p}`, import.meta.url));
 
-// unit tests exercise the MV2 code paths: inject the build flag the
-// rolldown build would provide (transform.define)
+// inject the build flags the rolldown build provides (transform.define)
 export default defineConfig({
     define: {
-        __MV3__: "false",
         __FIREFOX__: "false",
         __NO_EVAL__: "false",
         __COMMIT__: JSON.stringify("test"),

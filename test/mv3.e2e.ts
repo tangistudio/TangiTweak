@@ -345,7 +345,6 @@ try {
         await checkHotReload(ctx, mgr, ORIGIN, check, { label: " (MV3)" });
         await checkSiteHotReload(ctx, mgr, ORIGIN, check, {
             label: " (MV3)",
-            cspWorld: "site",
             async failNextRun() {
                 const w = ctx.serviceWorkers().find((x: any) => x.url().includes(extId));
                 if (!w) return false;

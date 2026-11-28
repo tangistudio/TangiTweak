@@ -106,7 +106,7 @@ The handler doesn't run, and the Problems view gets a warning under the
 script for each such handler, e.g.
 
 ```text
-onResponseBody #1: onResponseBody never runs with strategy "extension" on Chromium — its webRequest API can't read response bodies. Use "page" (page fetch/XHR, no banner), "debugger" (any resource, debugger banner) or "helper" (local helper)
+onResponseBody #1: strategy "extension" is not available in Chrome (Manifest V3 removed blocking webRequest, which it relies on) — this handler doesn't run. Set another strategy on the route
 ```
 
 Cases warned about as soon as scripts load:
@@ -114,7 +114,6 @@ Cases warned about as soon as scripts load:
 - the strategy doesn't exist in this build — `extension` on Chrome,
   `helper` or `debugger` on Firefox, `rules` in a browser without
   `declarativeNetRequest`;
-- `onResponseBody` on `extension` on Chromium (its webRequest can't read bodies);
 - `onResponseHeaders` on `page` (the page can't change response headers
   before the browser enforces them);
 - `page` with `resourceTypes` that leave out `xmlhttprequest`;

@@ -47,11 +47,9 @@ function mockChrome(o: { granted?: boolean; off?: "throw" | "reject" | "missing"
 
 describe("chrome.userScripts (MV3 isolated onPage)", () => {
     beforeEach(() => {
-        (globalThis as any).__MV3__ = true;
         resetUserScripts();
     });
     afterEach(() => {
-        (globalThis as any).__MV3__ = false;
         vi.unstubAllGlobals();
     });
 

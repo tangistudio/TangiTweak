@@ -827,37 +827,6 @@ export interface WireOps {
         /** The chunk's JS source. */
         res: string;
     };
-    /**
-     * L2 (MV2/Firefox, where the bridge runs isolated onPage code): let
-     * script `s`'s isolated code at `url` use its stores. Its store ops then
-     * go over L2 tagged `ISO_STORE_TAG + s` (the overlay's are tagged `s`).
-     * Refused on Chrome MV3, for another origin or when the script has no
-     * isolated onPage code there.
-     */
-    "iso.stores": {
-        req: {
-            /** The frame's URL. */
-            url: string;
-        };
-        res: {};
-    };
-    /**
-     * L2 (MV2/Firefox): `tweak.fetch` from script `s`'s isolated onPage
-     * code, which the bridge runs. The background fetches, reaching only the
-     * script's `"tangitweak.connect"` hosts. Refused like `iso.stores`.
-     */
-    "iso.fetch": {
-        req: {
-            /** The frame's URL. */
-            url: string;
-            /** The request. */
-            request: WireRequest;
-            /** True to keep every script's handlers away from it. */
-            bypass: boolean;
-        };
-        /** The response, its body read in full. */
-        res: WireResponse;
-    };
     /** L6: this world's onPage or debugger-safe onOverlay code ran on its document, once per document. The background tags the document's Network row. */
     ran: {
         push: {
@@ -932,17 +901,6 @@ export interface WireOps {
      */
     toast: {
         req: {
-            /** The toast, checked by the caller's shim. */
-            spec: ToastSpec;
-        };
-        /** What became of it. */
-        res: ToastResult;
-    };
-    /** L2: `tweak.toast` from MV2/Firefox isolated onPage code, which the bridge runs. Checked like `iso.fetch`. */
-    "iso.toast": {
-        req: {
-            /** The frame's URL. */
-            url: string;
             /** The toast, checked by the caller's shim. */
             spec: ToastSpec;
         };
@@ -1138,15 +1096,6 @@ export interface IsoInit {
      */
     shadowOverlay?: boolean | "all";
 }
-
-/**
- * L2: the tag prefix of isolated onPage code's store ops (MV2/Firefox).
- * The bridge sends them with `s` set to this prefix plus the script id, so
- * the background tells them from the same script's overlay ops (tagged
- * with the bare id) and checks them against the `iso.stores` grant.
- * Patches and rejects come back tagged the same way.
- */
-export const ISO_STORE_TAG = "iso\u0000";
 
 /**
  * What an overlay frame needs to run its script: the answer to

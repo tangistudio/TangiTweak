@@ -1,20 +1,15 @@
 /**
- * The background's `tweak.globalStore` owner and the links to it:
- *
- *   MV2 — scripts compile right here: one in-process replica hub, joined
- *         to the owner by an endpoint pair, shared by every strategy's
- *         compiled instance (so a store is one object across them).
- *   MV3 — scripts compile in the sandbox: its hub talks to the owner over
- *         the L1 link (sandbox ⇄ offscreen ⇄ chrome.runtime ⇄ here). The
- *         link also serves the sandbox's `tweak.fetch`.
+ * The background's `tweak.globalStore` owner and the link to it: scripts
+ * compile in the sandbox, whose hub talks to the owner over the L1 link
+ * (sandboxLink.ts: sandbox ⇄ offscreen document or iframe ⇄ here). The link
+ * also serves the sandbox's `tweak.fetch`.
  */
-import { Endpoint, endpointPair, type Json, type StorePersist, type WireRequest, type WireResponse } from "../../shared/wire";
-import { ReplicaHub } from "../../shared/storeReplica";
-import { packBytes, unpackBytes } from "../../shared/bytesPack";
+import { Endpoint, type Json, type StorePersist, type WireRequest, type WireResponse } from "../../shared/wire";
+import { sandboxLink, serveSandbox } from "../sandboxLink";
 import { isTabScope, jsonBytes, tabScopeId } from "../../shared/storeOps";
 import { StoreOwner } from "./storeOwner";
 import { log } from "./logs";
-import { scriptStorageAll, scriptStorageSet, scriptStorageDelete, getScript, listScripts, onScriptsChanged } from "./scriptStore";
+import { scriptStorageAll, scriptStorageSet, scriptStorageDelete, getScript, listScripts } from "./scriptStore";
 import { backgroundFetch } from "./ttFetch";
 import { ensureDataFiles } from "./dataFiles";
 import { bundleOf, dataReader } from "../../shared/tweakBundle";
@@ -29,7 +24,7 @@ export const storeOwner = new StoreOwner({
     storageAll: (s) => scriptStorageAll(s),
     storageSet: (s, k, v) => scriptStorageSet(s, k, v),
     storageDelete: (s, k) => scriptStorageDelete(s, k),
-    ...(__MV3__
+    ...((globalThis as any).chrome?.storage?.session
         ? {
               sessionGet: async (k: string) => (await chrome.storage.session.get(k))?.[k],
               sessionSet: (k: string, v: unknown) => chrome.storage.session.set({ [k]: v }),
@@ -121,7 +116,7 @@ export function setBackgroundFetchGate(fn: FetchGate | null): void {
     fetchGate = fn;
 }
 
-/** Runs the background fetch check (MV2 calls it before its in-process fetch). */
+/** Runs the background fetch check before a script's background fetch. */
 export function gateBackgroundFetch(scriptId: string, url: string): Promise<void> {
     return fetchGate ? fetchGate(scriptId, url) : Promise.resolve();
 }
@@ -163,54 +158,24 @@ export async function pageFetchFor(scriptId: string, request: WireRequest, bypas
     return backgroundFetch(request, { bypass, scriptId, scriptName: script.meta.name });
 }
 
-// ---- MV2: the in-process hub ----
-
-let hub: ReplicaHub | null = null;
-
-/** MV2: the replicas the background's compiled scripts use */
-export function backgroundHub(): ReplicaHub {
-    if (!hub) {
-        hub = new ReplicaHub({ ctx: "bg", log: ownerLog });
-        const [replicaSide, ownerSide] = endpointPair();
-        storeOwner.attach(ownerSide, { all: true });
-        hub.attach(replicaSide);
-    }
-    return hub;
-}
-
-/**
- * Before scripts compile (reload): drop the stores of deleted scripts and,
- * in MV2, load the others' current state into the hub so `tweak.globalStore`
- * returns real data synchronously.
- */
+/** Before scripts compile (reload): drop the stores of deleted scripts. The sandbox primes its own hub (store.init). */
 export async function prepareStores(scriptIds: string[]): Promise<void> {
     storeOwner.retain(scriptIds);
-    if (__MV3__) return; // the sandbox primes its own hub (store.init)
-    const h = backgroundHub();
-    h.retain(scriptIds);
-    h.prime(await storeOwner.init(scriptIds.filter((s) => !h.isPrimed(s))));
 }
 
-// ---- MV3: the L1 link to the sandbox ----
+// ---- the L1 link to the sandbox ----
 
-/** a random id per service-worker start: the sandbox re-syncs its stores when it changes */
+/** a random id per background start: the sandbox re-syncs its stores when it changes */
 export const SW_EPOCH = Math.random().toString(36).slice(2, 10);
 
-if (__MV3__) {
-    const l1 = new Endpoint((msg) => {
-        chrome.runtime.sendMessage({ type: "__resSandboxWire", msg: packBytes(msg) }, () => void chrome.runtime.lastError);
-    });
-    storeOwner.attach(l1, { all: true });
-    l1.handle("fetch", (a, s) => {
-        if (!s) throw new Error("fetch: no script");
-        return fetchFor(s, a.request, !!a.bypass);
-    });
-    l1.handle("toast", (a, s) => {
-        if (!s) throw new Error("toast: no script");
-        return showToast({ s }, a?.spec);
-    });
-    chrome.runtime.onMessage.addListener((msg: any) => {
-        if (msg?.type === "__resWire") l1.receive(unpackBytes(msg.msg));
-        return false;
-    });
-}
+const l1 = new Endpoint((msg) => sandboxLink().wire(msg));
+storeOwner.attach(l1, { all: true });
+l1.handle("fetch", (a, s) => {
+    if (!s) throw new Error("fetch: no script");
+    return fetchFor(s, a.request, !!a.bypass);
+});
+l1.handle("toast", (a, s) => {
+    if (!s) throw new Error("toast: no script");
+    return showToast({ s }, a?.spec);
+});
+serveSandbox({ wire: (msg) => l1.receive(msg) });

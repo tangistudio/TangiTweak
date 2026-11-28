@@ -1,7 +1,7 @@
 /**
  * Wires the strategies into chrome.webRequest and background messaging.
- * This is the single place that touches MV2 webRequest APIs; everything
- * browser-specific below it lives in strategies/.
+ * This is the single place that touches the blocking webRequest APIs
+ * (Firefox); everything browser-specific below it lives in strategies/.
  */
 import { beginBusy } from "./busy";
 import type { InterceptionStrategy } from "./strategies/types";
@@ -30,15 +30,15 @@ import "../../shared/transpile";
 import { log, noteRan, getScriptErrors, getScriptTypeErrors, getScriptRuleErrors, getScriptRouteWarnings, setScriptRouteWarnings, bodyObservedSince, bodySkipSince, noteBodySkip } from "./logs";
 import { bypassed } from "./bypass";
 import { prepareStores, storeOwner } from "./stores";
-import { ensureBuiltins, needsReact } from "../../shared/builtins";
+import { needsReact } from "../../shared/builtins";
 import { missedLine } from "../../shared/netTypes";
 import { binaryOptedOut, debuggerMissedLine, frameHasHook as pingHook, isLoopbackUrl, missedReason, missedWhat, routeProblem, MISSED_SKIP_TYPES } from "../../shared/missedTap";
 import { resolveParamValues } from "../../shared/scriptDef";
-import { shippedLibIds, type ShippedLib } from "../../shared/scriptImports";
+import type { ShippedLib } from "../../shared/scriptImports";
 import { autoLayerLabel, isLayer, type ScriptLayers } from "../../shared/route";
 import { effectiveStrategy, hookCanSee, indexRoutes, isDebuggerSafeOverlay, isNetKind, isShadowOverlay, isSiteRoute, pageWorld, routeLabel, routeMatches, routeMayMatch, takesBinary, type RouteMeta, type Strategy } from "../../shared/route";
 import { SiteRulesManager } from "./siteRules";
-import { analyzeScripts, runBodyOp, type Analyzed } from "../compileHost";
+import { analyzeScripts, type Analyzed } from "../compileHost";
 import { recordNetBody } from "../network";
 import { netRouteRefs, reportSkipped, setSkipRoutes, stackFor } from "./skipped";
 import { correlator } from "./requestCorrelator";
@@ -52,14 +52,14 @@ import { packBytes, unpackBytes } from "../../shared/bytesPack";
 import type { RequestBody } from "../../shared/requestBody";
 import { pushBundleUpdate } from "./bridgePorts";
 import { importFiles } from "./importFiles";
-import { installPages, pages, pagesReady } from "./pages";
+import { installPages } from "./pages";
 import { pushIsoUpdate, pushPreviewUpdate, revalidateOverlayLinks, setupOverlayLinks, type IsoRun, type OverlayRun } from "./overlayLinks";
 import { canRunPanes, onUserScriptsStatus, runSiteUnits, syncUserScripts, userScriptsStatus, type IsoScript, type SiteScript } from "../userScripts";
 import { USER_SCRIPTS_OFF, debuggerFriendly, debuggerOverlaysProblem, debuggerPanesProblem, userScriptsProblem, type UserScriptsStatus } from "../../shared/userScriptsStatus";
 import { contentHash } from "../../shared/folderSync";
 import { reactChunkSource } from "../reactChunk";
 import { createSchedules } from "./schedules";
-import { inProcessRunner, sandboxRunner } from "./scheduleRunners";
+import { sandboxRunner } from "./scheduleRunners";
 import { dismissToasts, getToastPrefs, muteToasts, restyleToasts, setToastPrefs, showToast, startToastCenter, toastHistory } from "./toastCenter";
 
 const FILTER: chrome.webRequest.RequestFilter = { urls: ["<all_urls>"] };
@@ -102,7 +102,7 @@ function loadTextTypes(): Promise<void> {
 
 /** what "Debugger-friendly overlays" moves into closed shadow roots here: every non-site onOverlay, and toast panes */
 async function debuggerFriendlyHere(): Promise<{ overlays: boolean; panes: boolean }> {
-    return debuggerFriendly(debuggerOverlays, __MV3__ ? await userScriptsStatus() : "ok", !__MV3__ || canRunPanes());
+    return debuggerFriendly(debuggerOverlays, await userScriptsStatus(), canRunPanes());
 }
 
 /** stored scripts with their meta replaced by the analyzed one (real params + imports) */
@@ -154,11 +154,11 @@ function shippedLibs(pageScripts: Script[], analyzed: Map<string, Analyzed>, dat
     };
 }
 
-/** MV3: a shipped library or package module with its user-script unit's key (shared/siteCode.ts) */
+/** a shipped library or package module with its user-script unit's key (shared/siteCode.ts) */
 const withUnitKey = (l: ShippedLib): ShippedLib => (l.src !== undefined ? { ...l, fk: siteKey(l.name, l.src) } : l.pkg ? { ...l, fk: siteKey(l.name, l.pkg.js) } : l);
 
 /**
- * MV3: the user-script registrations of the scripts with onSite handlers
+ * the user-script registrations of the scripts with onSite handlers
  * (any page's): each script's unit, then its imports' (background/userScripts.ts).
  */
 export function siteScripts(scripts: Script[], analyzed: Map<string, Analyzed>, pkgs: PackageModules): SiteScript[] {
@@ -179,7 +179,7 @@ export function siteScripts(scripts: Script[], analyzed: Map<string, Analyzed>, 
 }
 
 /**
- * MV3: the units (shared/siteCode.ts) of a page bundle's onSite code that
+ * the units (shared/siteCode.ts) of a page bundle's onSite code that
  * have one of `keys`: what a hook lacking them asked for.
  */
 export function bundleSiteUnits(bundle: { domHandlers: { name: string; src: string; fk?: string }[]; libs: ShippedLib[] }, keys: Set<string>): string[] {
@@ -215,9 +215,9 @@ export function createPipeline(
     chrome.tabs?.onRemoved?.addListener(onSiteTabRemoved);
 
     // ---- tab URL tracking ----
-    /** `${tabId}|${url}` page loads re-issued through the debugger (MV3) */
+    /** `${tabId}|${url}` page loads re-issued through the debugger */
     const renavigated = new Set<string>();
-    if (__MV3__ && (chrome as any).webNavigation) {
+    if ((chrome as any).webNavigation) {
         // the page request usually leaves while the debugger is still
         // attaching; remember it so a missed GET can be re-issued
         const mainFrameSeen = new Map<number, { url: string; method: string }>();
@@ -227,7 +227,7 @@ export function createPipeline(
             },
             { urls: ["<all_urls>"], types: ["main_frame"] }
         );
-        // MV3 debugger strategy: attach BEFORE the navigation's subresources
+        // debugger strategy: attach BEFORE the navigation's subresources
         // load (webNavigation also wakes an idle service worker)
         chrome.webNavigation.onBeforeNavigate.addListener((d) => {
             if (d.frameId !== 0) return;
@@ -327,7 +327,6 @@ export function createPipeline(
                     strategy: w.strategy,
                     type: d.type,
                     firefox: IS_FIREFOX,
-                    mv3: __MV3__,
                     fromCache: !!d.fromCache,
                     helperActive: helperActive(),
                     cdpWarned: cdpWarned.has(`${d.tabId}|${d.url}`),
@@ -363,20 +362,20 @@ export function createPipeline(
             for (const msg of siteProblems(s.code, s.meta.routes || [])) problems.push({ id: s.id, msg });
             for (const msg of rulesProblems(s.code, s.meta.routes || [])) problems.push({ id: s.id, msg });
             for (const msg of toastEveryProblems(s.code, s.meta)) problems.push({ id: s.id, msg });
-            // Chrome MV3: "Debugger-friendly overlays" can't draw its toast panes in the page (a warning, they still draw in their iframe)
-            if (__MV3__ && debuggerOverlays && s.meta.toast?.panes?.length && !debuggerFriendly(true, userScripts, canRunPanes()).panes) {
+            // Chrome: "Debugger-friendly overlays" can't draw its toast panes in the page (a warning, they still draw in their iframe)
+            if (debuggerOverlays && s.meta.toast?.panes?.length && !debuggerFriendly(true, userScripts, canRunPanes()).panes) {
                 const at = /\.\s*toastPane\s*\(/.exec(s.code);
                 const line = at ? `line ${s.code.slice(0, at.index).split("\n").length} (warning): ` : "";
                 problems.push({ id: s.id, msg: line + debuggerPanesProblem(userScripts, chrome.runtime.id) });
             }
             for (const r of s.meta.routes || []) {
-                // Chrome MV3: onPage, onSite and debuggerSafe onOverlay code need chrome.userScripts (an error, see problems.ts)
+                // onPage, onSite and debuggerSafe onOverlay code need chrome.userScripts (an error, see problems.ts)
                 if (userScripts !== "ok" && (r.kind === "onDocument" || isDebuggerSafeOverlay(r))) problems.push({ id: s.id, msg: userScriptsProblem(routeLabel(r), userScripts, chrome.runtime.id) });
                 // the "Debugger-friendly overlays" setting can't move it into the page: it stays in its iframe (a warning, it still runs)
                 else if (userScripts !== "ok" && isShadowOverlay(r, debuggerOverlays)) problems.push({ id: s.id, msg: debuggerOverlaysProblem(routeLabel(r), userScripts, chrome.runtime.id) });
                 if (!isNetKind(r.kind)) continue;
                 const strategy = effectiveStrategy(r);
-                const msg = routeProblem({ kind: r.kind, strategy, resourceTypes: r.resourceTypes }, { firefox: IS_FIREFOX, mv3: __MV3__ });
+                const msg = routeProblem({ kind: r.kind, strategy, resourceTypes: r.resourceTypes }, { firefox: IS_FIREFOX });
                 // one warning per handler: each points at its own line
                 if (msg) problems.push({ id: s.id, msg: `${routeLabel(r)}: ${msg}` });
                 else if (strategy === "helper" && strategyUnavailable("helper")) down.push(routeLabel(r));
@@ -426,11 +425,10 @@ export function createPipeline(
 
     if (chrome.webRequest?.onCompleted) {
         chrome.webRequest.onCompleted.addListener((d) => checkMissed(d), { urls: ["<all_urls>"] });
-        // observe-only (MV3-legal): a debugger strategy load that left before
-        // the tab's debugger attached is NOT intercepted — say so instead of
-        // failing silently. Typical: the page itself on a first visit (MV2
-        // attaches only once the navigation has started; MV3 after a cold
-        // service-worker start or a very fast navigation).
+        // observe-only: a debugger strategy load that left before the tab's
+        // debugger attached is NOT intercepted — say so instead of failing
+        // silently. Typical: the page itself after a cold service-worker
+        // start or a very fast navigation.
         const neverPaused = new Set(["xmlhttprequest", "websocket", "ping", "csp_report", "webbundle", "webtransport"]);
         chrome.webRequest.onCompleted.addListener(
             (d) => {
@@ -443,32 +441,16 @@ export function createPipeline(
                     const what = d.type === "main_frame" ? "page load" : d.type;
                     cdpWarned.add(`${d.tabId}|${d.url}`);
                     setTimeout(() => cdpWarned.delete(`${d.tabId}|${d.url}`), 10000);
-                    log(d.tabId, debuggerMissedLine(what, d.url, names, __MV3__, d.fromCache), "warn");
+                    log(d.tabId, debuggerMissedLine(what, d.url, names, d.fromCache), "warn");
                 }, 300);
             },
             { urls: ["<all_urls>"] }
         );
     }
     chrome.tabs.onUpdated.addListener((tabId, info) => {
-        if (__MV3__) {
-            if (info.url) {
-                tabUrls.set(tabId, info.url);
-                void cdp.syncTab(tabId, info.url);
-            }
-            return;
-        }
         if (info.url) {
             tabUrls.set(tabId, info.url);
-            // pre-attach only when a CDP-relevant (non hook-only) body
-            // script matches the page URL, and schedule an idle detach so
-            // the banner disappears once the page settles
-            if (cdp.shouldAttach(info.url)) {
-                void cdp.ensureAttached(tabId, info.url);
-                cdp.scheduleIdleDetach(`tab:${tabId}`);
-            }
-        }
-        if (info.status === "complete") {
-            cdp.scheduleIdleDetach(`tab:${tabId}`);
+            void cdp.syncTab(tabId, info.url);
         }
     });
     chrome.tabs.onRemoved.addListener((tabId) => {
@@ -542,7 +524,7 @@ export function createPipeline(
             return disposition.then((d: any) => this2.applyDisposition(d, details));
         }
 
-        // MV2: a cdp-owned route matches — make sure the debugger is on this tab
+        // a cdp-owned route matches — make sure the debugger is on this tab
         return this2.applyDisposition(disposition.kind === "allow" && cdp.needs(details) ? { kind: "needsCdp" } : disposition, details);
     };
 
@@ -562,8 +544,6 @@ export function createPipeline(
             }
             case "needsCdp": {
                 dlogLevel("pipeline", "debug", "needsCdp → attach", { url: details.url, tabId: details.tabId });
-                // banner minimization: this tab is actively using the debugger
-                cdp.cancelIdleDetach(`tab:${details.tabId}`);
                 if (details.tabId === -1) {
                     // worker/service-worker initiated (no content scripts
                     // there) — attach to the worker targets directly
@@ -622,7 +602,7 @@ export function createPipeline(
         return { responseHeaders: applyHeaderChanges(details.responseHeaders || [], merged) };
     };
 
-    if (!__MV3__ || __FIREFOX__) {
+    if (__FIREFOX__) {
         // blocking webRequest is the extension strategy's dispatch path: Firefox keeps it
         // in MV3, Chrome MV3 forbids "blocking" (the page strategy carries interception there)
         const addBlocking = (event: string, fn: any, extra: string[]) => {
@@ -639,7 +619,7 @@ export function createPipeline(
                 }
                 dlogLevel("extension", "debug", `${event} listener registered (${extra.join(", ")})`);
             } catch (e: any) {
-                // e.g. a browser build that dropped MV2 blocking webRequest
+                // e.g. a browser build that dropped blocking webRequest
                 log(-1, `[extension] cannot register blocking ${event} listener — the "extension" strategy is inactive in this browser: ${e?.message || e}`, "error");
             }
         };
@@ -713,8 +693,8 @@ export function createPipeline(
         // `layers`: the script's explicit layers, for the order of its ctx.patch chains (runLifecycle.ts)
         const domHandlers: { scriptId: string; name: string; src: string; params: Record<string, any>; v: string; fk?: string; layers?: ScriptLayers }[] = [];
         // onPage scripts (and opt-in debuggerSafe onOverlay scripts): never shipped to the page's own world.
-        // MV3 runs them in chrome.userScripts worlds that load the code from the owner (`isoRuns`)
-        const isoHandlers: ((typeof domHandlers[number] & { shadowOverlay?: boolean | "all" }) | { scriptId: string; name: string; shadowOverlay?: boolean | "all" })[] = [];
+        // They run in chrome.userScripts worlds that load the code from the owner (`isoRuns`)
+        const isoHandlers: { scriptId: string; name: string; shadowOverlay?: boolean | "all" }[] = [];
         const isoRuns = new Map<string, IsoRun>();
         // onOverlay / tweak.site routes only — overlay code never goes through the page
         const overlays: { scriptId: string; name: string; routes: RouteMeta[]; codeHash: string; fullPage?: boolean; debuggerSafe?: boolean; react?: boolean }[] = [];
@@ -723,18 +703,16 @@ export function createPipeline(
         const routes: RouteMeta[] = [];
         await loadTextTypes();
         const activeSite = preview === undefined && top && typeof tabId === "number" ? (await siteRules.ensureReady(), siteRules.activeForTab(url, tabId)) : null;
-        // the "Debugger-friendly overlays" setting: every onOverlay in a closed shadow root (Chrome MV3: only while user scripts run; else the iframe, see warnRoutes)
+        // the "Debugger-friendly overlays" setting: every onOverlay in a closed shadow root (only while user scripts run; else the iframe, see warnRoutes)
         const friendly = await debuggerFriendlyHere();
         const shadowAll = friendly.overlays;
         // and the top frame's toast panes in the page, not an overlay.html frame
         const shadowPanes = friendly.panes && top && preview === undefined;
         const pageScripts = await listScripts();
         const paramValues = await loadAllParamValues();
-        // MV3: analyzed in the sandbox page (the SW can't eval),
-        // cached; MV2 compiles right here
+        // analyzed in the sandbox page (the background can't eval), cached
         const analyzed = await analyzeScripts(pageScripts.map((s) => ({ id: s.id, name: s.meta.name, code: s.code, updatedAt: s.updatedAt })), paramValues);
         const mainDeps = new Set<string>();
-        const isoDeps = new Set<string>();
         const isoScriptDeps = new Map<string, Set<string>>();
         let previewWhy = "no such script";
         for (const s of pageScripts) {
@@ -805,21 +783,20 @@ export function createPipeline(
             const h = { scriptId: s.id, name: s.meta.name, src, params, v: contentHash(JSON.stringify([src, params])) };
             if (main) domHandlers.push(h);
             const shadowOverlay = shadowOver ? (shadowAll ? ("all" as const) : true) : undefined;
-            if (iso && __MV3__) {
+            if (iso) {
                 isoHandlers.push({ scriptId: s.id, name: s.meta.name, ...(shadowOverlay ? { shadowOverlay } : {}) });
                 isoRuns.set(s.id, { name: s.meta.name, src: h.src, siteV: h.v, params: h.params, libs: [], codeHash: "", overlay: !!combinedOver.length, ...(shadowOverlay ? { shadowOverlay } : {}) });
                 isoScriptDeps.set(s.id, new Set(a.deps));
-            } else if (iso) isoHandlers.push({ ...h, ...(shadowOverlay ? { shadowOverlay } : {}) });
+            }
             if (main) for (const d of a.deps) mainDeps.add(d);
-            if (iso && !__MV3__) for (const d of a.deps) isoDeps.add(d);
         }
         // ship the transitively imported library sources (and data files, package modules) once per world
-        const dataFiles = mainDeps.size || isoDeps.size || overlayDeps.size || isoScriptDeps.size ? await listDataFiles() : [];
+        const dataFiles = mainDeps.size || overlayDeps.size || isoScriptDeps.size ? await listDataFiles() : [];
         const pkgs = packagesSnapshot();
         const libsOf = shippedLibs(pageScripts, analyzed, dataFiles, pkgs, paramValues);
-        // MV3: the onSite code itself comes as user scripts — the hook finds each unit by its key
-        const libs = __MV3__ ? libsOf(mainDeps).map(withUnitKey) : libsOf(mainDeps);
-        if (__MV3__) for (const h of domHandlers) h.fk = siteKey(h.name, h.src);
+        // the onSite code itself comes as user scripts — the hook finds each unit by its key
+        const libs = libsOf(mainDeps).map(withUnitKey);
+        for (const h of domHandlers) h.fk = siteKey(h.name, h.src);
         if (domHandlers.length) {
             await ensureDataFiles();
             const layers = await scriptLayersOf(pageScripts);
@@ -828,7 +805,6 @@ export function createPipeline(
                 if (l?.user || l?.pkg) h.layers = l;
             }
         }
-        const isoLibs = isoDeps.size ? libsOf(isoDeps) : [];
         // an overlay reloads when its code, params or imports change
         for (const o of overlays) {
             const run = overlayRuns.get(o.scriptId)!;
@@ -843,10 +819,10 @@ export function createPipeline(
             // the world re-runs its code when every onOverlay moves into (or out of) it
             run.codeHash = contentHash(JSON.stringify([run.src, run.params, run.libs.map((l) => [l.name, l.src ?? l.json ?? l.alias ?? ""]), ...(run.shadowOverlay === "all" ? ["all"] : [])]));
         }
-        // MV3 without user scripts: the overlay's calls into isolated code say why at once
+        // without user scripts: the overlay's calls into isolated code say why at once
         const isoOff = isoRuns.size && (await userScriptsStatus()) !== "ok" ? USER_SCRIPTS_OFF : undefined;
-        // MV3 without user scripts: no onSite code either (the hook answers calls into it with why)
-        const siteOff = __MV3__ && domHandlers.length && (await userScriptsStatus()) !== "ok" ? USER_SCRIPTS_OFF : undefined;
+        // without user scripts: no onSite code either (the hook answers calls into it with why)
+        const siteOff = domHandlers.length && (await userScriptsStatus()) !== "ok" ? USER_SCRIPTS_OFF : undefined;
         const siteOverlay = activeSite && overlays.find((o) => o.scriptId === activeSite.scriptId && o.fullPage);
         const siteInfo = siteOverlay && activeSite
             ? {
@@ -859,13 +835,13 @@ export function createPipeline(
             : undefined;
         // what a frame runs from this bundle (its overlays apart: they carry their own code hash): a page back from the back/forward cache compares it
         const libRev = (l: ShippedLib) => [l.name, siteKey(l.name, l.src ?? l.pkg?.js ?? l.json ?? l.alias ?? ""), l.params];
-        const rev = contentHash(JSON.stringify([routes, getTextTypes(), domHandlers.map((h) => [h.scriptId, h.v]), libs.map(libRev), isoHandlers.map((h) => [h.scriptId, "v" in h ? h.v : "", h.shadowOverlay ?? false]), isoLibs.map(libRev), isoOff, siteOff, siteInfo?.scriptId ?? null, !!siteInfo?.debuggerSafe, shadowPanes]));
+        const rev = contentHash(JSON.stringify([routes, getTextTypes(), domHandlers.map((h) => [h.scriptId, h.v]), libs.map(libRev), isoHandlers.map((h) => [h.scriptId, h.shadowOverlay ?? false]), isoOff, siteOff, siteInfo?.scriptId ?? null, !!siteInfo?.debuggerSafe, shadowPanes]));
         dlogLevel("compile", "debug", `timing: page bundle for ${url.slice(0, 80)} — ${Math.round(performance.now() - t0)} ms`);
-        return { bundle: { count: routes.length, routes, textTypes: getTextTypes(), domHandlers, isoHandlers, overlays, libs, isoLibs, rev, ...(isoOff ? { isoOff } : {}), ...(siteOff ? { siteOff } : {}), ...(siteInfo ? { site: siteInfo } : {}), ...(shadowPanes ? { shadowPanes } : {}) }, overlayRuns, isoRuns, previewWhy };
+        return { bundle: { count: routes.length, routes, textTypes: getTextTypes(), domHandlers, isoHandlers, overlays, libs, rev, ...(isoOff ? { isoOff } : {}), ...(siteOff ? { siteOff } : {}), ...(siteInfo ? { site: siteInfo } : {}), ...(shadowPanes ? { shadowPanes } : {}) }, overlayRuns, isoRuns, previewWhy };
     }
     installPages();
     // tweak.every and tweak.toast (alarms listen from here on: an alarm can be what woke the service worker)
-    const schedules = createSchedules(__MV3__ ? sandboxRunner() : inProcessRunner());
+    const schedules = createSchedules(sandboxRunner());
     let toastScripts = new Map<string, Script>();
     startToastCenter({
         script: async (s) => {
@@ -878,14 +854,6 @@ export function createPipeline(
         toast: showToast,
         overlayRuns: async (url, tabId) => (await hookBundle(url, true, undefined, undefined, tabId)).overlayRuns,
         isoRuns: async (url, top) => (await hookBundle(url, top)).isoRuns,
-        isoScripts: async (url, top) => {
-            const { bundle } = await hookBundle(url, top);
-            return new Set([...bundle.isoHandlers.map((h) => h.scriptId), ...shippedLibIds(bundle.isoLibs)]);
-        },
-        isoShadowScripts: async (url, top) => {
-            const { bundle } = await hookBundle(url, top);
-            return new Set(bundle.isoHandlers.filter((h) => h.shadowOverlay).map((h) => h.scriptId));
-        },
         userScriptsOff: async () => (await userScriptsStatus()) !== "ok",
         storageGet: (s, key) => scriptStorageGet(s, key),
         storageSet: async (s, key, value) => void (await scriptStorageSet(s, key, value)),
@@ -960,7 +928,7 @@ export function createPipeline(
             );
             return true;
         }
-        // the Editor's "user scripts are off" banner (Chrome MV3)
+        // the Editor's "user scripts are off" banner
         if (msg && msg.type === "userScriptsStatus") {
             void userScriptsStatus(true).then((status) => sendResponse({ status, scripts: userScriptCount, id: chrome.runtime.id }));
             return true;
@@ -1084,7 +1052,7 @@ export function createPipeline(
             return false;
         }
         if (msg && msg.type === "getBuiltinReact") {
-            // MV2/Firefox: the bridge's isolated onPage code imports React
+            // a toast pane drawn in the page imports React
             reactChunkSource().then(
                 (src) => sendResponse({ src }),
                 (e) => sendResponse({ error: String(e?.message || e) })
@@ -1129,22 +1097,14 @@ export function createPipeline(
                 const url = msg.url || "";
                 const tabId = sender.tab?.id;
                 const { bundle } = await hookBundle(url, sender.frameId === 0 || sender.frameId === undefined, undefined, undefined, tabId);
-                const isoIds = !__MV3__ ? [...new Set([...bundle.isoHandlers.map((h) => h.scriptId), ...shippedLibIds(bundle.isoLibs)])] : [];
-                if (isoIds.length && typeof tabId === "number" && tabId >= 0) {
-                    await pagesReady;
-                    // the top frame's page by its document (as its requests' and its bridge's): `current` may still be the pre-commit key
-                    const top = sender.frameId === 0 || sender.frameId === undefined;
-                    const page = (top ? pages.forRequest({ tabId, frameId: 0, documentId: (sender as any).documentId }) : pages.current(tabId)) ?? "";
-                    Object.assign(bundle, { isoPage: page, isoStores: await storeOwner.init(isoIds, { page }) });
-                }
                 dlogLevel("pipeline", "debug", "getHookBundle responding", { routes: bundle.count, dom: bundle.domHandlers.length, iso: bundle.isoHandlers.length, overlays: bundle.overlays.length, url });
                 sendResponse(bundle);
             })();
             return true; // async sendResponse above
         }
-        // MV3: a frame's hook lacks onSite code its bundle names (a save while the page was open, a page back from the
+        // a frame's hook lacks onSite code its bundle names (a save while the page was open, a page back from the
         // back/forward cache): run those units in that document. Only code of the frame's own bundle goes, whatever keys it names
-        if (__MV3__ && msg && msg.type === "siteUnits") {
+        if (msg && msg.type === "siteUnits") {
             const tabId = sender.tab?.id;
             if (typeof tabId === "number" && tabId >= 0 && Array.isArray(msg.keys)) {
                 const keys = new Set<string>(msg.keys.filter((k: unknown) => typeof k === "string"));
@@ -1266,7 +1226,7 @@ export function createPipeline(
     let rulesApplied: Promise<unknown> = Promise.resolve();
     /** the reloadSeq of the last reload that applied the scripts */
     let settledSeq = 0;
-    /** MV3: enabled scripts with onPage or onSite code, which needs user scripts (the Editor's "user scripts are off" banner) */
+    /** enabled scripts with onPage or onSite code, which needs user scripts (the Editor's "user scripts are off" banner) */
     let userScriptCount = 0;
     /** reload and wait until the current scripts are fully applied, rules included */
     async function settle(): Promise<void> {
@@ -1295,10 +1255,8 @@ export function createPipeline(
         const stored = await listScripts();
         const paramValues = await loadAllParamValues();
         await prepareStores(stored.map((s) => s.id));
-        // MV2 compiles right here (synchronously): load the built-in React first if a script imports it
-        if (!__MV3__) await ensureBuiltins(stored.map((s) => s.code), packagesSnapshot()).catch((e: any) => dlogLevel("pipeline", "warn", `built-in React failed to load: ${e?.message || e}`));
         // routes come from running each script's top level with its real
-        // params and imports (stored meta had imports stubbed). MV3: this
+        // params and imports (stored meta had imports stubbed). This
         // also warms the analyze cache so the next getHookBundle is served
         // without waking the sandbox (keeps onDocument document_start early).
         let scripts = stored;
@@ -1316,8 +1274,8 @@ export function createPipeline(
             .filter((x) => x.enabled && x.meta.active)
             .map((x) => ({ id: x.id, routes: (x.meta.routes || []).filter((r) => (r.kind === "onDocument" && pageWorld(r) === "isolated") || isShadowOverlay(r, debuggerOverlays)) }))
             .filter((x) => x.routes.length);
-        // MV3 onSite code: user scripts in the page's world
-        const site = __MV3__ && analyzed ? siteScripts(stored, analyzed, packagesSnapshot()) : [];
+        // onSite code: user scripts in the page's world
+        const site = analyzed ? siteScripts(stored, analyzed, packagesSnapshot()) : [];
         const usStatus = isoScripts.length || site.length ? await userScriptsStatus(true) : "ok";
         if (seq !== reloadSeq) return; // superseded by a newer reload
         dlog("pipeline", "reload", { total: scripts.length, enabled: scripts.filter((x) => x.enabled).map((x) => x.meta.name) });
@@ -1339,7 +1297,7 @@ export function createPipeline(
         setSkipRoutes(scripts);
         warnRoutes(scripts, usStatus);
         userScriptCount = new Set([...isoScripts, ...site].map((x) => x.id)).size;
-        // MV3 onPage and onSite code: (un)register the user scripts (onSite: as they were if the analysis failed); open isolated worlds load again
+        // onPage and onSite code: (un)register the user scripts (onSite: as they were if the analysis failed); open isolated worlds load again
         void syncUserScripts(isoScripts, analyzed ? site : undefined).then(() => pushIsoUpdate());
 
         // HOT RELOAD: push the new bundle to every open tab's hook so
@@ -1361,11 +1319,9 @@ export function createPipeline(
     const off = onScriptsChanged(() => void reload());
     // the user granted the permission or allowed user scripts (or took it back): register, update Problems and pages
     onUserScriptsStatus(() => void reload());
-    if (__MV3__) {
-        const recheck = (p: chrome.permissions.Permissions) => p.permissions?.includes("userScripts" as any) && void userScriptsStatus(true);
-        chrome.permissions?.onAdded?.addListener(recheck);
-        chrome.permissions?.onRemoved?.addListener(recheck);
-    }
+    const recheck = (p: chrome.permissions.Permissions) => p.permissions?.includes("userScripts" as any) && void userScriptsStatus(true);
+    chrome.permissions?.onAdded?.addListener(recheck);
+    chrome.permissions?.onRemoved?.addListener(recheck);
     // rules handlers may read a global or tab store: a change re-probes
     const offStores = storeOwner.onChange((s, _name, page) => {
         if (page === undefined) schedules.storeChanged(s);
@@ -1402,12 +1358,12 @@ export function createPipeline(
         if (area !== "local") return;
         if (changes[DEBUGGER_OVERLAYS_KEY]) {
             const on = changes[DEBUGGER_OVERLAYS_KEY].newValue === true;
-            // open pages take the new bundle (MV2 moves overlays in place); MV3 pages need the newly registered user scripts
-            void reload().then(() => (__MV3__ && on ? reloadShadowOverlayTabs() : undefined));
+            // open pages need the newly registered user scripts
+            void reload().then(() => (on ? reloadShadowOverlayTabs() : undefined));
         } else if (changes[TEXT_TYPES_KEY]) void reload();
     };
     /**
-     * Chrome MV3, "Debugger-friendly overlays" just turned on: a script whose
+     * "Debugger-friendly overlays" just turned on: a script whose
      * only isolated code is its onOverlay wasn't registered as a user script, and
      * a registration only reaches documents that load next. Reload the tabs
      * whose overlays moved, once the registrations are in.
@@ -1438,7 +1394,7 @@ export function createPipeline(
             offProcess();
             chrome.storage.onChanged.removeListener(onStorage);
             chrome.tabs?.onRemoved?.removeListener(onSiteTabRemoved);
-            if (!__MV3__) {
+            if (__FIREFOX__) {
                 const onDone = (details: any) => {
                     extensionStrategy.pruneRequest?.(details.requestId);
                 };

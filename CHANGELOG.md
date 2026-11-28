@@ -22,6 +22,7 @@ its section below.
 
 ### Fixed
 
+- On Firefox, `onSite` code runs in the site's world on pages whose CSP forbids `eval`. It used to fall back to the isolated world, where the page's own globals weren't visible.
 - On Firefox the Editor, the popup and the install page list your tweaks. They showed none.
 
 ## [0.41.1-alpha] - 2026-11-27

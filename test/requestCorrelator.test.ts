@@ -179,7 +179,7 @@ describe("two requests to the same URL", () => {
         const s2 = bodySkipSince(URL, since, "2");
         expect(s1).toMatchObject({ strategy: "helper", why: "binary" });
         expect(s2).toBeUndefined();
-        const base = { strategy: "helper" as const, type: "xmlhttprequest", firefox: false, mv3: true, helperActive: true, cdpWarned: false };
+        const base = { strategy: "helper" as const, type: "xmlhttprequest", firefox: false, helperActive: true, cdpWarned: false };
         const r1 = missedReason({ ...base, fromCache: false, bodySkip: s1 });
         const r2 = missedReason({ ...base, fromCache: true, bodySkip: s2 });
         expect(r1).toContain("binary");

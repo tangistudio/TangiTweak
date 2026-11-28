@@ -74,14 +74,9 @@ chrome.runtime.onMessage.addListener((msg: any, _s, sendResponse) => {
     return false;
 });
 
-// ---- synced folder (watching runs here: persistent page, never throttled) ----
+// ---- synced folder ----
 void folderSync.initFromStorage();
 chrome.runtime.onMessage.addListener((msg: any, _s, sendResponse) => {
-    if (msg && msg.type === "hookCspBlocked" && _s && _s.tab && _s.tab.id !== undefined) {
-        dlogLevel("bg", "info", "page CSP blocks compiling scripts in the page — page-world onPage code runs in the isolated world in this tab", { tabId: _s.tab.id });
-        sendResponse({});
-        return false;
-    }
     if (msg && msg.type === "getSettingsJson") {
         getSettingsText().then((text) => sendResponse({ text }));
         return true;
@@ -155,10 +150,8 @@ const listenUserScriptConnect = (): void => {
     userScriptConnect = true;
     ev.addListener((port: chrome.runtime.Port) => addPanePort(port) || addUserScriptPort(port));
 };
-if (__MV3__) {
-    listenUserScriptConnect();
-    if (__FIREFOX__) onUserScriptsStatus((s) => s === "ok" && listenUserScriptConnect());
-}
+listenUserScriptConnect();
+if (__FIREFOX__) onUserScriptsStatus((s) => s === "ok" && listenUserScriptConnect());
 chrome.runtime.onConnect.addListener((port) => {
     if (addBridgePort(port)) return; // L2: a content-script bridge
     if (addPreviewPort(port)) return; // L5: the Editor's Preview tab
@@ -431,19 +424,17 @@ chrome.tabs.onUpdated.addListener((tabId, info) => {
 });
 startPackageUpdates();
 
-// ---- MV3: warm the analyze cache at SW start so the first page's
-// getHookBundle is served from storage, not a cold sandbox round-trip ----
-if (__MV3__) {
-    void (async () => {
-        try {
-            const { listScripts } = await import("./engine/scriptStore");
-            const { analyzeScripts } = await import("./compileHost");
-            await analyzeScripts((await listScripts()).map((s) => ({ id: s.id, name: s.meta.name, code: s.code, updatedAt: s.updatedAt })));
-            dlog("bg", "analyze cache warmed");
-        } catch (e: any) {
-            dlogLevel("bg", "warn", `warming the script analyze cache failed (scripts are analyzed on first use instead): ${e?.message || e}`);
-        }
-    })();
-}
+// ---- warm the analyze cache at start so the first page's getHookBundle
+// is served from storage, not a cold sandbox round-trip ----
+void (async () => {
+    try {
+        const { listScripts } = await import("./engine/scriptStore");
+        const { analyzeScripts } = await import("./compileHost");
+        await analyzeScripts((await listScripts()).map((s) => ({ id: s.id, name: s.meta.name, code: s.code, updatedAt: s.updatedAt })));
+        dlog("bg", "analyze cache warmed");
+    } catch (e: any) {
+        dlogLevel("bg", "warn", `warming the script analyze cache failed (scripts are analyzed on first use instead): ${e?.message || e}`);
+    }
+})();
 
 console.log(`[TangiTweak] background ready (${__FIREFOX__ ? "firefox mv3/webRequest+filterResponseData" : "mv3/sandbox"})`);

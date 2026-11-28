@@ -9,39 +9,30 @@
  * workers and anything the page didn't fetch itself never reach this strategy.
  */
 import { withOpPage } from "../pages";
-import { runOp, type OpScript } from "../../../shared/bodyOps";
 import type { HeaderChanges, HookDisposition, InterceptionStrategy, MaybePromise, WebRequestDetailsLike } from "./types";
 import type { Script } from "../scriptStore";
-import { log } from "../logs";
 import { runBodyOp } from "../../compileHost";
-import { dlogLevel } from "../../../shared/debugLog";
-import { compileMv2, ownsAny } from "./strategyScripts";
 import type { RequestBody } from "../../../shared/requestBody";
+import { ownsAny } from "./strategyScripts";
 
 type Decision = { kind: "respond"; mime: string; content: string; status?: number; headers?: any; scriptId?: string; scriptName?: string } | { kind: "redirect"; url: string } | { kind: "cancel" } | { kind: "headers"; changes: any } | null;
 
 export class PageStrategy implements InterceptionStrategy {
     readonly name = "page";
 
-    /** MV2: compiled scripts owning hook routes */
-    private ops: OpScript[] = [];
-    /** MV3: plain script data for the sandbox RPCs (no local compilation) */
-    private mv3Scripts: { id: string; name: string; code: string; updatedAt: number; enabled: boolean }[] = [];
-    private mv3Params: { [scriptId: string]: Record<string, any> } = {};
+    /** plain script data for the sandbox RPCs (no local compilation) */
+    private sandboxScripts: { id: string; name: string; code: string; updatedAt: number; enabled: boolean }[] = [];
+    private params: { [scriptId: string]: Record<string, any> } = {};
     private hookOwners = 0;
     private claimedUrls = new Map<string, number>();
 
     reload(scripts: Script[], paramValues?: { [scriptId: string]: Record<string, any> }): void {
         const owners = scripts.filter((s) => s.enabled && ownsAny(s, "page"));
         this.hookOwners = owners.length;
-        if (__MV3__) {
-            // the SW cannot compile — handlers execute in the sandbox page; the
-            // sandbox needs every enabled script (imports)
-            this.mv3Scripts = scripts.filter((s) => s.enabled).map((s) => ({ id: s.id, name: s.meta.name, code: s.code, updatedAt: s.updatedAt, enabled: true, layers: s.layers }));
-            this.mv3Params = paramValues || {};
-            return;
-        }
-        this.ops = compileMv2(scripts, paramValues, (s) => ownsAny(s, "page")).map((c) => ({ id: c.id, name: c.name, handlers: c.compiled.handlers, layers: c.layers }));
+        // the background cannot compile: handlers execute in the sandbox, which
+        // needs every enabled script (imports)
+        this.sandboxScripts = scripts.filter((s) => s.enabled).map((s) => ({ id: s.id, name: s.meta.name, code: s.code, updatedAt: s.updatedAt, enabled: true, layers: s.layers }));
+        this.params = paramValues || {};
     }
 
     /** does any enabled script own a hook route? */
@@ -51,11 +42,7 @@ export class PageStrategy implements InterceptionStrategy {
 
     private async run(op: "requestDecision" | "transform", args: Record<string, any>, tabId: number): Promise<any> {
         const a = await withOpPage({ ...args, tabId, tier: "page", resourceType: "xmlhttprequest" }, tabId);
-        if (__MV3__) return runBodyOp(this.mv3Scripts, this.mv3Params, op, a);
-        return runOp(this.ops, op, a, {
-            log: (scriptId, level, msg, kind) => log(tabId, msg, level, scriptId, kind, undefined, args.requestId),
-            debug: (msg) => dlogLevel("page", "debug", msg),
-        });
+        return runBodyOp(this.sandboxScripts, this.params, op, a);
     }
 
     /** onRequest handlers ONCE: the last decision (replaceResponse | redirect | block; a mock already went through onResponseBody) or merged headers; null = none. */
@@ -103,7 +90,7 @@ export class PageStrategy implements InterceptionStrategy {
     }
 
     dispose(): void {
-        this.ops = [];
+        this.sandboxScripts = [];
         this.claimedUrls.clear();
     }
 }

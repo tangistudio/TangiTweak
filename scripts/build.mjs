@@ -35,7 +35,7 @@ const WATCH = process.argv.includes("--watch");
  * (chrome.debugger, chrome.offscreen, webRequest.onActionIgnored) so AMO's linter doesn't flag it
  * @type {import('rolldown').InputOptions[]}
  */
-function entriesFor(dist, mv3, firefox = false) {
+function entriesFor(dist, firefox = false) {
     const list = [
         {
             input: path.join(root, "src/background/background.ts"),
@@ -79,30 +79,28 @@ function entriesFor(dist, mv3, firefox = false) {
             output: { file: path.join(dist, "pane.js"), format: "iife" },
         },
     ];
-    if (mv3) {
-        list.push(
-            {
-                // offscreen document: bridges the SW ⇄ sandbox iframe
-                input: path.join(root, "src/background/offscreen.ts"),
-                output: { file: path.join(dist, "offscreen.js"), format: "iife" },
-            },
-            {
-                // sandbox page: the only MV3 context where eval is allowed
-                input: path.join(root, "src/background/sandbox.ts"),
-                output: { file: path.join(dist, "sandbox.js"), format: "iife" },
-            },
-            {
-                // world: "isolated" onPage code, in a chrome.userScripts world (src/background/userScripts.ts)
-                input: path.join(root, "src/hook/isolated.ts"),
-                output: { file: path.join(dist, "isolated.js"), format: "iife" },
-            }
-        );
-    }
-    // MV3 content scripts: no code from strings (the page world gets onSite code as user scripts, src/shared/siteCode.ts)
-    const noEval = (e) => mv3 && /[/\\](hook|bridge)\.js$/.test(e.output.file);
+    list.push(
+        {
+            // offscreen document: bridges the SW ⇄ sandbox iframe
+            input: path.join(root, "src/background/offscreen.ts"),
+            output: { file: path.join(dist, "offscreen.js"), format: "iife" },
+        },
+        {
+            // sandbox page: the only extension context where eval is allowed
+            input: path.join(root, "src/background/sandbox.ts"),
+            output: { file: path.join(dist, "sandbox.js"), format: "iife" },
+        },
+        {
+            // world: "isolated" onPage code, in a chrome.userScripts world (src/background/userScripts.ts)
+            input: path.join(root, "src/hook/isolated.ts"),
+            output: { file: path.join(dist, "isolated.js"), format: "iife" },
+        }
+    );
+    // content scripts: no code from strings (the page world gets onSite code as user scripts, src/shared/siteCode.ts)
+    const noEval = (e) => /[/\\](hook|bridge)\.js$/.test(e.output.file);
     for (const e of list) {
         e.transform = {
-            define: { __MV3__: mv3 ? "true" : "false", __FIREFOX__: firefox ? "true" : "false", __NO_EVAL__: noEval(e) ? "true" : "false", __COMMIT__: JSON.stringify(gitCommit()), __BUILD_TIME__: JSON.stringify(new Date().toISOString()), "process.env.NODE_ENV": JSON.stringify("production") },
+            define: { __FIREFOX__: firefox ? "true" : "false", __NO_EVAL__: noEval(e) ? "true" : "false", __COMMIT__: JSON.stringify(gitCommit()), __BUILD_TIME__: JSON.stringify(new Date().toISOString()), "process.env.NODE_ENV": JSON.stringify("production") },
             jsx: { runtime: "automatic", importSource: "react" },
         };
     }
@@ -152,14 +150,14 @@ function firefoxManifest(m) {
     };
 }
 
-async function buildOnce(dist, mv3, firefox = false) {
-    for (const entry of entriesFor(dist, mv3, firefox)) {
+async function buildOnce(dist, firefox = false) {
+    for (const entry of entriesFor(dist, firefox)) {
         const bundle = await rolldown(entry);
         await bundle.write({ file: entry.output.file, format: entry.output.format });
         await bundle.close();
         console.log("built", path.relative(root, entry.output.file));
     }
-    await copyStatic(dist, mv3, firefox);
+    await copyStatic(dist, firefox);
 }
 
 /**
@@ -310,7 +308,7 @@ async function builtinTypes() {
     return out;
 }
 
-async function copyStatic(dist, mv3, firefox = false) {
+async function copyStatic(dist, firefox = false) {
     await mkdir(path.join(dist, "lib", "monaco"), { recursive: true });
 
     // storeIcon.png is for the store listing only — no manifest references it
@@ -421,7 +419,6 @@ async function buildSdk() {
         external: (id) => id.startsWith("node:") || external.some((name) => id === name || id.startsWith(`${name}/`)),
         transform: {
             define: {
-                __MV3__: "false",
                 __FIREFOX__: "false",
                 __NO_EVAL__: "false",
                 __COMMIT__: JSON.stringify(gitCommit()),
@@ -539,12 +536,12 @@ async function buildAll() {
     const firefox = path.join(root, "dist-firefox");
     await rm(firefox, { recursive: true, force: true });
     await mkdir(firefox, { recursive: true });
-    await buildOnce(firefox, true, true);
+    await buildOnce(firefox, true);
     await checkFirefoxBuild(firefox);
 
     await rm(path.join(root, "dist-mv3"), { recursive: true, force: true });
     await mkdir(path.join(root, "dist-mv3"), { recursive: true });
-    await buildOnce(path.join(root, "dist-mv3"), true);
+    await buildOnce(path.join(root, "dist-mv3"));
 }
 
 await buildAll();

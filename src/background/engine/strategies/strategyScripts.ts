@@ -1,19 +1,9 @@
 /**
- * Shared per-strategy plumbing: which handler routes a strategy owns, and MV2
- * in-page compilation of the scripts that own them (MV3 compiles in the
- * sandbox instead — see compileHost).
+ * Shared per-strategy plumbing: which handler routes a strategy owns (the
+ * scripts compile in the sandbox, see compileHost).
  */
-import { compileScript, makeModuleResolver, makeScriptOverrides, type CompiledScript } from "../../../shared/compile";
 import { effectiveStrategy, isNetKind, type RouteMeta, type ScriptLayers, type Strategy } from "../../../shared/route";
 import type { ResMeta } from "../../../shared/metaParser";
-import { scriptLogLine } from "../../../shared/scriptLog";
-import { log } from "../logs";
-import { scriptStorageGet, scriptStorageSet, setParamFromCode } from "../scriptStore";
-import { dataFilesSnapshot } from "../dataFiles";
-import { packagesSnapshot } from "../packageImports";
-import { backgroundHub, gateBackgroundFetch } from "../stores";
-import { showToast } from "../toastCenter";
-import { backgroundFetch } from "../ttFetch";
 
 export interface ScriptLike {
     id: string;
@@ -38,50 +28,6 @@ export function ownedRoutes(scripts: ScriptLike[], tier: Strategy): OwnedRoute[]
         for (const r of s.meta.routes || []) {
             if (isNetKind(r.kind) && effectiveStrategy(r) === tier) out.push({ id: s.id, name: s.meta.name, route: r });
         }
-    }
-    return out;
-}
-
-export interface CompiledEntry {
-    id: string;
-    name: string;
-    compiled: CompiledScript;
-    layers?: ScriptLayers;
-}
-
-/**
- * MV2: compile the enabled scripts `want` selects, with real params,
- * imports and stores (call `prepareStores` and `ensureBuiltins` first).
- * `name` is the STORED script name (log attribution).
- */
-export function compileMv2(scripts: ScriptLike[], paramValues: { [scriptId: string]: Record<string, any> } | undefined, want: (s: ScriptLike) => boolean): CompiledEntry[] {
-    let resolveFrom: (importer: string) => (spec: string) => any = () => (spec) => {
-        throw new Error(`cannot import "${spec}" before the module registry is ready`);
-    };
-    const overridesFor = (s: { id: string; name: string; code: string }) =>
-        makeScriptOverrides(s.id, { get: scriptStorageGet, set: scriptStorageSet }, (id, level, source, text) => log(-1, scriptLogLine(s.name, source, text), level, id), paramValues?.[s.id], (spec) => resolveFrom(s.name)(spec), {
-            // one hub: every strategy's instance of the script shares its stores
-            store: (name, initial, persist) => backgroundHub().store(s.id, name, initial, persist),
-            tabStore: (name, initial) => backgroundHub().tabStore(s.id, name, initial),
-            pageStore: (name, initial) => backgroundHub().pageStore(s.id, name, initial),
-            fetch: async (request, bypass) => {
-                await gateBackgroundFetch(s.id, request.url);
-                return backgroundFetch(request, { bypass, scriptId: s.id, scriptName: s.name });
-            },
-            toast: (spec) => showToast({ s: s.id }, spec),
-            setParam: (key, value) => setParamFromCode(s.id, key, value),
-        });
-    resolveFrom = makeModuleResolver(
-        scripts.map((s) => ({ id: s.id, name: s.meta.name, code: s.code })),
-        overridesFor,
-        { dataFiles: dataFilesSnapshot(), packages: packagesSnapshot() }
-    ).resolveFrom;
-    const out: CompiledEntry[] = [];
-    for (const s of scripts) {
-        if (!s.enabled || !want(s)) continue;
-        const compiled = compileScript(s.code, { ...overridesFor({ id: s.id, name: s.meta.name, code: s.code }), name: s.meta.name });
-        // errored compiles stay in so the strategy logs the error (meta.active is false then)
-        if (compiled.meta.active || compiled.error) out.push({ id: s.id, name: s.meta.name, compiled, layers: s.layers });
     }
     return out;
 }

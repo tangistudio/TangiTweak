@@ -1560,7 +1560,7 @@ function pause(reason: string): void {
     dirHandle = null;
     stopKeepAlive();
     const alarms = alarmsApi();
-    if (__MV3__ && alarms) alarms.clear(SYNC_ALARM);
+    if (alarms) alarms.clear(SYNC_ALARM);
     broadcastStatus();
     dlogLevel("sync", "warn", reason);
 }
@@ -1570,8 +1570,8 @@ function startPolling(): void {
     timer = setInterval(() => void pollOnce(), POLL_MS);
 }
 
-// ---- MV3 SW liveness ----
-// The MV3 service worker idles out after ~30s, which would kill the poller.
+// ---- background liveness ----
+// The service worker (Firefox: the event page) idles out after ~30s, which would kill the poller.
 // Any extension API call resets that idle timer, so a 25s keep-alive ping
 // holds the SW open while folder sync is active; a 30s alarm is the fallback
 // that wakes the SW for a catch-up poll if it is reaped anyway.
@@ -1583,9 +1583,9 @@ function alarmsApi(): typeof chrome.alarms | null {
 }
 
 function startKeepAlive(): void {
-    if (!__MV3__ || keepAliveTimer) return;
+    if (keepAliveTimer) return;
     keepAliveTimer = setInterval(() => {
-        chrome.runtime.getPlatformInfo(() => void chrome.runtime.lastError);
+        (globalThis as any).chrome?.runtime?.getPlatformInfo?.(() => void chrome.runtime.lastError);
     }, 25_000);
 }
 
@@ -1596,9 +1596,9 @@ function stopKeepAlive(): void {
     }
 }
 
-if (__MV3__) {
-    // registered at module scope so the alarm wakes/dispatches even into a
-    // freshly started SW (vitest defines __MV3__ as false and skips this)
+// registered at module scope so the alarm wakes/dispatches even into a
+// freshly started background
+{
     const alarms = alarmsApi();
     if (alarms) {
         alarms.onAlarm.addListener((a) => {
@@ -1609,7 +1609,7 @@ if (__MV3__) {
 
 async function ensureSyncAlarm(): Promise<void> {
     const alarms = alarmsApi();
-    if (!__MV3__ || !alarms) return;
+    if (!alarms) return;
     alarms.create(SYNC_ALARM, { periodInMinutes: 0.5 });
 }
 
@@ -1718,7 +1718,7 @@ async function stopNow(): Promise<void> {
     await clearPersistedState();
     stopKeepAlive();
     const alarms = alarmsApi();
-    if (__MV3__ && alarms) alarms.clear(SYNC_ALARM);
+    if (alarms) alarms.clear(SYNC_ALARM);
     await clearSavedHandle();
     broadcastStatus();
 }

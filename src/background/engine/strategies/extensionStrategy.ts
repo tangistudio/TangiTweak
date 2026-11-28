@@ -2,12 +2,11 @@
  * Blocking-webRequest strategy (Firefox): redirect/block, request and
  * response headers, onRequest `replaceResponse` and onResponseBody, with no
  * debugger involvement. Chrome MV3 has no blocking webRequest, so the
- * strategy runs nothing there.
+ * pipeline never dispatches here there.
  *
  * Runs only handler routes whose strategy is "extension". Matching the
  * request is synchronous (most requests match nothing and go on at once);
- * the handlers run where scripts compile: the sandbox (MV3,
- * compileHost.runBodyOp) or in process (unit tests), both through runOp.
+ * the handlers run in the sandbox (compileHost.runBodyOp).
  *
  * A replacement (the onRequest `replaceResponse` result) is served in
  * place: the request proceeds and filterResponseData swaps the body, so the
@@ -23,9 +22,9 @@ import type { Script } from "../scriptStore";
 import { log, noteBodySkip, scriptError } from "../logs";
 import { bodyKind } from "../../../shared/bodyKind";
 import { dlogLevel } from "../../../shared/debugLog";
-import { compileMv2, ownedRoutes, ownsAny, type OwnedRoute } from "./strategyScripts";
+import { ownedRoutes, type OwnedRoute } from "./strategyScripts";
 import { mergeHeaderEdits, winnerOf, type ReplacedBy } from "../../../shared/precedence";
-import { editPairs, replacementBody, runOp, type BodyOp, type OpScript } from "../../../shared/bodyOps";
+import { editPairs, replacementBody, type BodyOp } from "../../../shared/bodyOps";
 import { reportSkipped } from "../skipped";
 import { requestBodyFromWebRequest, type RequestBody } from "../../../shared/requestBody";
 import { runBodyOp } from "../../compileHost";
@@ -41,25 +40,15 @@ export class ExtensionStrategy implements InterceptionStrategy {
 
     /** the enabled scripts' extension-owned request routes */
     private owned: OwnedRoute[] = [];
-    /** in process: the compiled scripts runOp runs */
-    private ops: OpScript[] = [];
-    /** MV3: what the sandbox compiles and runs */
+    /** what the sandbox compiles and runs */
     private plain: { id: string; name: string; code: string; updatedAt: number; enabled: boolean; layers?: Script["layers"] }[] = [];
     private params: { [scriptId: string]: Record<string, any> } = {};
 
     reload(scripts: Script[], paramValues?: { [scriptId: string]: Record<string, any> }): void {
-        // Chrome MV3: no blocking webRequest — the pipeline warns per handler (strategyUnavailable)
-        if (__MV3__ && !__FIREFOX__) {
-            this.owned = [];
-            return;
-        }
+        // the pipeline dispatches here only where blocking webRequest exists (Firefox)
         this.owned = ownedRoutes(scripts, "extension");
-        if (__MV3__) {
-            this.plain = scripts.map((s) => ({ id: s.id, name: s.meta.name, code: s.code, updatedAt: s.updatedAt, enabled: s.enabled, layers: s.layers }));
-            this.params = paramValues || {};
-        } else {
-            this.ops = compileMv2(scripts, paramValues, (s) => ownsAny(s, "extension")).map((c) => ({ id: c.id, name: c.name, handlers: c.compiled.handlers, layers: c.layers }));
-        }
+        this.plain = scripts.map((s) => ({ id: s.id, name: s.meta.name, code: s.code, updatedAt: s.updatedAt, enabled: s.enabled, layers: s.layers }));
+        this.params = paramValues || {};
         dlogLevel("extension", "debug", `loaded routes: ${this.owned.map((o) => `"${o.name}" ${routeLabel(o.route)} ${JSON.stringify(o.route.url)}`).join(", ") || "none"}`);
     }
 
@@ -89,8 +78,7 @@ export class ExtensionStrategy implements InterceptionStrategy {
     /** one op's handler chain, for this request */
     private async run(op: BodyOp, details: WebRequestDetailsLike, tabUrl: string | null, extra: Record<string, any> = {}, requestBody = pendingRequestBodies.get(details.requestId)): Promise<any> {
         const args = { url: details.url, method: details.method, tabId: details.tabId, resourceType: details.type, tabUrl: tabUrl || "", requestHeaders: requestHeadersOf(details), requestId: details.requestId, requestBody, page: pageOf(details), tier: "extension", ...extra };
-        if (__MV3__) return runBodyOp(this.plain, this.params, op, args);
-        return runOp(this.ops, op, args, { log: (scriptId, level, msg, kind) => log(details.tabId, msg, level, scriptId, kind, undefined, details.requestId) });
+        return runBodyOp(this.plain, this.params, op, args);
     }
 
     /**
@@ -186,7 +174,6 @@ export class ExtensionStrategy implements InterceptionStrategy {
 
     dispose(): void {
         this.owned = [];
-        this.ops = [];
         this.plain = [];
     }
 

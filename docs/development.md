@@ -12,6 +12,13 @@ npm run test:e2e     # the main browser e2e suite (test/mv3.e2e.ts, see below)
 npm run test:smoke   # the same few checks on Chrome and Firefox (test/smoke.e2e.ts)
 ```
 
+Unit tests run the background as it ships, with one stand-in: the sandbox
+(`src/background/sandboxCore.ts`, the only context that may eval) runs
+in-process (`test/inProcessSandbox.ts`, loaded by `test/setup.ts`) instead of
+in an iframe. `src/background/sandboxLink.ts` is the one seam between the
+background and its sandbox, so compiles, handler calls, store traffic and
+the sandbox's reverse calls take the same path as in the browser.
+
 The e2e suites (`test/*.e2e.ts`) launch a fresh Chromium, load `dist-mv3/`
 and drive the real Editor page against a local HTTP server. They need a
 Chromium that still accepts `--load-extension` (branded Chrome 137+ doesn't);
@@ -252,7 +259,7 @@ extension's debugger attach; the page can't reach the shadow root), the
 bridge logs a warning and closes that overlay, and doesn't start it again
 until its code hash changes or the page reloads.
 
-## How the MV3 build works
+## How the build works
 
 `npm run build` produces both bundles, both Manifest V3:
 
@@ -313,7 +320,7 @@ blocking `webRequest` on Chrome):
   timer) holds the worker open while a folder is connected, with a 30s
   `chrome.alarms` poll as the fallback if the worker is reaped anyway.
 - onPage runs in a `userScripts` world; onSite runs in the MAIN world.
-- **No `eval` in content scripts (MV3).** The Chrome Web Store allows
+- **No `eval` in content scripts.** The Chrome Web Store allows
   running code that isn't in the package only through `chrome.userScripts`
   and `chrome.debugger`, so `hook.js` and `bridge.js` are built with
   `__NO_EVAL__` and never compile code. Each onSite script, the module

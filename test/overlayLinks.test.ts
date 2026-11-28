@@ -19,10 +19,10 @@ vi.mock("../src/background/engine/bypass", () => ({
     addBypassRule: async (...a: any[]) => (rules.push(a), () => {}),
 }));
 
-import { serveLink, serveIsoLink, pushIsoUpdate, confirmNonce, setupOverlayLinks, revalidateOverlayLinks, resetOverlayLinks, type IsoRun, type OverlayRun } from "../src/background/engine/overlayLinks";
+import { serveLink, serveIsoLink, pushIsoUpdate, setupOverlayLinks, revalidateOverlayLinks, resetOverlayLinks, type IsoRun, type OverlayRun } from "../src/background/engine/overlayLinks";
 import { NOT_RUNNING, type RpcCall, type RpcResult } from "../src/shared/rpc";
 import { USER_SCRIPTS_OFF } from "../src/shared/userScriptsStatus";
-import { endpointPair, ISO_STORE_TAG, type Endpoint } from "../src/shared/wire";
+import { endpointPair, type Endpoint } from "../src/shared/wire";
 
 const run = (name: string): OverlayRun => ({ name, code: "code", codeHash: "h", routes: [], params: {}, libs: [], react: false });
 let runs: Record<string, string[]> = {};
@@ -107,22 +107,6 @@ describe("overlay links (L2 per-script grants)", () => {
         await expect(b.call("bypass.add", { method: 1 } as any, "s1")).rejects.toThrow(/malformed/);
     });
 
-    it("MV2: isolated onPage code's stores (tagged ops) need an iso.stores grant for a script with isolated code here", async () => {
-        const iso = new Set(["s2"]);
-        setupOverlayLinks({ overlayRuns: async () => new Map(), isoScripts: async (url) => (url === PAGE ? iso : new Set()) });
-        const b = bridge();
-        const tag = ISO_STORE_TAG + "s2";
-        await expect(b.call("store.sub", { name: "n" } as any, tag)).rejects.toThrow(/aren.t reachable/);
-        await expect(b.call("iso.stores", { url: "https://evil.example/" }, "s2")).rejects.toThrow(/refused/);
-        await expect(b.call("iso.stores", { url: PAGE }, "s1")).rejects.toThrow(/no isolated onPage code/);
-        await b.call("iso.stores", { url: PAGE }, "s2");
-        expect(await b.call("store.sub", { name: "n" } as any, tag)).toEqual({ sub: { name: "n" }, s: "s2" });
-        await expect(b.call("store.sub", { name: "n", page: "another" } as any, tag)).rejects.toThrow(/page/);
-        // the grant isn't the overlay's
-        await expect(b.call("store.sub", { name: "n" } as any, "s2")).rejects.toThrow(/aren.t reachable/);
-        expect(attached).toEqual([{ all: false }]);
-    });
-
     it("there's no way to hand stores to the site's world", async () => {
         await expect(bridge().call("page.stores" as never, { url: PAGE } as never, "s1")).rejects.toThrow();
     });
@@ -133,17 +117,6 @@ describe("overlay links (L2 per-script grants)", () => {
         b.push("overlay.closed", {} as any, "s1");
         await new Promise((r) => setTimeout(r, 5));
         await expect(b.call("overlay.init", {}, "s1")).rejects.toThrow(/no overlay here/);
-    });
-
-    it("confirmNonce is one-time and checks the tab and the overlay page", async () => {
-        const b = bridge({ tabId: 4 });
-        await b.call("overlay.open", { nonce: NONCE, url: PAGE }, "s1");
-        const frame = { tab: { id: 4 }, url: "chrome-extension://ext/overlay.html#" + NONCE } as any;
-        expect(confirmNonce({ ...frame, tab: { id: 5 } }, NONCE)).toBe(false);
-        expect(confirmNonce({ ...frame, url: PAGE }, NONCE)).toBe(false);
-        expect(confirmNonce(frame, "other")).toBe(false);
-        expect(confirmNonce(frame, NONCE)).toBe(true);
-        expect(confirmNonce(frame, NONCE)).toBe(false);
     });
 
     it("revalidation drops grants of overlays that no longer match", async () => {

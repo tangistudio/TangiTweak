@@ -60,14 +60,6 @@ describe("page registry", () => {
         expect(r.forRequest({ tabId: -1 })).toBeNull();
     });
 
-    it("MV2: a top-frame response starts a page", () => {
-        const r = new PageRegistry();
-        const a = r.current(4)!;
-        r.responseStarted(4);
-        expect(r.current(4)).not.toBe(a);
-        expect(r.isAlive(a)).toBe(false);
-    });
-
     it("virtual pages (the Editor preview) live until ended; restore keeps saved tabs", () => {
         let saved: any;
         const r = new PageRegistry({ save: (m) => (saved = m) });

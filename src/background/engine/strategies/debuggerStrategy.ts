@@ -4,14 +4,12 @@
  * workers) makes, in place, with real status codes. Chrome shows a
  * "started debugging this browser" banner while attached.
  *
- * MV2 attaches when a cdp route matches the page or a request (and
- * detaches when the page settles); MV3 keeps matching tabs attached.
- * Handlers run through the shared body ops (bodyOps.runOp) — locally on
- * MV2, in the sandbox page on MV3 — so chain semantics match every strategy.
+ * Matching tabs stay attached. Handlers run through the shared body ops
+ * (bodyOps.runOp) in the sandbox, so chain semantics match every strategy.
  */
 import { withOpPage } from "../pages";
 import { urlGlobOf } from "../../../shared/matcher";
-import { runOp, type BodyOp, type OpScript } from "../../../shared/bodyOps";
+import type { BodyOp } from "../../../shared/bodyOps";
 import { indexRoutes, takesBinary, type RouteKind } from "../../../shared/route";
 import type { Script } from "../scriptStore";
 import { log, noteBodySkip } from "../logs";
@@ -26,7 +24,7 @@ import { reportSkipped } from "../skipped";
 import { recordNetBody } from "../../network";
 import { ClaimCache, correlator } from "../requestCorrelator";
 import { concatBytes, headerValue, requestBodyFrom, requestBodyFromText, type RequestBody } from "../../../shared/requestBody";
-import { compileMv2, ownedRoutes, ownsAny, type OwnedRoute } from "./strategyScripts";
+import { ownedRoutes, type OwnedRoute } from "./strategyScripts";
 
 /** webRequest resource type → CDP Fetch resource types */
 const CDP_TYPES: Record<string, string[]> = {
@@ -66,7 +64,7 @@ export function fetchPatternsOf(owned: OwnedRoute[]): FetchPattern[] {
     return [...out.values()];
 }
 
-interface Mv3Plain {
+interface PlainScript {
     id: string;
     name: string;
     code: string;
@@ -82,15 +80,11 @@ export class DebuggerStrategy {
     private get index() {
         return indexRoutes(this.owned, (o) => o.route);
     }
-    /** MV2: compiled scripts owning cdp routes */
-    private ops: OpScript[] = [];
-    /** tabId → timer for idle auto-detach */
-    private idleTimers = new Map<string, ReturnType<typeof setTimeout>>();
     /** tab key → in-flight ensureAttached promise (dedup concurrent calls) */
     private attachInFlight = new Map<string, Promise<void>>();
-    /** MV3: every enabled script (utilities included — imports resolve in the sandbox) */
-    private mv3Plain: Mv3Plain[] = [];
-    private mv3Params: { [scriptId: string]: Record<string, any> } = {};
+    /** every enabled script (utilities included — imports resolve in the sandbox) */
+    private plain: PlainScript[] = [];
+    private params: { [scriptId: string]: Record<string, any> } = {};
     /** Fetch.enable patterns derived from the owned routes */
     private patterns: FetchPattern[] = [];
     /** resolves once attached tabs were resynced to the current routes */
@@ -106,12 +100,8 @@ export class DebuggerStrategy {
         const owned = ownedRoutes(scripts, "debugger");
         this.owned = owned;
         this.patterns = fetchPatternsOf(owned);
-        if (__MV3__) {
-            this.mv3Plain = scripts.filter((s) => s.enabled).map((s) => ({ id: s.id, name: s.meta.name, code: s.code, updatedAt: s.updatedAt, enabled: true, layers: s.layers }));
-            this.mv3Params = paramValues || {};
-        } else {
-            this.ops = compileMv2(scripts, paramValues, (s) => ownsAny(s, "debugger")).map((c) => ({ id: c.id, name: c.name, handlers: c.compiled.handlers, layers: c.layers }));
-        }
+        this.plain = scripts.filter((s) => s.enabled).map((s) => ({ id: s.id, name: s.meta.name, code: s.code, updatedAt: s.updatedAt, enabled: true, layers: s.layers }));
+        this.params = paramValues || {};
         // announce only when the owning set changes (reloads are frequent)
         const names = [...new Set(owned.map((o) => o.name))];
         const summary = JSON.stringify(names);
@@ -120,13 +110,9 @@ export class DebuggerStrategy {
         }
         this.summary = summary;
         dlog("debugger", "debugger strategy reloaded", { scripts: names, patterns: this.patterns.length });
-        if (__MV3__) {
-            this.ready = this.resyncAttachedMv3().catch((e: any) => {
-                dlogLevel("debugger", "error", `debugger strategy resync failed: ${e?.message || e}`);
-            });
-        } else {
-            for (const key of [...this.attached]) if (!this.owned.length) void this.detachByKey(key);
-        }
+        this.ready = this.resyncAttachedMv3().catch((e: any) => {
+            dlogLevel("debugger", "error", `debugger strategy resync failed: ${e?.message || e}`);
+        });
     }
 
     /** does any enabled script own a cdp route? */
@@ -218,11 +204,7 @@ export class DebuggerStrategy {
 
     /** Forget per-tab state on tab close. */
     forgetTab(tabId: number): void {
-        const key = `tab:${tabId}`;
-        const t = this.idleTimers.get(key);
-        if (t) clearTimeout(t);
-        this.idleTimers.delete(key);
-        this.attached.delete(key);
+        this.attached.delete(`tab:${tabId}`);
     }
 
     private debuggeeOf(key: string): Debuggee {
@@ -269,43 +251,17 @@ export class DebuggerStrategy {
         }
     }
 
-    /** Detach when the page settled — the banner disappears while the user browses. */
-    scheduleIdleDetach(key: string, graceMs = 8000): void {
-        // MV3 keeps the tab attached while it matches (see syncTab)
-        if (__MV3__) return;
-        const prev = this.idleTimers.get(key);
-        if (prev) clearTimeout(prev);
-        const t = setTimeout(() => {
-            this.idleTimers.delete(key);
-            if (this.attached.has(key)) {
-                void this.detachByKey(key);
-                dlogLevel("debugger", "debug", "idle detach (banner cleared)", { key });
-            }
-        }, graceMs);
-        this.idleTimers.set(key, t);
-    }
-
-    /** Cancel a scheduled idle detach (a new request needs the debugger). */
-    cancelIdleDetach(key: string): void {
-        const t = this.idleTimers.get(key);
-        if (t) {
-            clearTimeout(t);
-            this.idleTimers.delete(key);
-        }
-    }
-
     /**
-     * Pre-attach for a page url. MV3: any web tab while cdp routes exist —
+     * Pre-attach for a page url: any web tab while cdp routes exist —
      * resources (CDN scripts…) rarely match the PAGE url; the Fetch patterns
-     * keep non-matching loads un-paused. MV2: a cdp route matches the page.
+     * keep non-matching loads un-paused.
      */
     shouldAttach(url: string): boolean {
         if (!this.owned.length || !this.patterns.length) return false;
-        if (__MV3__) return /^(https?|file):/i.test(url);
-        return this.index.some(url);
+        return /^(https?|file):/i.test(url);
     }
 
-    /** FORCED attach: a request explicitly needs the debugger (MV2 needsCdp). */
+    /** FORCED attach: a request explicitly needs the debugger (needsCdp). */
     async ensureAttachedForced(tabId: number, mainFrameUrl: string | null): Promise<void> {
         const key = `tab:${tabId}`;
         if (!mainFrameUrl || this.attached.has(key)) return;
@@ -357,14 +313,10 @@ export class DebuggerStrategy {
         }
     }
 
-    /** run a body op over the cdp-owned handlers (locally on MV2, in the sandbox on MV3) */
+    /** run a body op over the cdp-owned handlers in the sandbox */
     private async run(op: BodyOp, args: Record<string, any>, tabId: number): Promise<any> {
         const a = await withOpPage({ ...args, tabId, tier: "debugger" }, tabId);
-        if (__MV3__) return runBodyOp(this.mv3Plain as any, this.mv3Params, op, a);
-        return runOp(this.ops, op, a, {
-            log: (scriptId, level, msg, kind) => log(tabId, msg, level, scriptId, kind, undefined, args.requestId),
-            debug: (msg) => dlogLevel("debugger", "debug", msg),
-        });
+        return runBodyOp(this.plain as any, this.params, op, a);
     }
 
     /** ctx.requestBody: postDataEntries (bytes) or postData; with neither, Network.getRequestPostData (best effort) */

@@ -19,7 +19,7 @@
 import { handlerLayer, indexRoutes, routeLabel, routeMatches, sortByLayer, type Layer, type NetKind, type RouteMeta } from "../../../shared/route";
 import { reportSkipped } from "../skipped";
 import { regexProblemText, rulePriority, ruleErrorLine, substitute, type RuleSpec } from "../../../shared/dnrRules";
-import { probeScriptRules, type ScriptRules } from "../../../shared/rulesProbe";
+import type { ScriptRules } from "../../../shared/rulesProbe";
 import { strategyUnsupported } from "../../../shared/strategyInfo";
 import { dlogLevel } from "../../../shared/debugLog";
 import { probeRules } from "../../compileHost";
@@ -27,12 +27,11 @@ import { log, setScriptRuleErrors } from "../logs";
 import { dataFilesSig } from "../dataFiles";
 import { packagesSig } from "../packageImports";
 import type { Script } from "../scriptStore";
-import { compileMv2, ownsAny } from "./strategyScripts";
+import { ownsAny } from "./strategyScripts";
 import { IS_FIREFOX } from "./helperState";
 import { wsNotApplied } from "../../../shared/websocketLimits";
-import { BYPASS_RULE_BASE } from "../bypass";
 import { SITE_RULE_BASE } from "../siteRules";
-import { backgroundHub, storeOwner } from "../stores";
+import { storeOwner } from "../stores";
 
 type ParamValues = { [scriptId: string]: Record<string, any> };
 
@@ -133,7 +132,7 @@ export class RulesStrategy {
     }
 
     private async apply(scripts: Script[], paramValues: ParamValues): Promise<void> {
-        if (strategyUnsupported("rules", { firefox: IS_FIREFOX, mv3: __MV3__ })) return; // routeProblem warns
+        if (strategyUnsupported("rules", { firefox: IS_FIREFOX })) return; // routeProblem warns
         const owners = scripts.filter((s) => s.enabled && s.meta.active && ownsAny(s, "rules"));
         this.owners = new Set(owners.map((s) => s.id));
         const names = new Map(scripts.map((s) => [s.id, s.meta.name]));
@@ -147,7 +146,7 @@ export class RulesStrategy {
         const enabled = scripts.filter((s) => s.enabled);
         const state = await this.storeState(enabled.map((s) => s.id));
         const sig = JSON.stringify([enabled.map((s) => [s.id, s.updatedAt, s.meta.name, s.layers ?? {}]), paramValues, dataFilesSig(), packagesSig(), state.revs, state.tabIds]);
-        if (__MV3__ && (await this.restoreCache(sig))) return;
+        if (await this.restoreCache(sig)) return;
 
         let probed: Map<string, ScriptRules>;
         this.probing = true;
@@ -209,7 +208,7 @@ export class RulesStrategy {
         await setScriptRuleErrors(errors, names);
         this.setActive(applied);
         dlogLevel("rules", "info", `${applied.length} session rule(s) active for ${[...new Set(applied.map((r) => `"${r.name}"`))].join(", ") || "no script"}`);
-        if (__MV3__) await this.saveCache({ sig, active: applied, errors: Object.fromEntries(errors), names: Object.fromEntries(names) });
+        await this.saveCache({ sig, active: applied, errors: Object.fromEntries(errors), names: Object.fromEntries(names) });
     }
 
     /** each rule's priority from its handler's run order ({@link rulePriority}) */
@@ -219,23 +218,14 @@ export class RulesStrategy {
 
     private async probe(scripts: Script[], owners: Script[], paramValues: ParamValues, tabIds: number[], storeSnaps: Record<string, any>): Promise<Map<string, ScriptRules>> {
         const out = new Map<string, ScriptRules>();
-        if (__MV3__) {
-            // the same script set the other strategies send: keeps the sandbox's compile cache warm
-            const plain = scripts.filter((s) => s.enabled).map((s) => ({ id: s.id, name: s.meta.name, code: s.code, updatedAt: s.updatedAt, enabled: true }));
-            const results = await probeRules(plain, paramValues, tabIds, storeSnaps);
-            if (!results) {
-                dlogLevel("rules", "warn", "the sandbox didn't answer — keeping the current session rules");
-                throw new Error("rules probe failed");
-            }
-            for (const [id, r] of Object.entries(results)) out.set(id, r);
-            return out;
+        // the same script set the other strategies send: keeps the sandbox's compile cache warm
+        const plain = scripts.filter((s) => s.enabled).map((s) => ({ id: s.id, name: s.meta.name, code: s.code, updatedAt: s.updatedAt, enabled: true }));
+        const results = await probeRules(plain, paramValues, tabIds, storeSnaps);
+        if (!results) {
+            dlogLevel("rules", "warn", "the sandbox didn't answer — keeping the current session rules");
+            throw new Error("rules probe failed");
         }
-        backgroundHub().prime(storeSnaps);
-        const ownerIds = new Set(owners.map((s) => s.id));
-        for (const c of compileMv2(scripts, paramValues, (s) => ownerIds.has(s.id))) {
-            if (c.compiled.error) continue;
-            out.set(c.id, await probeScriptRules(c.compiled.handlers, tabIds));
-        }
+        for (const [id, r] of Object.entries(results)) out.set(id, r);
         return out;
     }
 
@@ -246,7 +236,7 @@ export class RulesStrategy {
         await dnrCall("updateSessionRules", { removeRuleIds: existing.map((r) => r.id), addRules: rules });
     }
 
-    // ---- MV3: skip re-probing on service-worker wake ----
+    // ---- skip re-probing on background wake ----
 
     private async restoreCache(sig: string): Promise<boolean> {
         try {
@@ -265,7 +255,6 @@ export class RulesStrategy {
     }
 
     private async saveCache(v: unknown): Promise<void> {
-        if (!__MV3__) return;
         try {
             if (v) await chrome.storage.session.set({ [CACHE_KEY]: v });
             else await chrome.storage.session.remove(CACHE_KEY);

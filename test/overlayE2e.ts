@@ -1426,14 +1426,13 @@ tweak.onPage({ url: "${origin}/ov-site-hot*", when: "document_end" }, () => {
 });`;
 
 /**
- * Saved onSite code reaches open pages: one whose CSP forbids eval
- * (`cspWorld`: where its onSite code runs: Chrome MV3 injects it into the
- * site's world, an eval-based injection falls back to the isolated world), the other tabs while
+ * Saved onSite code reaches open pages: one whose CSP forbids eval (it
+ * still runs in the site's world, as a user script), the other tabs while
  * one can't run code, and a page back from the back/forward cache (its
- * onPage code too). `failNextRun` (MV3) makes the next
+ * onPage code too). `failNextRun` makes the next
  * `userScripts.execute` fail; false when it couldn't.
  */
-export async function checkSiteHotReload(ctx: any, mgr: any, origin: string, check: Check, opts: { label?: string; cspWorld: "site" | "isolated"; failNextRun?: () => Promise<boolean> }): Promise<void> {
+export async function checkSiteHotReload(ctx: any, mgr: any, origin: string, check: Check, opts: { label?: string; failNextRun?: () => Promise<boolean> }): Promise<void> {
     const t = (s: string) => `onSite hot apply${opts.label ?? ""}: ${s}`;
     const send = (msg: any): Promise<any> => mgr.evaluate((m: any) => new Promise((r) => chrome.runtime.sendMessage(m, (x: any) => r(x ?? null))), msg);
     let n = 1;
@@ -1455,7 +1454,7 @@ export async function checkSiteHotReload(ctx: any, mgr: any, origin: string, che
     const csp = await ctx.newPage();
     await csp.goto(`${origin}/ov-site-hot?csp`, { waitUntil: "load", timeout: 15000 });
     const c1 = await shows(csp, "v1");
-    check(t(`a page whose CSP forbids eval runs it, in the ${opts.cspWorld === "site" ? "site's" : "isolated"} world`), c1.siteV === "v1" && c1.siteWorld === opts.cspWorld, JSON.stringify(c1));
+    check(t("a page whose CSP forbids eval runs it, in the site's world"), c1.siteV === "v1" && c1.siteWorld === "site", JSON.stringify(c1));
     let v = await save();
     const c2 = await shows(csp, v);
     check(t("…and a save reaches it"), c2.siteV === v && c2.siteRuns === "2", JSON.stringify(c2));

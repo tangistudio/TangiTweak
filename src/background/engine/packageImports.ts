@@ -56,7 +56,7 @@ import {
     type StoredTypings,
 } from "../../shared/packageImports";
 import { bareImportUrls, dataReader, dependenciesOf } from "../../shared/tweakBundle";
-import { dataFilesSnapshot } from "./dataFiles";
+import { dataFilesSnapshot, localGet } from "./dataFiles";
 
 const TIMEOUT_MS = 15000;
 const MAX_FILE = 5 * 1024 * 1024;
@@ -103,13 +103,7 @@ function rebuildSnapshot(): void {
 }
 
 function storageGet(keys: string[]): Promise<Record<string, any>> {
-    if (typeof chrome === "undefined" || !chrome?.storage?.local) return Promise.resolve({});
-    return new Promise((resolve) =>
-        chrome.storage.local.get(keys, (d) => {
-            void chrome.runtime?.lastError;
-            resolve(d || {});
-        })
-    );
+    return localGet(keys);
 }
 
 function storageSet(items: Record<string, any>): Promise<void> {

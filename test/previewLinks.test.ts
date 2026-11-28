@@ -14,7 +14,7 @@ vi.mock("../src/background/engine/stores", () => ({
 }));
 vi.mock("../src/background/engine/bypass", () => ({ addBypass: () => () => {}, addBypassRule: async () => () => {} }));
 
-import { addPreviewPort, confirmNonce, pushPreviewUpdate, resetOverlayLinks, servePreviewLink, setupOverlayLinks, type OverlayRun } from "../src/background/engine/overlayLinks";
+import { addPreviewPort, pushPreviewUpdate, resetOverlayLinks, servePreviewLink, setupOverlayLinks, type OverlayRun } from "../src/background/engine/overlayLinks";
 import { normalizeRoute } from "../src/shared/route";
 import { endpointPair, type Endpoint } from "../src/shared/wire";
 
@@ -136,16 +136,6 @@ describe("the Editor preview link (L5)", () => {
         e.close("bye");
         await tick();
         expect(closedStores).toHaveLength(2);
-    });
-
-    it("the Firefox frame's nonce check: the Editor's tab, once", async () => {
-        const e = editor(7);
-        await e.call("preview.open", { nonce: NONCE, url: "" }, "s1");
-        const frame = { tab: { id: 7 }, url: "chrome-extension://ext/overlay.html#" + NONCE } as any;
-        expect(confirmNonce({ ...frame, tab: { id: 8 } }, NONCE)).toBe(false);
-        expect(confirmNonce({ ...frame, url: "chrome-extension://ext/editor.html" }, NONCE)).toBe(false);
-        expect(confirmNonce(frame, NONCE)).toBe(true);
-        expect(confirmNonce(frame, NONCE)).toBe(false);
     });
 
     it("scripts changing reach every open preview", async () => {

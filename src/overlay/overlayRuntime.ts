@@ -551,10 +551,7 @@ export async function startOverlay(ep: Endpoint, init: OverlayInit, env: Overlay
 /**
  * The bridge posts `{ ttOverlay: true }` with the port; this frame proves
  * itself by saying hello with the nonce from its URL hash, which the page
- * can't read (a frame the page navigated elsewhere can't). Where this frame has
- * extension APIs (Firefox: no manifest sandbox), the background confirms
- * the nonce belongs to this tab, so a page framing overlay.html itself
- * gets nothing.
+ * can't read (a frame the page navigated elsewhere can't).
  */
 export function boot(): void {
     const nonce = (typeof (window as any).__ttOverlayNonce === "string" && (window as any).__ttOverlayNonce) || location.hash.slice(1);
@@ -562,11 +559,6 @@ export function boot(): void {
     const onMessage = async (ev: MessageEvent) => {
         if (ev.source !== window.parent || ev.data?.ttOverlay !== true || !ev.ports?.[0]) return;
         window.removeEventListener("message", onMessage);
-        const rt = (globalThis as any).chrome?.runtime;
-        if (rt?.id && typeof rt.sendMessage === "function") {
-            const ok = await rt.sendMessage({ type: "ttOverlayNonce", nonce }).catch(() => false);
-            if (ok !== true) return;
-        }
         const ep = messagePortEndpoint(ev.ports[0]);
         try {
             await startOverlay(ep, await ep.call("hello", { nonce }));

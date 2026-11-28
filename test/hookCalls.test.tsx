@@ -1,5 +1,6 @@
 // happy-dom (.tsx): onPage code calls its script's onSite handles through the page hook
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { scriptUnit, siteKey } from "../src/shared/siteCode";
 
 const w = window as any;
 
@@ -7,6 +8,12 @@ async function loadHook() {
     vi.resetModules();
     delete w.__resOverrideHooked;
     await import("../src/hook/hook");
+}
+
+/** the script's onSite code arrives as a user script (its unit), as the background registers it */
+function withUnit<T extends { name: string; src: string }>(script: T): T & { fk: string } {
+    new Function(scriptUnit(script.name, script.src))();
+    return { ...script, fk: siteKey(script.name, script.src) };
 }
 
 describe("page hook: calls into a script it doesn't run yet", () => {
@@ -47,7 +54,7 @@ describe("page hook: calls into a script it doesn't run yet", () => {
         callV(s1, "c1", "v2");
         await new Promise((r) => setTimeout(r, 20));
         expect(results).toEqual([]);
-        post({ kind: "status", active: true, domHandlers: [{ ...script, v: "v2" }], hot: true });
+        post({ kind: "status", active: true, domHandlers: [{ ...withUnit(script), v: "v2" }], hot: true });
         await vi.waitFor(() => expect(results).toEqual([{ cid: "c1", ok: true, value: "pong" }]));
     });
 
@@ -57,7 +64,7 @@ describe("page hook: calls into a script it doesn't run yet", () => {
         callV(s1, "c1", "v1");
         await new Promise((r) => setTimeout(r, 20));
         expect(results).toEqual([]);
-        post({ kind: "status", active: true, domHandlers: [{ ...script, v: "v1" }], hot: true });
+        post({ kind: "status", active: true, domHandlers: [{ ...withUnit(script), v: "v1" }], hot: true });
         await vi.waitFor(() => expect(results).toEqual([{ cid: "c1", ok: true, value: "pong" }]));
     });
 
@@ -73,7 +80,7 @@ describe("page hook: calls into a script it doesn't run yet", () => {
     it("a version the hook already compiled answers from what it has, at once", async () => {
         vi.useFakeTimers();
         await loadHook();
-        post({ kind: "status", active: true, domHandlers: [{ ...script, src: "/* no onSite registered */", v: "v1" }] });
+        post({ kind: "status", active: true, domHandlers: [{ ...withUnit({ ...script, src: "/* no onSite registered */" }), v: "v1" }] });
         await vi.advanceTimersByTimeAsync(0);
         callV(s1, "c1", "v1");
         await vi.advanceTimersByTimeAsync(0);
@@ -103,23 +110,5 @@ describe("page hook: calls into a script it doesn't run yet", () => {
         expect(results).toEqual([{ cid: "c1", ok: false, error: { name: "AbortError", message: "the caller gave up" } }]);
         await vi.advanceTimersByTimeAsync(6000);
         expect(results).toHaveLength(1);
-    });
-
-    it("a page CSP that blocks eval, as Firefox words it, asks the bridge to run the onSite code in the isolated world", async () => {
-        const posted: any[] = [];
-        (window.postMessage as any).mockImplementation((data: any) => void posted.push(data));
-        await loadHook();
-        const blocked = Object.assign(new Error("call to Function() blocked by CSP"), { name: "EvalError" });
-        vi.stubGlobal("Function", function () {
-            throw blocked;
-        });
-        try {
-            post({ kind: "status", active: true, domHandlers: [{ ...script, v: "v1" }], hot: true });
-        } finally {
-            vi.unstubAllGlobals();
-        }
-        // (the hooks earlier tests loaded answer too)
-        expect(posted.filter((d) => d.kind === "cspBlocked")[0]).toEqual({ source: "res-override-hook", kind: "cspBlocked", hot: true });
-        expect(posted.filter((d) => d.kind === "scriptLog" && d.level === "error")).toEqual([]);
     });
 });

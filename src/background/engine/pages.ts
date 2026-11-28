@@ -4,14 +4,10 @@
  * navigation or reload; a single-page app's route change isn't one) and
  * ends at the next one or when the tab closes — its store copies go then.
  *
- *   Chrome MV3 — `webNavigation.onCommitted` (top frame), keyed by Chrome's
- *     `documentId` so a late event or the top frame's bridge connecting
- *     first don't start it twice. Kept in `chrome.storage.session` across
- *     service-worker restarts.
- *   MV2 (Firefox) — no `documentId`, and no new permission: the top-frame
- *     document's response starting (`webRequest.onResponseStarted`, also
- *     for a page from the HTTP cache; a back/forward-cache restore keeps
- *     the page that was current).
+ * `webNavigation.onCommitted` (top frame) starts it, keyed by Chrome's
+ * `documentId` so a late event or the top frame's bridge connecting first
+ * don't start it twice (Firefox has no `documentId`: each commit is a new
+ * page). Kept in `storage.session` across background restarts.
  *
  * A navigation request (`main_frame`) belongs to the page it leaves:
  * the page is taken when the request starts.
@@ -89,12 +85,6 @@ export class PageRegistry {
         return this.begin(tabId, doc).key;
     }
 
-    /** MV2: the top-frame document's response started — a new page */
-    responseStarted(tabId: number): void {
-        if (tabId < 0) return;
-        this.begin(tabId, undefined);
-    }
-
     /** the top frame's bridge connected (Chrome: its document may be news before onCommitted is) */
     bridgeConnected(tabId: number, doc: string | undefined): void {
         if (doc) this.committed(tabId, doc);
@@ -151,7 +141,7 @@ export class PageRegistry {
         this.tabEndFns.push(fn);
     }
 
-    /** MV3: the saved map after a service-worker restart (tabs seen since win) */
+    /** the saved map after a background restart (tabs seen since win) */
     restore(saved: Record<string, PageRec> | undefined): void {
         if (!saved || typeof saved !== "object") return;
         for (const [t, r] of Object.entries(saved)) {
@@ -202,20 +192,18 @@ let saveTimer: ReturnType<typeof setTimeout> | null = null;
 let pending: Record<number, PageRec> | null = null;
 
 export const pages = new PageRegistry({
-    save: __MV3__
-        ? (byTab) => {
-              pending = byTab;
-              saveTimer ??= setTimeout(() => {
-                  saveTimer = null;
-                  const v = pending;
-                  pending = null;
-                  void chrome.storage?.session?.set({ [SESSION_KEY]: v }).catch(() => {});
-              }, 50);
-          }
-        : undefined,
+    save: (byTab) => {
+        pending = byTab;
+        saveTimer ??= setTimeout(() => {
+            saveTimer = null;
+            const v = pending;
+            pending = null;
+            void chrome.storage?.session?.set({ [SESSION_KEY]: v }).catch(() => {});
+        }, 50);
+    },
 });
 
-/** resolves once MV3 restored the saved pages (handlers await it before asking which page a request is in) */
+/** resolves once the saved pages are restored (handlers await it before asking which page a request is in) */
 export let pagesReady: Promise<void> = Promise.resolve();
 
 let installed = false;
@@ -225,7 +213,7 @@ export function installPages(): void {
     if (installed) return;
     installed = true;
     const c: typeof chrome | undefined = (globalThis as any).chrome;
-    if (__MV3__ && c?.storage?.session)
+    if (c?.storage?.session)
         pagesReady = c.storage.session
             .get(SESSION_KEY)
             .then((v) => pages.restore(v?.[SESSION_KEY]))
@@ -235,18 +223,9 @@ export function installPages(): void {
     const done = (d: { requestId: string }) => pages.navEnd(d.requestId);
     wr?.onCompleted?.addListener(done, { urls: ["<all_urls>"], types: ["main_frame"] });
     wr?.onErrorOccurred?.addListener(done, { urls: ["<all_urls>"], types: ["main_frame"] });
-    if (__MV3__ && (c as any)?.webNavigation)
-        c!.webNavigation.onCommitted.addListener((d) => {
-            if (d.frameId === 0 && d.tabId >= 0) void pagesReady.then(() => pages.committed(d.tabId, (d as any).documentId));
-        });
-    else
-        wr?.onResponseStarted?.addListener(
-            (d) => {
-                // a 204 or a download doesn't replace the document
-                if (d.frameId === 0 && d.tabId >= 0 && d.statusCode !== 204 && d.statusCode !== 205) pages.responseStarted(d.tabId);
-            },
-            { urls: ["<all_urls>"], types: ["main_frame"] }
-        );
+    c?.webNavigation?.onCommitted.addListener((d) => {
+        if (d.frameId === 0 && d.tabId >= 0) void pagesReady.then(() => pages.committed(d.tabId, (d as any).documentId));
+    });
     onBridgeConnect((link) => {
         if (link.frameId === 0) void pagesReady.then(() => pages.bridgeConnected(link.tabId, (link.port.sender as any)?.documentId));
     });

@@ -11,7 +11,7 @@
  * strategies: MV2 compiles in the background page, MV3 runs in the sandbox.
  */
 import { withOpPage } from "../pages";
-import { runOp, type BodyOp, type OpScript } from "../../../shared/bodyOps";
+import type { BodyOp } from "../../../shared/bodyOps";
 import { bodyKind, getTextTypes } from "../../../shared/bodyKind";
 import { bytesToBase64, base64ToBytes } from "../../../shared/bytesPack";
 import { headerValue, requestBodyFrom } from "../../../shared/requestBody";
@@ -30,7 +30,7 @@ import { recordNetBody } from "../../network";
 import { ClaimCache, correlator } from "../requestCorrelator";
 import { HelperRouting } from "../../helperRouting";
 import { IS_FIREFOX, setHelperActive } from "./helperState";
-import { compileMv2, ownedRoutes, ownsAny, type OwnedRoute } from "./strategyScripts";
+import { ownedRoutes, type OwnedRoute } from "./strategyScripts";
 
 export const NM_HOST = "com.tangitweak.helper";
 
@@ -170,9 +170,8 @@ export class HelperStrategy {
     private helper: HelperReady | null = null;
     private system: SystemProxyInfo | null = null;
     private owned: OwnedRoute[] = [];
-    private mv2Ops: OpScript[] = [];
-    private mv3Plain: { id: string; name: string; code: string; updatedAt: number; enabled: boolean }[] = [];
-    private mv3Params: { [scriptId: string]: Record<string, any> } = {};
+    private plain: { id: string; name: string; code: string; updatedAt: number; enabled: boolean }[] = [];
+    private params: { [scriptId: string]: Record<string, any> } = {};
     private decisionSource = `function __resUser() { return "DIRECT"; }`;
     private chunks = new Map<number, string[]>();
     private loaded: Promise<void> = Promise.resolve();
@@ -218,12 +217,8 @@ export class HelperStrategy {
             this.state = owned.length ? "unsupported" : "idle";
             return;
         }
-        if (__MV3__) {
-            this.mv3Plain = scripts.map((s) => ({ id: s.id, name: s.meta.name, code: s.code, updatedAt: s.updatedAt, enabled: s.enabled, layers: s.layers }));
-            this.mv3Params = paramValues;
-        } else {
-            this.mv2Ops = compileMv2(scripts, paramValues, (s) => ownsAny(s, "helper")).map((c) => ({ id: c.id, name: c.name, handlers: c.compiled.handlers, layers: c.layers }));
-        }
+        this.plain = scripts.map((s) => ({ id: s.id, name: s.meta.name, code: s.code, updatedAt: s.updatedAt, enabled: s.enabled, layers: s.layers }));
+        this.params = paramValues;
         this.owned = owned;
         if (!owned.length) {
             this.disconnect();
@@ -478,11 +473,7 @@ export class HelperStrategy {
     private async run(op: BodyOp, args: any): Promise<any> {
         args.tier = "helper";
         await withOpPage(args, args.tabId);
-        if (__MV3__) return runBodyOp(this.mv3Plain, this.mv3Params, op, args);
-        return runOp(this.mv2Ops, op, args, {
-            log: (scriptId, level, msg, kind) => log(args.tabId ?? -1, `[helper] ${msg}`, level, scriptId, kind, undefined, args.requestId),
-            debug: (msg) => dlogLevel("helper", "debug", msg),
-        });
+        return runBodyOp(this.plain, this.params, op, args);
     }
 
     /** a process route wanting `flag` matches (resourceTypes: extension-side only — the helper can't see them) */

@@ -76,7 +76,6 @@ const api = (): any => {
 
 /** can isolated code run? Re-checked at most every 2 s; a change notifies `onUserScriptsStatus` listeners */
 export function userScriptsStatus(fresh = false): Promise<UserScriptsStatus> {
-    if (!__MV3__) return Promise.resolve("ok");
     if (!fresh && status && Date.now() - status.at < STATUS_TTL_MS) return Promise.resolve(status.value);
     if (checking) return checking;
     checking = (async (): Promise<UserScriptsStatus> => {
@@ -102,7 +101,7 @@ export function userScriptsStatus(fresh = false): Promise<UserScriptsStatus> {
 
 /** the last known status (no check) */
 export function lastUserScriptsStatus(): UserScriptsStatus | undefined {
-    return __MV3__ ? status?.value : "ok";
+    return status?.value;
 }
 
 /** run `fn` when the status changes (the user granted the permission, flipped the switch) */
@@ -130,7 +129,6 @@ function runtimeSource(): Promise<string> {
  * argument) once they're on. Calls run one at a time.
  */
 export function syncUserScripts(scripts?: IsoScript[], site?: SiteScript[]): Promise<void> {
-    if (!__MV3__) return Promise.resolve();
     if (scripts) wanted = { iso: scripts, site: site ?? wanted.site };
     const want = wanted;
     syncing = syncing.then(() => doSync(want)).catch((e: any) => dlogLevel("userScripts", "warn", `syncing user scripts failed: ${e?.message || e}`));
@@ -199,7 +197,7 @@ async function syncSite(us: any, want: SiteScript[], registered: any[]): Promise
  * run is still under way isn't run again.
  */
 export async function runSiteUnits(target: { tabId: number; frameId: number; documentId?: string }, units: string[]): Promise<void> {
-    if (!__MV3__ || !units.length) return;
+    if (!units.length) return;
     const us = api();
     if (typeof us?.execute !== "function") return;
     const { tabId, frameId, documentId } = target;
@@ -214,7 +212,7 @@ export async function runSiteUnits(target: { tabId: number; frameId: number; doc
 }
 /** user-script worlds can draw toast panes in the page (Chrome 135+: `execute`) */
 export function canRunPanes(): boolean {
-    return __MV3__ && typeof api()?.execute === "function";
+    return typeof api()?.execute === "function";
 }
 
 /**

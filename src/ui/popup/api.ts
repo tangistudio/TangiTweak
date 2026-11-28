@@ -68,7 +68,7 @@ export interface PopupApi {
     toggleSiteTab?(mode: "custom" | "original"): Promise<void>;
     /** the notice's button: grant site access if that's missing, then reload the tab */
     fixTab(status: TabStatus): Promise<void>;
-    /** Chrome MV3: can onPage and onSite code run (a fresh check) */
+    /** can onPage and onSite code run (a fresh check) */
     userScripts(): Promise<UserScriptsStatus>;
     /** the notice's button: request the permission, or open TangiTweak's details for "Allow User Scripts" */
     fixUserScripts(status: UserScriptsStatus): Promise<void>;
@@ -95,7 +95,7 @@ export interface PopupApi {
 let noticeTab: chrome.tabs.Tab | undefined;
 
 export const chromePopupApi: PopupApi = {
-    // sendWake: the first message may race the SW's wake-up (MV3)
+    // sendWake: the first message may race the SW's wake-up
     listScripts: async () => (await sendWake<ScriptInfo[]>({ type: "listScripts" })) || [],
     activeOnTab: async () => {
         const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -131,7 +131,7 @@ export const chromePopupApi: PopupApi = {
         chrome.tabs.reload(tab.id);
         window.close();
     },
-    userScripts: async () => (__MV3__ && (await sendWake<{ status: UserScriptsStatus }>({ type: "userScriptsStatus" }))?.status) || "ok",
+    userScripts: async () => ((await sendWake<{ status: UserScriptsStatus }>({ type: "userScriptsStatus" }))?.status) || "ok",
     fixUserScripts: async (status) => {
         if (status === "no-permission") {
             // first thing in the click: the request needs its user gesture

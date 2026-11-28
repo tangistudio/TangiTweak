@@ -83,7 +83,7 @@ export function redactEntry(e: NetEntry): NetEntry {
 async function environment(): Promise<Record<string, unknown>> {
     const manifest = chrome.runtime.getManifest();
     const env: Record<string, unknown> = {
-        extension: { name: manifest.name, version: manifest.version_name ?? manifest.version, manifest_version: manifest.manifest_version, id: chrome.runtime.id, build: __MV3__ ? "mv3" : "mv2", commit: __COMMIT__, builtAt: __BUILD_TIME__ },
+        extension: { name: manifest.name, version: manifest.version_name ?? manifest.version, manifest_version: manifest.manifest_version, id: chrome.runtime.id, build: "mv3", commit: __COMMIT__, builtAt: __BUILD_TIME__ },
         firefox: typeof (globalThis as any).browser?.webRequest?.filterResponseData === "function",
         userAgent: navigator.userAgent,
         language: navigator.language,
@@ -102,7 +102,7 @@ async function environment(): Promise<Record<string, unknown>> {
         if (info) env.browserInfo = info;
     } catch {}
     env.apis = {
-        webRequestBlocking: (!__MV3__ || __FIREFOX__) && !!chrome.webRequest?.onBeforeRequest,
+        webRequestBlocking: __FIREFOX__ && !!chrome.webRequest?.onBeforeRequest,
         onActionIgnored: !__FIREFOX__ && !!(chrome.webRequest as any)?.onActionIgnored,
         debugger: !__FIREFOX__ && !!chrome.debugger,
         proxy: !!chrome.proxy,

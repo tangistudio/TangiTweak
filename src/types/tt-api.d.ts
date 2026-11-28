@@ -1250,9 +1250,8 @@ declare namespace TangiTweak {
          *   script-list order, then registration order.
          * - Async handlers are not awaited; `when` controls only when they
          *   *start*.
-         * - `onSite`: if the page's CSP forbids `eval`, the handler falls
-         *   back to the isolated world: same DOM and timing, but
-         *   page-defined globals (e.g. `window.myApp`) are not visible.
+         * - `onSite`: the page's CSP doesn't stop it (it arrives as a
+         *   user script, not as a string the page evaluates).
          *
          * @example
          * // onPage default: document_end (DOMContentLoaded)

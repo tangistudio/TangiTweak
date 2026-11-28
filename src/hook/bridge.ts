@@ -25,30 +25,20 @@
  * Nothing in the page's world calls trusted code: what the page posts
  * toward it is dropped (and logged).
  */
-import { formatScriptError, reportUncaught } from "../shared/scriptError";
-import { makeScriptConsole, formatLogArgs, scriptLogLine, type ScriptContext, type ScriptLogLevel } from "../shared/scriptLog";
-import { scriptFunction } from "../shared/scriptFn";
-import { makeLibRequire, type ShippedLib } from "../shared/scriptImports";
-import { builtinsReady, scriptBuiltin, ensureBuiltins, setBuiltinLoader, shippedSources, sourceLoader } from "../shared/builtins";
-import { makePageShim, domHandlersFor, scheduleDocument, fireRun, pageCtxBase, type PageDocumentHandler } from "../shared/pageShim";
-import { reactOf, ScriptLife, type Generation, type ReactDomClient } from "../shared/runLifecycle";
+import { formatScriptError } from "../shared/scriptError";
+import { formatLogArgs, scriptLogLine, type ScriptContext, type ScriptLogLevel } from "../shared/scriptLog";
+import { scheduleDocument } from "../shared/pageShim";
 import { setShadowResolver } from "../shared/domElements";
-import { hotRegistry } from "../shared/hotRefresh";
 import { packBytes, unpackBytes } from "../shared/bytesPack";
-import { Endpoint, endpointPair, messagePortEndpoint, portEndpoint, ISO_STORE_TAG, type ReqOf, type ReqOps, type ResOf } from "../shared/wire";
-import { ReplicaHub, type StoreSnapshots } from "../shared/storeReplica";
-import { tabScopeOfPage } from "../shared/storeOps";
-import { SiteMirrors } from "../shared/siteStoreMirror";
-import { siteBuiltin } from "../shared/siteBuiltin";
+import { Endpoint, messagePortEndpoint, portEndpoint, type ReqOf, type ReqOps, type ResOf } from "../shared/wire";
 import { SITE_DOWN_KINDS, SITE_UP_KINDS, type SiteDown, type SiteUp } from "../shared/siteStoreHost";
-import { Exposer, RpcClient, isRpcCall, isRpcResult, NOT_RUNNING, RPC_QUEUE_MAX, TOP_FRAME_ONLY, type RpcCall, type RpcResult } from "../shared/rpc";
-import { inertRemote } from "../shared/remote";
-import { followsNav, isDebuggerSafeOverlay, routeMatches, type DocumentWhen, type PlaceApi, type RouteMeta, type ScriptLayers } from "../shared/route";
+import { isRpcCall, isRpcResult, NOT_RUNNING, RPC_QUEUE_MAX, type RpcCall, type RpcResult } from "../shared/rpc";
+import { routeMatches, type DocumentWhen, type RouteMeta, type ScriptLayers } from "../shared/route";
 import { handleOriginBlob, handleOriginCookie, handleOriginIdb, handleOriginStorage } from "../shared/originBridge";
-import { checkUrl, NavRoutes, watchUrl } from "../shared/navRoutes";
+import { checkUrl, watchUrl } from "../shared/navRoutes";
 import { clipPathFor, normalizeRects } from "../shared/overlayRects";
 import { fromWireRequest, toWireResponse } from "../shared/ttFetch";
-import { ShortcutRegistry, watchShortcuts, FrameShortcuts, ShortcutWindows, shortcutFrames } from "../shared/shortcut";
+import { ShortcutRegistry, watchShortcuts, ShortcutWindows, shortcutFrames } from "../shared/shortcut";
 import { FrameKeyOffers, FrameKeyWatch, claimToken } from "../shared/frameKeys";
 import type { RanApi } from "../shared/netTypes";
 import { createToastLayer, type ToastLayer } from "./toastLayer";
@@ -187,19 +177,10 @@ import type { PaneToast } from "../shared/wire";
             safeSend({ type: "claimRequest", url: data.url });
             return;
         }
-        if (data.kind === "cspBlocked") {
-            // MV2: the page's CSP blocks eval in its world, so its onSite code runs here instead.
-            // The page can post this too: that only runs the scripts' own code here as well
-            if (!__NO_EVAL__ && !hookBroken) {
-                hookBroken = true;
-                void runDocumentHandlers(!!data.hot);
-            }
-            return;
-        }
         if (data.kind === "units?") {
-            // MV3: the hook lacks onSite code the last status named. The page can post this too:
+            // the hook lacks onSite code the last status named. The page can post this too:
             // a few asks per status, and the background only runs this frame's own bundle
-            if (!__MV3__ || unitAsks < 1 || !Array.isArray(data.keys)) return;
+            if (unitAsks < 1 || !Array.isArray(data.keys)) return;
             unitAsks--;
             safeSend({ type: "siteUnits", url: location.href, keys: data.keys.filter((k: unknown) => typeof k === "string" && k.length < 1000).slice(0, 2000) });
             return;
@@ -261,9 +242,8 @@ import type { PaneToast } from "../shared/wire";
         // too: only a cid we sent and are still waiting for is accepted, and
         // the value is page data either way. A call from the page never
         // reaches trusted code.
-        // the site's world's `tweak.siteStore` answers: to this world's mirrors and the overlays' (page data, for their own subscriptions)
+        // the site's world's `tweak.siteStore` answers: to the overlays' mirrors (page data, for their own subscriptions)
         if (SITE_DOWN_KINDS.has(data.kind)) {
-            siteMirrors?.receive(data);
             relaySiteDown(data);
             return;
         }
@@ -292,8 +272,7 @@ import type { PaneToast } from "../shared/wire";
 
     /** script ids whose onSite code this frame got (storage relay allow-list) */
     let pageScriptIds = new Set<string>();
-    let isoFired = false;
-    /** MV3: how many times the hook may still ask for onSite code it lacks (each status allows its ask and three more, as the hook asks again while it waits) */
+    /** how many times the hook may still ask for onSite code it lacks (each status allows its ask and three more, as the hook asks again while it waits) */
     let unitAsks = 0;
     /** the last bundle's code and routes (`rev`): a page back from the back/forward cache compares it */
     let bundleRev: string | undefined;
@@ -327,39 +306,16 @@ import type { PaneToast } from "../shared/wire";
         if (window === top) syncSiteFouc(resp.site ?? null);
         shadowPanes = window === top && resp.shadowPanes === true;
         syncOverlays(window === top ? resp.overlays || [] : [], hot);
-        if (__MV3__) {
-            // MV3 content scripts can't eval: isolated code runs in user-script worlds; this frame only relays the overlay's calls
-            isoScripts = new Set(((resp.isoHandlers || []) as { scriptId: string }[]).map((h) => h.scriptId));
-            isoOff = typeof resp.isoOff === "string" ? resp.isoOff : null;
-            return;
-        }
-        const iso: DocumentHandler[] = resp.isoHandlers || [];
-        if (resp.isoStores) {
-            isoPrimed = resp.isoStores;
-            isoPage = typeof resp.isoPage === "string" ? resp.isoPage : "";
-            isoHub?.prime(isoPrimed);
-        }
-        if (isoFired && !hot) return;
-        isoFired = true;
-        runPageScripts(iso, resp.isoLibs || [], "isolated", hot);
+        // content scripts can't eval: isolated code runs in user-script worlds; this frame only relays the overlay's calls
+        isoScripts = new Set(((resp.isoHandlers || []) as { scriptId: string }[]).map((h) => h.scriptId));
+        isoOff = typeof resp.isoOff === "string" ? resp.isoOff : null;
     }
 
-    /** MV3: the scripts whose onPage code runs in this frame (in chrome.userScripts worlds) */
+    /** the scripts whose onPage code runs in this frame (in chrome.userScripts worlds) */
     let isoScripts = new Set<string>();
-    /** MV3: why that code doesn't run (user scripts are off), if it doesn't */
+    /** why that code doesn't run (user scripts are off), if it doesn't */
     let isoOff: string | null = null;
-    /** per script, what answers calls into handlers run here: onPage (MV2), and onSite when the page CSP blocks eval */
-    const isoExposers = new Map<string, Exposer>();
-    const fallbackExposers = new Map<string, Exposer>();
-    /** MV2 onPage `ctx.shortcut`: keys pressed in this frame (listening from the start, before the page); shared keys go by list order */
-    let pageOrder: { id: string; name: string }[] = [];
-    /** each file the isolated onPage code ran → the script that ran it: uncaught errors thrown in it are that script's */
-    let isoFiles = new Map<string, { id: string; name: string }>();
-    reportUncaught(window, (file) => {
-        const o = isoFiles.get(file);
-        return o && ((e, context) => scriptLog(o.id, "error", formatScriptError(o.name, e, context), "isolated"));
-    });
-    // shortcuts in cross-origin iframes (shared/frameKeys.ts): as the parent (MV2 onPage, overlays) and as the child
+    // shortcuts in cross-origin iframes (shared/frameKeys.ts): as the parent (overlays) and as the child
     let keyHold = false;
     const browserRuntime = (globalThis as any).browser?.runtime;
     const keyOffers = new FrameKeyOffers(
@@ -377,86 +333,10 @@ import type { PaneToast } from "../shared/wire";
         },
         true
     );
-    const pageKeys = new FrameShortcuts(window, {
-        rank: (s) => {
-            const i = pageOrder.findIndex((x) => x.id === s);
-            return i < 0 ? Infinity : i;
-        },
-        name: (s) => pageOrder.find((x) => x.id === s)?.name ?? s,
-        error: (s, e) => scriptLog(s, "error", formatScriptError(pageOrder.find((x) => x.id === s)?.name ?? s, e, "ctx.shortcut"), "isolated"),
-        warn: (s, msg) => scriptLog(s, "warn", msg, "isolated"),
-        offers: keyOffers,
-    });
 
-    // ---- isolated onPage code's stores (MV2: it runs here) ----
-    //
-    // Replicas, primed by the bundle (`isoStores`, this page's tweak.pageStore
-    // copies). Their ops go over L2 tagged `ISO_STORE_TAG + s`, once the
-    // background granted the script (`iso.stores`) on that link.
-    let isoHub: ReplicaHub | null = null;
-    /** the hub's side of the relay to L2 */
-    let isoOut: Endpoint | null = null;
-    let isoPrimed: StoreSnapshots = {};
-    let isoPage = "";
-    /** per script: L2 granted (null: refused), for the current L2 link */
-    function storeGrants(op: "iso.stores", what: string) {
-        let grants = new Map<string, Promise<Endpoint | null>>();
-        return {
-            reset: () => void (grants = new Map()),
-            get(s: string): Promise<Endpoint | null> {
-                let p = grants.get(s);
-                if (!p) {
-                    const mine = grants;
-                    p = l2up(op).then(
-                        (ep) => ep.call(op, { url: location.href }, s).then(() => ep),
-                        (e: any) => {
-                            if (mine.get(s) === p) mine.delete(s);
-                            throw e;
-                        }
-                    );
-                    p = p.catch((e: any) => {
-                        if (e?.name === "DisconnectedError") {
-                            if (mine.get(s) === p) mine.delete(s);
-                        } else dlog("warn", `${what} of ${s}: refused: ${e?.message || e}`);
-                        return null;
-                    });
-                    mine.set(s, p);
-                }
-                return p;
-            },
-        };
-    }
-    const isoGrants = storeGrants("iso.stores", "isolated onPage stores");
-
-    /** a hub's store ops (on `out`) → L2, tagged `tag + s`, for the scripts `allowed` lets through; in order: each op waits for its script's grant */
-    function relayStores(out: Endpoint, grant: (s: string) => Promise<Endpoint | null>, tag: string, allowed: (s: string) => boolean = () => true): void {
-        const ok = (s: string | undefined): s is string => s !== undefined && allowed(s);
-        out.on("store.declare", (a, s) => ok(s) && void grant(s).then((ep) => ep && !ep.closed && ep.push("store.declare", a, tag + s)));
-        out.on("store.set", (a, s) => ok(s) && void grant(s).then((ep) => ep && !ep.closed && ep.push("store.set", a, tag + s)));
-        out.handle("store.sub", async (a, s) => {
-            if (!ok(s)) throw new Error("store.sub: this script's stores aren't reachable here");
-            const ep = await grant(s);
-            if (!ep) throw Object.assign(new Error("store.sub: no link to the extension"), { name: "DisconnectedError" });
-            return ep.call("store.sub", a, tag + s);
-        });
-    }
-
-    function isoStores(): ReplicaHub {
-        if (isoHub) return isoHub;
-        const [hubSide, out] = endpointPair();
-        isoOut = out;
-        relayStores(out, isoGrants.get, ISO_STORE_TAG);
-        isoHub = new ReplicaHub({ ctx: "isolated", log: (s, msg, level) => scriptLog(s, level, msg, "isolated") });
-        isoHub.prime(isoPrimed);
-        isoHub.attach(hubSide);
-        return isoHub;
-    }
-
-    // ---- `tweak.siteStore`: the hook holds them; mirrors here (MV2 onPage code,
-    // the onSite fallback) and in the overlays (relayed) connect over window messages ----
-    let siteMirrors: SiteMirrors | null = null;
+    // ---- `tweak.siteStore`: the hook holds them; mirrors in the overlays
+    // (relayed here) connect over window messages ----
     const postSite = (m: SiteUp) => window.postMessage({ source: MAIN_SOURCE, ...m }, "/");
-    const siteStores = () => (siteMirrors ??= new SiteMirrors({ ctx: "bridge", post: postSite, log: (s, msg, level) => scriptLog(s, level, msg, "isolated") }));
     /** an overlay's subscriptions: sub → its script */
     const overlaySubs = new Map<string, string>();
 
@@ -494,208 +374,6 @@ import type { PaneToast } from "../shared/wire";
                 postSite({ kind: "site.disconnect", sub });
             }
     }
-
-    /** scripts whose onSite fallback code already reported calling a handle */
-    const siteCallers = new Set<string | null>();
-
-    // isolated code's built-in React: evaluated here from the background's copy (a <script> tag would put it in the page)
-    if (!__MV3__)
-        setBuiltinLoader(
-            sourceLoader(() => new Promise((resolve, reject) => safeSend({ type: "getBuiltinReact" }, (r: any) => (typeof r?.src === "string" ? resolve(r.src) : reject(new Error(r?.error || "no answer from the extension"))))))
-        );
-
-    /** per world, per script: its runs here (shared/runLifecycle.ts) */
-    const lives = { isolated: new Map<string, ScriptLife>(), page: new Map<string, ScriptLife>() };
-    /** per world, per script: its handlers with `navigation`, and ctx.onNavigate */
-    const navs = { isolated: new Map<string, NavRoutes<PageDocumentHandler>>(), page: new Map<string, NavRoutes<PageDocumentHandler>>() };
-    const navsOf = (world: "page" | "isolated", id: string): NavRoutes<PageDocumentHandler> => {
-        let n = navs[world].get(id);
-        if (!n)
-            navs[world].set(
-                id,
-                (n = new NavRoutes(() => {
-                    watchNavigation();
-                    watchUrl((url) => n!.nav(url));
-                }))
-            );
-        return n;
-    };
-    /** per script: its `react-dom/client` (for `ctx.mount` in onPage code) */
-    const reactDoms = new Map<string, () => ReactDomClient>();
-
-    function runPageScripts(handlers: DocumentHandler[], libSources: ShippedLib[], world: "page" | "isolated", hot: boolean, loaded = false): void {
-        // MV3: no eval here — isolated code runs in user-script worlds, onSite code comes as user scripts (no CSP fallback needed)
-        if (__NO_EVAL__ || dead) return;
-        if (world === "isolated" && !loaded) {
-            const { codes, packages } = shippedSources(handlers.map((h) => h.src), libSources);
-            if (!builtinsReady(codes, packages)) {
-                ensureBuiltins(codes, packages)
-                    .catch((e: any) => {
-                        for (const h of handlers) scriptLog(h.scriptId, "error", formatScriptError(h.name, new Error(`the built-in React didn't load: ${e?.message || e}`), "onPage"), "isolated");
-                    })
-                    .then(() => runPageScripts(handlers, libSources, world, hot, true));
-                return;
-            }
-        }
-        const api: PlaceApi = world === "isolated" ? "onPage" : "onSite";
-        const what = world === "isolated" ? "onPage" : "onSite (isolated-world fallback)";
-        dlog("debug", `${what}: running ${handlers.length} script(s)${hot ? " (hot refire)" : ""}`);
-        const exposers = world === "isolated" ? isoExposers : fallbackExposers;
-        // the onSite fallback is still page code
-        const ctx: ScriptContext = world === "isolated" ? "isolated" : "page";
-        for (const [id, ex] of [...exposers])
-            if (!handlers.some((h) => h.scriptId === id)) {
-                ex.close();
-                exposers.delete(id);
-                lives[world].get(id)?.stop();
-                lives[world].delete(id);
-                navs[world].delete(id);
-                if (world === "isolated") {
-                    abortCalls(id, "the script stopped");
-                    pageKeys.removeScript(id);
-                }
-            }
-        if (world === "isolated") pageOrder = handlers.map((h) => ({ id: h.scriptId, name: h.name }));
-        const files = new Map<string, { id: string; name: string }>();
-        // onPage code's handles: its onSite handlers (the page's world), its own (here), its overlay (top frame)
-        // a compile's handles call with its signal: they abort once a reload replaced it and its runs ended
-        const handle = (scriptId: string, gen: Generation) => (api: PlaceApi, key: string, route: RouteMeta) => {
-            const sig = () => gen.signal;
-            return api === "onSite"
-                ? pageClient(scriptId).remote(key, sig)
-                : api === "onPage" || (api === "onOverlay" && isDebuggerSafeOverlay(route))
-                  ? localClient(scriptId).remote(key, sig)
-                  : window === top
-                    ? overlayClient(scriptId).remote(key, sig)
-                    : inertRemote(TOP_FRAME_ONLY);
-        };
-        const shimFor = (scriptId: string | null, name: string, params: Record<string, any>, exposer?: Exposer, storesOf?: string, paramOwner?: string, gen?: Generation, debuggerSafeOverlays: boolean | "all" = false) =>
-            makePageShim({
-                params,
-                world,
-                debuggerSafeOverlays,
-                exposer,
-                lib: scriptId ? undefined : name,
-                stores:
-                    world === "isolated" && storesOf
-                        ? { store: (n, initial, persist) => isoStores().store(storesOf, n, initial, persist), tabStore: (n, initial) => isoStores().tabStore(storesOf, n, initial, tabScopeOfPage(isoPage)), pageStore: (n, initial) => isoStores().pageStore(storesOf, n, initial, isoPage) }
-                        : undefined,
-                call: scriptId && gen && world === "isolated" ? handle(scriptId, gen) : undefined,
-                siteStore: scriptId ? (n, initial) => siteStores().store(scriptId, n, initial) : undefined,
-                // the onSite fallback reports a handle call like the hook does (once per script)
-                onSiteCall: (e) => {
-                    if (siteCallers.has(scriptId)) return;
-                    siteCallers.add(scriptId);
-                    scriptLog(scriptId, "error", formatScriptError(name, e, "onSite"), ctx);
-                },
-                log: (source, ...args) => scriptLog(scriptId, "info", scriptLogLine(name, source, formatLogArgs(args)), ctx),
-                storage: {
-                    get: (key: string) => new Promise((r) => safeSend({ type: "scriptStorageGet", scriptId, key }, (x: any) => r(x && x.value))),
-                    set: (key: string, value: any) => new Promise((r) => safeSend({ type: "scriptStorageSet", scriptId, key, value }, () => r(null))),
-                },
-                // isolated code (MV2: here) saves params for its script (`paramOwner`) or that script's library
-                setParam: world === "isolated" && paramOwner ? (key, value, lib) => new Promise((r) => safeSend({ type: "scriptParamSet", scriptId: paramOwner, key, value, lib }, () => r())) : undefined,
-                fetch: world === "isolated" && scriptId ? (request, bypass) => l2call("iso.fetch", { url: location.href, request, bypass }, scriptId) : undefined,
-                toast: world === "isolated" && scriptId ? (spec) => l2call("iso.toast", { url: location.href, spec }, scriptId) : undefined,
-            });
-        for (const [order, h] of handlers.entries()) {
-            let exposer = exposers.get(h.scriptId);
-            if (!exposer) exposers.set(h.scriptId, (exposer = new Exposer()));
-            else exposer.reset();
-            let life = lives[world].get(h.scriptId);
-            const place = { tweak: h.name, order, layers: h.layers };
-            if (life) life.setPlace(place);
-            else {
-                const id = h.scriptId;
-                life = new ScriptLife({
-                    doc: document,
-                    react: world === "isolated" ? () => reactDoms.get(id)!() : undefined,
-                    place,
-                    onError: (e) => scriptLog(id, "error", formatScriptError(h.name, e, "teardown"), ctx),
-                    log: (level, msg) => scriptLog(id, level, scriptLogLine(h.name, what, msg), ctx),
-                    // f.shortcut (MV2 onPage): keys pressed in that iframe
-                    frameCtx: world === "isolated" ? (doc, signal) => ({ shortcut: (combo: string, fn: () => unknown, opts?: any) => pageKeys.add(id, combo, fn, opts, signal, doc.defaultView!) }) : undefined,
-                });
-                lives[world].set(id, life);
-            }
-            const gen = life.begin();
-            // shadow console like the MAIN-world path: script console.*
-            // calls go to the extension LOG, not the page console
-            const consoleProxy = makeScriptConsole((level, source, text) => scriptLog(h.scriptId, level, scriptLogLine(h.name, source, text), ctx));
-            let dom: PageDocumentHandler[];
-            const owner = { id: h.scriptId, name: h.name };
-            const ran = [h.name];
-            try {
-                // page-side require over the shipped library sources and data files
-                const codeOf = (importer: string) => (importer === h.name ? h.src : (libSources.find((l) => l.name === importer)?.src ?? ""));
-                const allowShadow = world === "isolated" && window === top && !!h.shadowOverlay;
-                const shim = shimFor(h.scriptId, h.name, h.params || {}, exposer, h.scriptId, h.scriptId, gen, allowShadow && (h.shadowOverlay === "all" ? "all" : true));
-                // the tweak's modules run with its `tweak`: their handlers, params and stores are its own
-                const requireFrom = makeLibRequire(
-                    libSources,
-                    (lib, require, moduleObj) => (ran.push(lib.name), scriptFunction(lib.src!, lib.name)(shim.host, consoleProxy, require, moduleObj, moduleObj.exports)),
-                    // the built-ins: isolated code all of them, the onSite fallback valtio's core
-                    world === "isolated" ? { builtin: scriptBuiltin(codeOf, hotRegistry(h.scriptId).begin()) } : { builtin: siteBuiltin, onSite: true }
-                );
-                const moduleObj = { exports: {} as any };
-                shim.top(() => scriptFunction(h.src, h.name)(shim.host, consoleProxy, requireFrom(h.name), moduleObj, moduleObj.exports));
-                dom = allowShadow ? [...shim.dom, ...shim.shadowOverlays] : shim.dom;
-                if (world === "isolated") reactDoms.set(h.scriptId, () => reactOf(requireFrom(h.name)));
-                for (const f of ran) if (!files.has(f)) files.set(f, owner);
-            } catch (e: any) {
-                // the previous code keeps running
-                for (const [f, o] of isoFiles) if (o.id === h.scriptId && !files.has(f)) files.set(f, o);
-                exposer.revert();
-                exposer.done();
-                life.discard(gen);
-                scriptLog(h.scriptId, "error", formatScriptError(h.name, e, `${what} compile`), ctx);
-                continue;
-            }
-            const matching = domHandlersFor(dom, location.href, exposer);
-            exposer.done();
-            const nav = navsOf(world, h.scriptId);
-            const fire = (d: PageDocumentHandler, url: string) => {
-                const ranApi: RanApi = isDebuggerSafeOverlay(d.route) ? "onOverlay" : api;
-                try {
-                    const report = (e: unknown) => scriptLog(h.scriptId, "error", formatScriptError(h.name, e, ranApi), ctx);
-                    const keys = world === "isolated" ? pageKeys : null;
-                    fireRun(
-                        life,
-                        gen,
-                        d,
-                        (signal) => ({
-                            ...pageCtxBase(url),
-                            ...(keys ? { shortcut: (combo: string, fn: () => unknown, opts?: any) => keys.add(h.scriptId, combo, fn, opts, signal) } : {}),
-                            onNavigate: nav.onNavigate(signal, report),
-                        }),
-                        exposer,
-                        report
-                    );
-                    scriptRan(h.scriptId, h.name, ranApi);
-                } catch (e: any) {
-                    scriptLog(h.scriptId, "error", formatScriptError(h.name, e, ranApi), ctx);
-                }
-            };
-            for (const d of matching) if (!followsNav(d.route)) scheduleDocument(d.when, () => fire(d, location.href), hot);
-            nav.set({ dom, url: location.href, now: hot, fire, stop: (d) => life.stopRun(d.h, "the page navigated away"), exposer, schedule: scheduleDocument });
-            life.commit(gen);
-        }
-        if (world === "isolated") isoFiles = files;
-    }
-
-    /** onSite handlers, here because the page CSP blocks eval in the page */
-    async function runDocumentHandlers(hot: boolean): Promise<void> {
-        if (dead) return;
-        // handlers come embedded in the hook bundle (getHookBundle)
-        const bundle = await new Promise<any>((resolve) => {
-            safeSend({ type: "getHookBundle", url: location.href }, (r: any) => resolve(r || { domHandlers: [] }));
-            // dead bridge: safeSend never answers — resolve empty after a beat
-            setTimeout(() => resolve({ domHandlers: [] }), 1000);
-        });
-        runPageScripts(bundle.domHandlers || [], bundle.libs || [], "page", hot);
-    }
-
-    let hookBroken = false;
 
     // ---- L2: the `tt-bridge` port to the background ----
     //
@@ -757,20 +435,16 @@ import type { PaneToast } from "../shared/wire";
         l2Port = port;
         ep.on("bundle.update", () => guard(() => onBundleUpdate()));
         // an overlay's store updates (the background only sends those of scripts with an overlay here)
-        // (and isolated onPage code's, tagged ISO_STORE_TAG + s)
         for (const op of ["store.patch", "store.reject", "store.drop"] as const)
             ep.on(op, (a: any, s) => {
                 if (s === undefined) return;
-                if (s.startsWith(ISO_STORE_TAG)) isoOut?.push(op, a, s.slice(ISO_STORE_TAG.length));
-                else {
-                    const nul = s.indexOf("\u0000");
-                    const ovlId = nul < 0 ? s : s.slice(0, nul);
-                    const storeId = nul < 0 ? s : s.slice(nul + 1);
-                    overlays.get(ovlId)?.ep?.push(op, a, storeId);
-                    for (const p of paneFrames.values()) if (p.s === ovlId) p.ep?.push(op, a, storeId);
-                }
+                const nul = s.indexOf("\u0000");
+                const ovlId = nul < 0 ? s : s.slice(0, nul);
+                const storeId = nul < 0 ? s : s.slice(nul + 1);
+                overlays.get(ovlId)?.ep?.push(op, a, storeId);
+                for (const p of paneFrames.values()) if (p.s === ovlId) p.ep?.push(op, a, storeId);
             });
-        // MV3: the overlay ⇄ isolated-world relay (the background checks tab, frame and script)
+        // the overlay ⇄ isolated-world relay (the background checks tab, frame and script)
         ep.on("iso.result", (r, s) => {
             const p = isRpcResult(r) ? isoPending.get(r.cid) : undefined;
             if (!p || p.s !== s) return;
@@ -817,14 +491,11 @@ import type { PaneToast } from "../shared/wire";
                         (e: any) => dlog("warn", `toast pane of ${p.view.source}: no longer granted: ${e?.message || e}`)
                     );
         for (const w of l2Waiters.splice(0)) w();
-        // isolated code's replicas re-grant (on first use) and re-subscribe
-        isoGrants.reset();
-        isoHub?.reconnect();
         if (l2Opened > 1) keyOffers.relink();
         ep.onClose(() => {
             if (l2 === ep) l2 = null;
             // in-page panes whose traffic went through the background lost it: they show the default toast
-            for (const p of [...paneFrames.values()]) if (p.host && __MV3__) failPane(p, "lost its link to the extension");
+            for (const p of [...paneFrames.values()]) if (p.host) failPane(p, "lost its link to the extension");
             // the background forgot what this frame watched for its parents; they offer again
             childKeys.clear();
             for (const [cid, p] of [...isoPending])
@@ -832,7 +503,7 @@ import type { PaneToast } from "../shared/wire";
                     isoPending.delete(cid);
                     p.reply({ cid, ok: false, error: { name: "DisconnectedError", message: "the link to the extension dropped" } });
                 }
-            if (dead || (!l2Holders && !isoHub && !keyHold && !toastLayer?.keys().length) || l2Timer) return;
+            if (dead || (!l2Holders && !keyHold && !toastLayer?.keys().length) || l2Timer) return;
             l2Timer = setTimeout(() => {
                 l2Timer = null;
                 openPort();
@@ -864,17 +535,15 @@ import type { PaneToast } from "../shared/wire";
         return (await l2up(op)).call(op, a, s);
     }
 
-    /** MV3: onPage code whose link to the extension closed (the service worker restarted) loads again: a save reaches it only over that link */
+    /** onPage code whose link to the extension closed (the service worker restarted) loads again: a save reaches it only over that link */
     function wakeIso(): void {
-        if (!__MV3__) return;
         try {
             window.postMessage({ source: MAIN_SOURCE, kind: "iso.wake" }, "/");
         } catch {}
     }
 
-    /** scripts changed: refresh hook status; onPage refires in the MAIN world (hook) when healthy, else here (isolated) */
+    /** scripts changed: refresh hook status (onSite refires in the MAIN world, onPage in its user-script world) */
     function onBundleUpdate(): void {
-        if (hookBroken) void runDocumentHandlers(true);
         safeSend({ type: "getHookBundle", url: location.href }, (resp: any) => {
             noteBundle(resp, true);
             postStatus(resp, true);
@@ -895,7 +564,6 @@ import type { PaneToast } from "../shared/wire";
         safeSend({ type: "getHookBundle", url: location.href }, (resp: any) => {
             if (!resp) return;
             const changed = resp.rev !== had;
-            if (changed && hookBroken) void runDocumentHandlers(true);
             noteBundle(resp, changed);
             if (changed) postStatus(resp, true);
         });
@@ -990,9 +658,7 @@ import type { PaneToast } from "../shared/wire";
         root.appendChild(bar);
         siteRecoveryBar = bar;
     }
-    /** isolated-world `overlay.fn()` callers, per script */
-    const overlayClients = new Map<string, RpcClient>();
-    /** MV3: overlay → isolated-world calls waiting for the background's answer (L2), by cid */
+    /** overlay → isolated-world calls waiting for the background's answer (L2), by cid */
     const isoPending = new Map<string, { s: string; reply: (r: RpcResult) => void; ep?: Endpoint }>();
     /** MV3: isolated-world → overlay calls the overlay hasn't answered yet, by cid */
     const isoRelayed = new Map<string, { s: string }>();
@@ -1161,39 +827,26 @@ import type { PaneToast } from "../shared/wire";
         const host = p.host!;
         const nonce = p.nonce;
         const debug = (m: string) => dlog("debug", `toast pane of ${p.view.source}:`, m);
-        if (__MV3__) {
-            // pane.js runs in the script's user-script world and finds its host by this tag (then untags it)
-            host.setAttribute("data-tt-pane", newNonce());
-            document.documentElement.appendChild(host);
-            const relay = new Endpoint((msg) => l2?.push("pane.relay", { nonce, msg }, p.s), { debug });
-            paneRelays.set(nonce, relay);
-            relay.onClose(() => {
-                if (paneRelays.get(nonce) !== relay) return;
-                paneRelays.delete(nonce);
-                l2?.push("pane.relay", { nonce, closed: true }, p.s);
-            });
-            wirePane(p, relay, nonce);
-            paneBeat ??= setInterval(() => {
-                const r = [...paneFrames.values()].filter((x) => x.host && paneRelays.has(x.nonce));
-                if (!r.length) {
-                    clearInterval(paneBeat!);
-                    paneBeat = null;
-                }
-                for (const x of r) l2?.push("pane.relay", { nonce: x.nonce }, x.s);
-            }, 20000);
-            await l2call("pane.shadow", { nonce, token: host.getAttribute("data-tt-pane")! }, p.s);
-            return;
-        }
-        const g = globalThis as any;
-        if (typeof g.__ttPaneRun !== "function") await l2call("pane.shadow", { nonce }, p.s);
-        if (p.closed || p.nonce !== nonce) return;
-        if (typeof g.__ttPaneRun !== "function") throw new Error("pane.js didn't load");
-        const { port1, port2 } = new MessageChannel();
-        const ep = messagePortEndpoint(port1, { debug });
-        wirePane(p, ep, nonce);
-        p.el.appendChild(host);
-        host.style.display = "block";
-        void g.__ttPaneRun(port2, nonce, host);
+        // pane.js runs in the script's user-script world and finds its host by this tag (then untags it)
+        host.setAttribute("data-tt-pane", newNonce());
+        document.documentElement.appendChild(host);
+        const relay = new Endpoint((msg) => l2?.push("pane.relay", { nonce, msg }, p.s), { debug });
+        paneRelays.set(nonce, relay);
+        relay.onClose(() => {
+            if (paneRelays.get(nonce) !== relay) return;
+            paneRelays.delete(nonce);
+            l2?.push("pane.relay", { nonce, closed: true }, p.s);
+        });
+        wirePane(p, relay, nonce);
+        paneBeat ??= setInterval(() => {
+            const r = [...paneFrames.values()].filter((x) => x.host && paneRelays.has(x.nonce));
+            if (!r.length) {
+                clearInterval(paneBeat!);
+                paneBeat = null;
+            }
+            for (const x of r) l2?.push("pane.relay", { nonce: x.nonce }, x.s);
+        }, 20000);
+        await l2call("pane.shadow", { nonce, token: host.getAttribute("data-tt-pane")! }, p.s);
     }
 
     function paneLoaded(p: PaneFrame): void {
@@ -1226,15 +879,15 @@ import type { PaneToast } from "../shared/wire";
         let proven = false;
         const live = () => proven && !p.closed && p.ep === ep;
         ep.handle("hello", async (a) => {
-            // in the page (MV3) its world untagged the host it took: one the page made can't say hello
-            if (proven || a?.nonce !== nonce || p.closed || (__MV3__ && p.host?.hasAttribute("data-tt-pane"))) {
+            // in the page its world untagged the host it took: one the page made can't say hello
+            if (proven || a?.nonce !== nonce || p.closed || p.host?.hasAttribute("data-tt-pane")) {
                 ep.close("refused");
                 throw new Error("refused");
             }
             proven = true;
             p.ep = ep;
             p.reloads = 0;
-            if (p.host && __MV3__) {
+            if (p.host) {
                 p.el.appendChild(p.host);
                 p.host.style.display = "block";
             }
@@ -1255,8 +908,8 @@ import type { PaneToast } from "../shared/wire";
         ep.handle("storage.set", mine((a: ReqOf<"storage.set">) => new Promise((r) => safeSend({ type: "scriptStorageSet", scriptId: s, key: a.key, value: a.value }, () => r({})))));
         ep.handle("param.set", mine((a: ReqOf<"param.set">) => new Promise((r) => safeSend({ type: "scriptParamSet", scriptId: s, key: a.key, value: a.value, lib: a.lib }, () => r({})))));
         ep.handle("toast", mine((a: ReqOf<"toast">) => l2call("toast", a, s)));
-        // MV3 in-page panes: the user-script world can't ask the background for React itself (pane.js)
-        if (p.host && __MV3__) ep.handle("builtin.react", mine(() => new Promise<string>((resolve, reject) => safeSend({ type: "getBuiltinReact" }, (r: any) => (typeof r?.src === "string" ? resolve(r.src) : reject(new Error(r?.error || "no answer from the extension")))))));
+        // in-page panes: the user-script world can't ask the background for React itself (pane.js)
+        if (p.host) ep.handle("builtin.react", mine(() => new Promise<string>((resolve, reject) => safeSend({ type: "getBuiltinReact" }, (r: any) => (typeof r?.src === "string" ? resolve(r.src) : reject(new Error(r?.error || "no answer from the extension")))))));
         ep.on("log", (a) => live() && scriptLog(s, ["debug", "info", "warn", "error"].includes(a?.level) ? a.level : "info", String(a?.msg ?? ""), "overlay"));
         ep.on("pane.action", (a) => live() && typeof a?.actionId === "string" && a.actionId.length <= 64 && toastLayer?.paneAction(p.key, a.actionId, a.value));
         ep.on("pane.close", () => live() && toastLayer?.paneClose(p.key));
@@ -1491,7 +1144,7 @@ import type { PaneToast } from "../shared/wire";
         ep.on("rpc.result", (r) => {
             if (!proven) return;
             const rel = isRpcResult(r) ? isoRelayed.get(r.cid) : undefined;
-            if (!rel || rel.s !== s) return void overlayClients.get(s)?.receive(r);
+            if (!rel || rel.s !== s) return;
             isoRelayed.delete(r.cid);
             l2?.push("iso.result", r, s);
         });
@@ -1533,11 +1186,10 @@ import type { PaneToast } from "../shared/wire";
         dropOverlaySubs(s);
         o.frame?.remove();
         o.ep?.close(why);
-        for (const call of o.queue.splice(0)) overlayClients.get(s)?.receive(callError(call.cid, NOT_RUNNING));
-        // MV3: the isolated side's calls end with the `overlay.closed` below
+        // the isolated side's queued calls end with the `overlay.closed` below
+        o.queue.length = 0;
         for (const [cid, r] of [...isoRelayed])
             if (r.s === s) isoRelayed.delete(cid);
-        overlayClients.get(s)?.disconnect(`the overlay ${why}`);
         l2?.push("overlay.closed", {}, s);
         l2Holders = overlays.size;
         if (o.info.fullPage && ![...overlays.values()].some((x) => x.info.fullPage)) {
@@ -1545,22 +1197,7 @@ import type { PaneToast } from "../shared/wire";
         }
     }
 
-    /** the isolated world's caller into script `s`'s overlay */
-    function overlayClient(s: string): RpcClient {
-        let c = overlayClients.get(s);
-        if (c) return c;
-        c = new RpcClient((call) => {
-            const o = overlays.get(s);
-            if (!o) return void queueMicrotask(() => c!.receive(callError(call.cid, NOT_RUNNING)));
-            if (o.ep) return o.ep.push("rpc.call", call);
-            if (o.queue.length >= RPC_QUEUE_MAX) return void queueMicrotask(() => c!.receive(callError(call.cid, `${call.fn}(): too many calls waiting for the overlay`)));
-            o.queue.push(call);
-        });
-        overlayClients.set(s, c);
-        return c;
-    }
-
-    /** MV3: isolated code calls script `s`'s overlay (relayed by the background) */
+    /** isolated code calls script `s`'s overlay (relayed by the background) */
     function callOverlayFromIso(s: string, call: RpcCall): void {
         const o = window === top ? overlays.get(s) : undefined;
         const fail = (message: string) => l2?.push("iso.result", callError(call.cid, message), s);
@@ -1571,7 +1208,7 @@ import type { PaneToast } from "../shared/wire";
         else o.queue.push(call);
     }
 
-    /** MV3: the overlay calls isolated code, in a user-script world (through the background) */
+    /** the overlay calls isolated code, in a user-script world (through the background) */
     function callIso(s: string, call: RpcCall, reply: (r: RpcResult) => void): void {
         if (isoOff) return reply(callError(call.cid, isoOff));
         const p: { s: string; reply: (r: RpcResult) => void; ep?: Endpoint } = { s, reply };
@@ -1590,22 +1227,16 @@ import type { PaneToast } from "../shared/wire";
         );
     }
 
-    /** an overlay's call into one of its script's handles, by the handle's key: onPage (here, or a user-script world on MV3), onSite (the CSP fallback here, else the hook) */
+    /** an overlay's call into one of its script's handles, by the handle's key: onPage (a user-script world), onSite (the hook) */
     function routeOverlayCall(s: string, call: RpcCall, reply: (r: RpcResult) => void): void {
-        if (call.h.startsWith("onPage:")) {
-            if (__MV3__) return isoScripts.has(s) ? callIso(s, call, reply) : reply(callError(call.cid, NOT_RUNNING));
-            const iso = isoExposers.get(s);
-            return iso ? iso.answer(call, reply) : reply(callError(call.cid, NOT_RUNNING));
-        }
+        if (call.h.startsWith("onPage:")) return isoScripts.has(s) ? callIso(s, call, reply) : reply(callError(call.cid, NOT_RUNNING));
         if (call.h.startsWith("onSite:")) return callSite(s, call, reply);
         reply(callError(call.cid, NOT_RUNNING));
     }
 
-    /** a call into the script's onSite code: the CSP fallback here, else the hook (L4) */
+    /** a call into the script's onSite code (the hook, L4) */
     function callSite(s: string, call: RpcCall, reply: (r: RpcResult) => void): void {
-        const fb = fallbackExposers.get(s);
-        if (fb?.has(call.h)) return fb.answer(call, reply);
-        if (pageScriptIds.has(s) && !hookBroken) return callHook(s, call, reply);
+        if (pageScriptIds.has(s)) return callHook(s, call, reply);
         reply(callError(call.cid, NOT_RUNNING));
     }
 
@@ -1613,39 +1244,6 @@ import type { PaneToast } from "../shared/wire";
     function callHook(s: string, call: RpcCall, reply: (r: RpcResult) => void): void {
         l4Pending.set(call.cid, { s, reply });
         window.postMessage({ source: MAIN_SOURCE, kind: "rpc.call", s, call }, "/");
-    }
-
-    /** onPage code → its script's onSite handlers; the answers are page data */
-    const pageClients = new Map<string, RpcClient>();
-    function pageClient(s: string): RpcClient {
-        let c = pageClients.get(s);
-        if (!c) {
-            const client: RpcClient = new RpcClient((call) => callSite(s, call, (r) => client.receive(r)));
-            pageClients.set(s, (c = client));
-        }
-        return c;
-    }
-
-    /** the script's onPage code reloaded or stopped: its pending calls end (AbortError) and are cancelled */
-    function abortCalls(s: string, reason: string): void {
-        pageClients.get(s)?.abort(reason);
-        localClients.get(s)?.abort(reason);
-        overlayClients.get(s)?.abort(reason);
-    }
-
-    /** onPage code → its own onPage handlers (MV2: here) */
-    const localClients = new Map<string, RpcClient>();
-    function localClient(s: string): RpcClient {
-        let c = localClients.get(s);
-        if (!c) {
-            const client: RpcClient = new RpcClient((call) => {
-                const ex = isoExposers.get(s);
-                if (ex) ex.answer(call, (r) => client.receive(r));
-                else client.receive(callError(call.cid, NOT_RUNNING));
-            });
-            localClients.set(s, (c = client));
-        }
-        return c;
     }
 
     /** `tweak.fetch(…, { from: "page" })` and the overlay's `fetch`: this frame fetches, as the page (Firefox: the page's own fetch) */
@@ -1692,9 +1290,6 @@ import type { PaneToast } from "../shared/wire";
             return false;
         }
         guard(() => {
-            if (msg && msg.type === "hookCspBlocked") {
-                hookBroken = true;
-            }
             // with an open port the same update arrives as `bundle.update`
             if (msg && msg.type === "bundleUpdate" && !l2) onBundleUpdate();
             // the toast center has a toast for this tab: open the port (it flushes on connect)
@@ -1732,7 +1327,7 @@ import type { PaneToast } from "../shared/wire";
         );
         // isolated handlers must not depend on the page hook asking for its status
         setTimeout(() => {
-            if (!isoFired && !dead) safeSend({ type: "getHookBundle", url: location.href }, (resp: any) => noteBundle(resp, false));
+            if (!dead) safeSend({ type: "getHookBundle", url: location.href }, (resp: any) => noteBundle(resp, false));
         }, 1500);
     }
 

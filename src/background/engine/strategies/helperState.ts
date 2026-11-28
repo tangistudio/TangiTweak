@@ -31,7 +31,7 @@ export function onHelperActiveChange(fn: () => void): () => void {
 
 /** why `s` can't run right now, or null when its strategy is live */
 export function strategyUnavailable(s: Strategy): string | null {
-    const why = strategyUnsupported(s, { firefox: IS_FIREFOX, mv3: __MV3__ });
+    const why = strategyUnsupported(s, { firefox: IS_FIREFOX });
     if (why) return why;
     if (s === "helper" && !active) return "the local helper isn't connected (Settings → Local helper)";
     if (s === "debugger" && typeof chrome !== "undefined" && !chrome.debugger) return "chrome.debugger is unavailable";

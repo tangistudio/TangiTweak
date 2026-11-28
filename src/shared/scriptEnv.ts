@@ -39,6 +39,6 @@ export function detectFirefox(g: any = globalThis): boolean {
     return /\bFirefox\//.test(g.navigator?.userAgent || "");
 }
 
-export function scriptEnv(mv3: boolean = __MV3__, firefox: boolean = __FIREFOX__ || detectFirefox(), os: Os = OS): ScriptEnv {
-    return { isChrome: !firefox, isFirefox: firefox, isMV2: !mv3, isMV3: mv3, isMac: os === "mac", isWindows: os === "windows", isLinux: os === "linux" };
+export function scriptEnv(firefox: boolean = __FIREFOX__ || detectFirefox(), os: Os = OS): ScriptEnv {
+    return { isChrome: !firefox, isFirefox: firefox, isMV2: false, isMV3: true, isMac: os === "mac", isWindows: os === "windows", isLinux: os === "linux" };
 }

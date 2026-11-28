@@ -1,0 +1,400 @@
+/**
+ * The sandbox (sandbox.ts is its page) — the ONLY extension context where MV3 allows eval.
+ * (MV3's extension-pages CSP forbids `new Function` everywhere: service
+ * worker, offscreen document, options/popup pages. The manifest's
+ * "sandbox" key exempts the pages listed there, so user scripts compile
+ * and execute HERE and nowhere else in the MV3 build.)
+ *
+ * Lives in a hidden iframe inside the offscreen document; talks to the
+ * service worker through that host page (sandboxed pages have no
+ * chrome.* APIs — plain postMessage both ways):
+ *
+ *   SW ⇄ (chrome.runtime) ⇄ offscreen.ts ⇄ (postMessage) ⇄ sandbox.ts
+ *
+ * Ops:
+ *   analyze — compile scripts, return serializable meta/paramDefs/deps
+ *             (reload, popup ⚙ dialog, hook bundle assembly)
+ *   compileOne — save-time meta compile of one script, imports resolved
+ *             against the given stored scripts (saveScript metadata);
+ *             leaves the analyze/run cache alone
+ *   pac     — evaluate the user's proxy decision (helper strategy upstream)
+ *   rules   — run each `rules`-strategy handler once with a tripwire ctx
+ *             and translate it to declarativeNetRequest rule specs
+ *   run     — execute the body ops (requestDecision / transform /
+ *             responseHeaders) with the same semantics as PageStrategy's
+ *             MV2 in-SW execution, mirroring its log lines
+ *
+ * Reverse calls (tweak.storage.* and script logging) travel the other way
+ * with the same reqId pattern.
+ */
+import { compileManyWithLibs, compileScript, compileWithLibs, withData, isFatalImportError, makeModuleResolver, makeStubModule, type CompiledScript, type DataFileSource, type ResApiOverrides } from "../shared/compile";
+import { runOp, type BodyOp, type OpScript } from "../shared/bodyOps";
+import { compileDecision } from "../shared/pac";
+import "../shared/transpile";
+import type { PackageModules } from "../shared/packageImports";
+import { scriptLogLine, type ScriptLogLevel } from "../shared/scriptLog";
+import { probeScriptRules, type ScriptRules } from "../shared/rulesProbe";
+import { Endpoint } from "../shared/wire";
+import { ReplicaHub } from "../shared/storeReplica";
+import { ensureBuiltins } from "../shared/builtins";
+import { readInterval, runEvery, runToastAction } from "../shared/everyRun";
+
+
+interface PlainScript {
+    id: string;
+    name: string;
+    code: string;
+    updatedAt: number;
+    enabled: boolean;
+    /** the user's and package.json layer (handler order) */
+    layers?: { user?: "base" | "site" | "override"; pkg?: "base" | "site" | "override" };
+}
+
+interface AnalyzeResult {
+    /** routes, description, active — routes may depend on param values */
+    meta: any;
+    paramDefs: Record<string, any>;
+    error: string | null;
+    deps: string[];
+}
+
+/** to the host page (sandbox.ts: window.parent; unit tests: in-process) */
+let post: (msg: any) => void = () => {};
+
+/** Where this sandbox's messages go: its result, reverse and wire messages. */
+export function connectSandbox(to: (msg: any) => void): void {
+    post = to;
+}
+
+/** reverse call: storage / logging, answered by the service worker */
+function reverseCall(payload: any): Promise<any> {
+    return new Promise((resolve) => {
+        const reqId = "rev_" + ++reverseSeq;
+        const timer = setTimeout(() => {
+            pendingReverse.delete(reqId);
+            resolve(undefined);
+        }, 10000);
+        pendingReverse.set(reqId, (r: any) => {
+            clearTimeout(timer);
+            resolve(r);
+        });
+        post({ kind: "reverse", reqId, ...payload });
+    });
+}
+let reverseSeq = 0;
+const pendingReverse = new Map<string, (r: any) => void>();
+
+function scriptLog(scriptId: string, level: ScriptLogLevel, msg: string): void {
+    void reverseCall({ op: "log", scriptId, level, msg });
+}
+
+/** sandbox diagnostics → the SW's debug-log sink (src "[sandbox]") */
+function sandboxLog(msg: string, level: "debug" | "info" | "warn" | "error" = "debug"): void {
+    void reverseCall({ op: "log", scriptId: null, level, msg: `[sandbox] ${msg}` });
+}
+
+// ---- the L1 link to the service worker: tweak.globalStore replicas, tweak.fetch ----
+
+/** wire messages ride the same postMessage channel, relayed by the offscreen document */
+const link = new Endpoint((msg) => post({ kind: "wire", msg }));
+const hub = new ReplicaHub({ ctx: "sandbox", log: (s, msg, level) => scriptLog(s, level, msg) });
+hub.attach(link);
+/** the SW start the hub last synced with (a new one may have lost unsaved store state) */
+let epoch = "";
+
+function noteEpoch(e: unknown): void {
+    if (typeof e !== "string" || e === epoch) return;
+    const restarted = epoch !== "";
+    epoch = e;
+    if (restarted) {
+        sandboxLog("the service worker restarted — re-syncing stores");
+        hub.reconnect();
+    }
+}
+
+/** load the owner's state of scripts this hub hasn't seen, so their tweak.globalStore calls return it synchronously */
+async function primeStores(scripts: PlainScript[]): Promise<void> {
+    hub.retain(scripts.map((s) => s.id));
+    const missing = scripts.filter((s) => !hub.isPrimed(s.id)).map((s) => s.id);
+    if (!missing.length) return;
+    try {
+        hub.prime(await link.call("store.init", { scripts: missing }));
+    } catch (e: any) {
+        sandboxLog(`couldn't load the stores (${e?.message || e}) — tweak.globalStore starts from initial values until the owner answers`, "warn");
+    }
+}
+
+// ---- compile cache: metadata + live handlers, invalidated on any change ----
+
+const cache = new Map<string, { s: PlainScript; compiled: CompiledScript; result: AnalyzeResult }>();
+let cacheSig = "";
+
+/** the data files and package modules scripts import, as last sent by the SW (only when their signature changes) */
+let dataFiles: DataFileSource[] = [];
+let packages: PackageModules = { aliases: {}, modules: {} };
+let dataSig = "";
+
+/** signature over the script set (incl. name, code hash) + param values + data files */
+function compileSignature(scripts: PlainScript[], paramValues: Record<string, any>): string {
+    const hash = (s: string): string => {
+        let h = 5381;
+        for (let i = 0; i < s.length; i++) h = (((h << 5) + h + s.charCodeAt(i)) | 0) >>> 0;
+        return h.toString(36);
+    };
+    return JSON.stringify([scripts.map((s) => [s.id, s.name, s.updatedAt, s.enabled, hash(s.code)]), paramValues ?? {}, dataSig]);
+}
+
+/**
+ * Compile every script with the overrides MV2 compiles with: REAL stored
+ * param values (the tweak shim resolves tweak.params over them —
+ * handlers that decide via params get the user's values, not defaults) and
+ * a reverse-channel storage/log. Recompiles only when the script set or
+ * the param values change (runs are per-request — reuse the handlers).
+ */
+/** a script's tweak.globalStore / tweak.pageStore (hub replicas) and tweak.fetch (run by the SW) */
+function liveApis(sid: string): Pick<ResApiOverrides, "store" | "tabStore" | "pageStore" | "fetch" | "setParam" | "toast"> {
+    return {
+        setParam: (key, value) => reverseCall({ op: "paramSet", scriptId: sid, key, value }).then(() => undefined),
+        store: (name, initial, persist) => hub.store(sid, name, initial, persist),
+        tabStore: (name, initial) => hub.tabStore(sid, name, initial),
+        pageStore: (name, initial) => hub.pageStore(sid, name, initial),
+        fetch: (request, bypass) => link.call("fetch", { request, bypass }, sid),
+        toast: (spec) => link.call("toast", { spec }, sid),
+    };
+}
+
+function ensureCompiled(scripts: PlainScript[], paramValues: Record<string, any>): void {
+    const sig = compileSignature(scripts, paramValues);
+    if (sig === cacheSig && cache.size) return; // unchanged: keep the compiled handlers
+    cacheSig = sig;
+    cache.clear();
+    const t0 = performance.now();
+    // per-script overrides: storage is script-scoped (get(key)), routed
+    // through the reverse channel to the SW
+    const overridesForScript = (sid: string) => ({
+        storage: {
+            get: (key: string) => reverseCall({ op: "storageGet", scriptId: sid, key }).then((r: any) => r?.value),
+            set: (key: string, value: any) => reverseCall({ op: "storageSet", scriptId: sid, key, value }).then(() => undefined),
+        },
+        paramValues: paramValues?.[sid],
+        ...liveApis(sid),
+    });
+    const resolver = makeModuleResolver(
+        scripts.map((s) => ({ id: s.id, name: s.name, code: s.code })),
+        (lib) => overridesForScript(lib.id),
+        { dataFiles, packages }
+    );
+    // unknown/missing imports resolve to silent stubs — a script whose
+    // import fails must still run its body so its handlers register
+    // (otherwise it silently stores with no handlers and never matches).
+    // A data file or package that fails to import is the importer's compile error.
+    const resolveImport = (importer: string) => (spec: string): any => {
+        try {
+            const out = resolver.resolveFrom(importer)(spec);
+            sandboxLog(`import "${spec}" → module resolved`, "debug");
+            return out;
+        } catch (e) {
+            if (isFatalImportError(e)) throw e;
+            sandboxLog(`import "${spec}" → STUB (no script with that name; its exports are inert in meta-only compiles)`, "debug");
+            return makeStubModule();
+        }
+    };
+    for (const s of scripts) {
+        // the resolver adds a cached library's deps for each importer
+        resolver.deps.clear();
+        const compiledScript = compileScript(s.code, {
+            name: s.name,
+            importModule: resolveImport(s.name),
+            paramValues: paramValues?.[s.id],
+            storage: {
+                get: (key: string) => reverseCall({ op: "storageGet", scriptId: s.id, key }).then((r: any) => r?.value),
+                set: (key: string, value: any) => reverseCall({ op: "storageSet", scriptId: s.id, key, value }).then(() => undefined),
+            },
+            logSink: (level, source, text) => scriptLog(s.id, level, scriptLogLine(s.name, source, text)),
+            ...liveApis(s.id),
+        });
+        const deps = new Set(resolver.deps);
+        cache.set(s.id, {
+            s,
+            compiled: compiledScript,
+            result: {
+                meta: compiledScript.meta,
+                paramDefs: compiledScript.paramDefs || {},
+                error: compiledScript.error,
+                deps: [...deps],
+            },
+        });
+    }
+    sandboxLog(`timing: ran ${scripts.length} script(s) top level — ${Math.round(performance.now() - t0)} ms`, "debug");
+}
+
+function analyze(scripts: PlainScript[], paramValues: Record<string, any>): { results: Record<string, AnalyzeResult> } {
+    // routes may be built from params (tweak.onRequest(cfg.hosts.map(...)))
+    ensureCompiled(scripts, paramValues ?? {});
+    const results: Record<string, AnalyzeResult> = {};
+    for (const [, c] of cache) {
+        results[c.s.id] = c.result;
+        const a = c.result;
+        // identify by the CALLER's name (meta.name is a default here)
+        const summary = `analyze "${c.s.name}" (${c.s.code.length}b) → active=${a.meta.active} routes=${a.meta.routes.length} match=${JSON.stringify(a.meta.match)} params=[${Object.keys(a.paramDefs).join(", ")}] deps=[${a.deps.join(", ")}]`;
+        sandboxLog(a.error ? `${summary} ERROR ${a.error.split("\n")[0]}` : summary, a.error ? "error" : "debug");
+    }
+    return { results };
+}
+
+function compileOne(
+    target: { id: string; name: string; code: string },
+    scripts: { id: string; name: string; code: string }[],
+    paramValues: Record<string, any>,
+    extraData?: DataFileSource[]
+): { result: AnalyzeResult } {
+    const c = compileWithLibs(target, scripts || [], paramValues || {}, withData(dataFiles, extraData), packages);
+    const summary = `compileOne "${target.name}" → active=${c.meta.active} params=[${Object.keys(c.paramDefs || {}).join(", ")}] deps=[${c.deps.join(", ")}]`;
+    sandboxLog(c.error ? `${summary} ERROR ${c.error.split("\n")[0]}` : summary, c.error ? "error" : "debug");
+    return { result: { meta: c.meta, paramDefs: c.paramDefs || {}, error: c.error, deps: c.deps } };
+}
+
+function compileMany(ids: string[], scripts: { id: string; name: string; code: string }[], paramValues: Record<string, any>): { results: Record<string, AnalyzeResult> } {
+    const results: Record<string, AnalyzeResult> = {};
+    for (const [id, c] of compileManyWithLibs(ids, scripts || [], paramValues || {}, dataFiles, packages)) {
+        results[id] = { meta: c.meta, paramDefs: c.paramDefs || {}, error: c.error, deps: c.deps };
+        const summary = `compileMany "${scripts.find((s) => s.id === id)?.name}" → active=${c.meta.active} params=[${Object.keys(c.paramDefs || {}).join(", ")}] deps=[${c.deps.join(", ")}]`;
+        sandboxLog(c.error ? `${summary} ERROR ${c.error.split("\n")[0]}` : summary, c.error ? "error" : "debug");
+    }
+    return { results };
+}
+
+// ---- body ops: shared chain semantics (src/shared/bodyOps.ts) ----
+
+function run(scripts: PlainScript[], paramValues: Record<string, any>, op: BodyOp, args: any): Promise<any> {
+    // handlers MUST compile with the real stored param values — the MV2
+    // parity bug: without them every handler saw defaults and (correctly,
+    // per its config) did nothing. Compiled once per (script-set, params)
+    // here; matching scripts' cached handlers then run per request.
+    ensureCompiled(scripts, paramValues ?? {});
+    const list: OpScript[] = [];
+    for (const [id, c] of cache) {
+        const s = scripts.find((x) => x.id === id);
+        if (!s || !s.enabled || !c.result.meta.active) continue;
+        list.push({ id, name: s.name, handlers: c.compiled.handlers, layers: s.layers });
+    }
+    // tabId/requestId ride along so the SW attributes the line to the right tab and request
+    const tabId = typeof args?.tabId === "number" ? args.tabId : -1;
+    const requestId = typeof args?.requestId === "string" ? args.requestId : undefined;
+    const log = (scriptId: string, level: ScriptLogLevel, msg: string, kind?: string) => void reverseCall({ op: "log", scriptId, level, msg, tabId, netKind: kind, requestId });
+    return runOp(list, op, args, { log, debug: (m) => sandboxLog(m, "debug") });
+}
+
+// ---- tweak.every and tweak.onToastAction (src/shared/everyRun.ts) ----
+
+/** One background hook of one script: an `every` run, an interval read or an `onToastAction`. */
+async function hook(scripts: PlainScript[], paramValues: Record<string, any>, a: any): Promise<any> {
+    ensureCompiled(scripts, paramValues ?? {});
+    const c = cache.get(a?.scriptId);
+    if (!c || !c.s.enabled) return { error: "this tweak is off or gone" };
+    if (c.compiled.error) return { error: c.compiled.error.split("\n")[0] };
+    const h = c.compiled.handlers;
+    if (a.hook === "every") return { outcome: await runEvery(h, a.index, { reason: a.reason, lastRun: a.lastRun }) };
+    if (a.hook === "interval") return { period: readInterval(h, a.index) };
+    if (a.hook === "toastAction") {
+        await runToastAction(h, a.event);
+        return { ok: true };
+    }
+    return { error: `unknown hook ${a.hook}` };
+}
+
+// ---- rules strategy: run each rules handler once (src/shared/rulesProbe.ts) ----
+
+async function rules(scripts: PlainScript[], paramValues: Record<string, any>, tabIds?: number[], storeSnaps?: Record<string, any>): Promise<{ results: Record<string, ScriptRules> }> {
+    if (storeSnaps) hub.prime(storeSnaps);
+    ensureCompiled(scripts, paramValues ?? {});
+    const results: Record<string, ScriptRules> = {};
+    for (const [id, c] of cache) {
+        const s = scripts.find((x) => x.id === id);
+        if (!s || !s.enabled || !c.result.meta.active || c.compiled.error) continue;
+        const r = await probeScriptRules(c.compiled.handlers, tabIds);
+        if (r.rules.length || r.errors.length) results[id] = r;
+    }
+    return { results };
+}
+
+// ---- proxy decisions (helper strategy: evaluate the user's PAC/rules) ----
+
+let pacCache: { source: string; fn: (url: string, host: string) => string } | null = null;
+
+function pacDecision(source: string): (url: string, host: string) => string {
+    if (pacCache?.source !== source) pacCache = { source, fn: compileDecision(source) };
+    return pacCache.fn;
+}
+
+/** the built-in React, if these scripts import it (compiles are synchronous) */
+async function builtins(scripts: { code: string }[]): Promise<void> {
+    await ensureBuiltins(scripts.map((s) => s.code), packages).catch((e: any) => sandboxLog(`built-in React failed to load: ${e?.message || e}`, "error"));
+}
+
+/** before scripts compile for real: their stores and built-ins */
+async function prepare(scripts: PlainScript[], paramValues: Record<string, any>): Promise<void> {
+    if (compileSignature(scripts, paramValues ?? {}) === cacheSig && cache.size) return; // compiled already
+    await Promise.all([primeStores(scripts), builtins(scripts)]);
+}
+
+// ---- message pump ----
+
+/** calls still running (a handler may wait for the user as long as it likes) */
+const inflight = new Set<string>();
+
+/** One message from the host page: a call, a reverse result, a wire message or a watchdog ask. */
+export async function receiveInSandbox(data: any): Promise<void> {
+    if (!data) return;
+    if (data.kind === "wire") {
+        link.receive(data.msg);
+        return;
+    }
+    if (data.kind === "reverseResult") {
+        pendingReverse.get(data.reqId)?.(data.result);
+        pendingReverse.delete(data.reqId);
+        return;
+    }
+    if (data.kind === "sandboxAlive?") {
+        // the offscreen document's watchdog: still working on this call?
+        if (inflight.has(data.reqId)) post({ kind: "sandboxAlive", reqId: data.reqId });
+        return;
+    }
+    if (data.kind !== "sandboxCall") return;
+
+    inflight.add(data.reqId);
+    try {
+        const { op, scripts, paramValues, runOp: bodyOp, args } = data.payload;
+        let result: any;
+        if (Array.isArray(data.payload.dataFiles)) {
+            dataFiles = data.payload.dataFiles;
+            packages = data.payload.packages || { aliases: {}, modules: {} };
+            dataSig = data.payload.dataSig;
+        }
+        noteEpoch(data.payload.epoch);
+        if (typeof data.payload.dataSig === "string" && data.payload.dataSig !== dataSig) result = { needDataFiles: true };
+        else if (op === "ping") result = { pong: true };
+        else if (op === "hook") {
+            await prepare(scripts, paramValues);
+            result = await hook(scripts, paramValues, args);
+        } else if (op === "analyze" || op === "run" || op === "rules") {
+            await prepare(scripts, paramValues);
+            if (op === "analyze") result = analyze(scripts, paramValues);
+            else if (op === "run") result = await run(scripts, paramValues, bodyOp, args);
+            else result = await rules(scripts, paramValues, data.payload.tabIds, data.payload.storeSnaps);
+        } else if (op === "compileOne") {
+            await builtins([data.payload.target, ...(scripts || [])]);
+            result = compileOne(data.payload.target, scripts, paramValues, data.payload.extraData);
+        } else if (op === "compileMany") {
+            await builtins(scripts || []);
+            result = compileMany(data.payload.ids || [], scripts, paramValues);
+        }
+        else if (op === "pac") result = { result: pacDecision(data.payload.source)(args.url, args.host) };
+        else result = { error: `unknown op ${op}` };
+        post({ kind: "sandboxResult", reqId: data.reqId, result });
+    } catch (e: any) {
+        post({ kind: "sandboxResult", reqId: data.reqId, result: { error: String(e?.message || e) } });
+    } finally {
+        inflight.delete(data.reqId);
+    }
+}

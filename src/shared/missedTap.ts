@@ -15,7 +15,6 @@ export interface MissedCase {
     /** webRequest resource type (main_frame, script, stylesheet…) */
     type: string;
     firefox: boolean;
-    mv3: boolean;
     fromCache: boolean;
     /** the local helper (helper strategy) is connected and routing */
     helperActive: boolean;
@@ -105,14 +104,11 @@ export function missedReason(c: MissedCase): string | null {
  * with its strategy in this browser (there is no fallback). null when fine.
  * The helper being down is reported by the helper strategy itself.
  */
-export function routeProblem(r: { kind: RouteKind; strategy: Strategy; resourceTypes?: string[] }, env: { firefox: boolean; mv3: boolean }): string | null {
+export function routeProblem(r: { kind: RouteKind; strategy: Strategy; resourceTypes?: string[] }, env: { firefox: boolean }): string | null {
     const why = strategyUnsupported(r.strategy, env);
     if (why) return `strategy "${r.strategy}" is ${why} — this handler doesn't run. Set another strategy on the route`;
     const ws = wsRouteProblem(r);
     if (ws) return ws;
-    if (r.strategy === "extension" && r.kind === "onResponseBody" && !env.firefox) {
-        return `onResponseBody never runs with strategy "extension" on Chromium — its webRequest API can't read response bodies. Use "page" (page fetch/XHR, no banner), "debugger" (any resource, debugger banner) or "helper" (local helper)`;
-    }
     if (r.strategy === "page" && r.kind === "onResponseHeaders") {
         return `onResponseHeaders never runs with strategy "page" — the page can't change response headers before the browser enforces them. Use "debugger", "helper" or "extension"`;
     }
@@ -127,9 +123,8 @@ export function routeProblem(r: { kind: RouteKind; strategy: Strategy; resourceT
  * tab (typically the page itself on a first visit): `what` "page load" or a
  * resource type, `names` the scripts that would have intercepted it.
  */
-export function debuggerMissedLine(what: string, url: string, names: string[], mv3: boolean, fromCache = false): string {
-    const hint = mv3 ? "Reload the tab (it stays attached from now on)." : "Reload the tab within a few seconds (the debugger detaches when the page goes idle).";
-    return `[debugger] ${what} ${url}${fromCache ? " (from cache)" : ""} was NOT intercepted by ${names.map((n) => `"${n}"`).join(", ")} — it loaded before the debugger attached to this tab. ${hint}`;
+export function debuggerMissedLine(what: string, url: string, names: string[], fromCache = false): string {
+    return `[debugger] ${what} ${url}${fromCache ? " (from cache)" : ""} was NOT intercepted by ${names.map((n) => `"${n}"`).join(", ")} — it loaded before the debugger attached to this tab. Reload the tab (it stays attached from now on).`;
 }
 
 /** localhost, *.localhost, 127.0.0.0/8 or [::1]: hosts Chrome never proxies */

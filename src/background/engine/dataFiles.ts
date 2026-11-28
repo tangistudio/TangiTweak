@@ -40,14 +40,25 @@ export function setDataFilesSnapshot(byId: { [id: string]: DataFile }): void {
     loaded = true;
 }
 
+/** chrome.storage.local.get by callback or promise, whichever the API (or a test's mock) answers with */
+export function localGet(keys: string | string[] | null): Promise<Record<string, any>> {
+    if (!(globalThis as any).chrome?.storage?.local) return Promise.resolve({});
+    return new Promise((resolve) => {
+        let settled = false;
+        const finish = (d: any) => {
+            if (settled) return;
+            settled = true;
+            void chrome.runtime?.lastError;
+            resolve(d || {});
+        };
+        const ret: any = chrome.storage.local.get(keys as any, finish);
+        if (ret && typeof ret.then === "function") void ret.then(finish, () => finish({}));
+    });
+}
+
 /** read the store into the snapshot */
 export async function loadDataFiles(): Promise<DataFileSource[]> {
-    const got = await new Promise<Record<string, any>>((resolve) =>
-        chrome.storage.local.get([DATA_FILES_KEY], (d) => {
-            void chrome.runtime.lastError;
-            resolve(d || {});
-        })
-    );
+    const got = await localGet([DATA_FILES_KEY]);
     setDataFilesSnapshot(got[DATA_FILES_KEY] || {});
     return snapshot;
 }

@@ -1138,9 +1138,8 @@ answers, so `onSite` code is untrusted:
   your functions or answer in their place. Fine to show; check them before
   they decide what your network handlers do (which URLs to redirect, which
   headers to set), and never pass secrets (store values, tokens) in.
-- **CSP fallback.** If the page's CSP forbids `eval`, `onSite` handlers run
-  in the isolated world instead: same DOM and timing, but the site's
-  globals aren't visible. They're still treated as site code.
+- **Page CSP doesn't stop it.** `onSite` code arrives as a user script, not
+  as a string the page evaluates, so a CSP that forbids `eval` still runs it.
 
 ### `tweak.onPage` — the isolated world
 

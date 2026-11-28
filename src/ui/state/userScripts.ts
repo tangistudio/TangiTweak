@@ -4,7 +4,7 @@ import type { UserScriptsStatus } from "../../shared/userScriptsStatus";
 const DISMISSED_KEY = "wt.userScriptsBanner.dismissed"; // the extension's former name (Wiretrick): kept so stored data survives
 
 /**
- * Chrome MV3: the Editor's one-time "user scripts are off" banner, shown
+ * the Editor's one-time "user scripts are off" banner, shown
  * while an enabled script has onPage or onSite code that can't
  * run (the Problems error stays until it can).
  */
@@ -26,7 +26,6 @@ export const bannerShown = (s: { status: UserScriptsStatus; scripts: number; dis
 
 /** ask the background (a fresh check) */
 export function refreshUserScripts(): void {
-    if (!__MV3__) return;
     try {
         chrome.runtime.sendMessage({ type: "userScriptsStatus" }, (r: any) => {
             if (chrome.runtime.lastError || !r) return;

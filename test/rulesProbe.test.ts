@@ -164,12 +164,12 @@ describe("rules in health / missed / availability", () => {
     });
 
     it("no Missed warning for rules handlers", () => {
-        expect(missedReason({ strategy: "rules", type: "script", firefox: false, mv3: true, fromCache: false, helperActive: false, cdpWarned: false })).toBeNull();
+        expect(missedReason({ strategy: "rules", type: "script", firefox: false, fromCache: false, helperActive: false, cdpWarned: false })).toBeNull();
     });
 
     it("unsupported only without declarativeNetRequest", () => {
-        expect(strategyUnsupported("rules", { firefox: false, mv3: true, dnr: true })).toBeNull();
-        expect(strategyUnsupported("rules", { firefox: true, mv3: false, dnr: true })).toBeNull();
-        expect(strategyUnsupported("rules", { firefox: false, mv3: false, dnr: false })).toMatch(/declarativeNetRequest/);
+        expect(strategyUnsupported("rules", { firefox: false, dnr: true })).toBeNull();
+        expect(strategyUnsupported("rules", { firefox: true, dnr: true })).toBeNull();
+        expect(strategyUnsupported("rules", { firefox: false, dnr: false })).toMatch(/declarativeNetRequest/);
     });
 });

@@ -9,7 +9,7 @@
  * overlay matching the page (a URL on the frame's own origin). Other
  * scripts' code and stores stay out of reach.
  *
- * L6 (Chrome MV3): a script's onPage code runs in a
+ * L6: a script's onPage code runs in a
  * `chrome.userScripts` world (background/userScripts.ts, hook/isolated.ts)
  * whose port comes here. It gets its code (`iso.load`, only where the
  * script has isolated onPage code for the frame's URL), its Log lines and
@@ -24,7 +24,7 @@
  */
 import { onBridgeConnect, type BridgeLink } from "./bridgePorts";
 import { serveFrameKeyClaims, serveFrameKeyOffers } from "./frameKeys";
-import { endpointPair, portEndpoint, ISO_STORE_TAG, type Endpoint, type IsoInit, type OverlayInit, type WireOps } from "../../shared/wire";
+import { endpointPair, portEndpoint, type Endpoint, type IsoInit, type OverlayInit, type WireOps } from "../../shared/wire";
 import { isRpcCall, isRpcResult, NOT_RUNNING, type RpcCall, type RpcResult } from "../../shared/rpc";
 import { USER_SCRIPTS_OFF } from "../../shared/userScriptsStatus";
 import { contextTag, type ScriptLogLevel } from "../../shared/scriptLog";
@@ -62,9 +62,6 @@ interface Grant {
     url: string;
     name: string;
     nonce: string;
-    /** the overlay frame confirmed its nonce (Firefox: ttOverlayNonce) */
-    seen: boolean;
-    expires: number;
     /** the overlay's link to the store owner (created on first use) */
     store: Endpoint | null;
     /** a toast pane grant (`pane.open`): how many of the script's pane frames are open */
@@ -126,12 +123,8 @@ export type IsoRun = Omit<IsoInit, "s" | "stores" | "libStores" | "page">;
 
 export interface OverlayLinkDeps {
     overlayRuns(url: string, tabId?: number): Promise<Map<string, OverlayRun>>;
-    /** MV3: the scripts with isolated onPage or debugger-safe overlay code for a frame's URL */
+    /** the scripts with isolated onPage or debugger-safe overlay code for a frame's URL */
     isoRuns?(url: string, top: boolean): Promise<Map<string, IsoRun>>;
-    /** MV2: the scripts with isolated onPage or debugger-safe overlay code for a frame's URL (the bridge runs it) */
-    isoScripts?(url: string, top: boolean): Promise<Set<string>>;
-    /** MV2: scripts running a debugger-safe shadow overlay on this page (full overlay `tweak.fetch`) */
-    isoShadowScripts?(url: string, top: boolean): Promise<Set<string>>;
     /** chrome.userScripts can't run (the overlay's calls into isolated code say so) */
     userScriptsOff?(): Promise<boolean>;
     storageGet?(s: string, key: string): Promise<any>;
@@ -249,26 +242,6 @@ export function setupOverlayLinks(d: OverlayLinkDeps): void {
     if (installed) return;
     installed = true;
     onBridgeConnect(serveLink);
-    (globalThis as any).chrome?.runtime?.onMessage?.addListener?.((msg: any, sender: chrome.runtime.MessageSender, sendResponse: (r: any) => void) => {
-        if (msg?.type !== "ttOverlayNonce") return false;
-        sendResponse(confirmNonce(sender, msg.nonce));
-        return false;
-    });
-}
-
-/** Firefox overlay frames (not sandboxed) ask: is this nonce one a bridge (or the Editor preview) in my tab just opened? One use. */
-export function confirmNonce(sender: chrome.runtime.MessageSender, nonce: unknown): boolean {
-    const tabId = sender.tab?.id;
-    if (typeof nonce !== "string" || typeof tabId !== "number" || !sender.url?.startsWith(chrome.runtime.getURL("overlay.html"))) return false;
-    const mineByTab = [...grants].filter(([link]) => link.tabId === tabId).flatMap(([, mine]) => [...mine.values()]);
-    const previewByTab = [...previews].filter((p) => p.tabId === tabId && p.grant).map((p) => p.grant!);
-    const paneByTab = [...paneNonces].filter(([, n]) => n.tabId === tabId).map(([, n]) => n);
-    for (const g of [...mineByTab, ...previewByTab, ...paneByTab])
-        if (g.nonce === nonce && !g.seen && g.expires > Date.now()) {
-            g.seen = true;
-            return true;
-        }
-    return false;
 }
 
 /** scripts changed: drop the grants of overlays that no longer match their page (the bridge closes them too) */
@@ -285,16 +258,16 @@ export async function revalidateOverlayLinks(): Promise<void> {
         }
 }
 
-/** pane frames' nonces until they confirmed (Firefox), with their tab */
+/** pane nonces until an in-page pane claims one (`pane.shadow`), with their tab */
 const paneNonces = new Map<string, { tabId: number; nonce: string; seen: boolean; expires: number }>();
 
-/** The port name of a toast pane drawn in the page (Chrome MV3, src/overlay/paneWorld.ts). */
+/** The port name of a toast pane drawn in the page (Chrome, src/overlay/paneWorld.ts). */
 export const PANE_PORT = "tt-pane";
-/** Chrome MV3 in-page panes, by nonce: waiting for their world's port, then relayed to their bridge. */
+/** Chrome in-page panes, by nonce: waiting for their world's port, then relayed to their bridge. */
 const inPagePanes = new Map<string, { link: BridgeLink; s: string; documentId?: string; port: chrome.runtime.Port | null; expires: number }>();
 
 /**
- * L2 ⇄ pane relay (Chrome MV3): the user-script world running an in-page
+ * L2 ⇄ pane relay (Chrome): the user-script world running an in-page
  * pane connects `tt-pane` and first says the nonce its bridge asked us to
  * run it with (`pane.shadow`), from that bridge's tab, top frame and
  * document; then each message goes to the bridge as `pane.relay` and back.
@@ -345,20 +318,9 @@ export function serveLink(link: BridgeLink): void {
         if (!g) throw new Error(`${op}: this script has no overlay here`);
         return g;
     };
-    /** MV2: the scripts whose isolated onPage code (run by this bridge) may use their stores */
-    const isoGrants = new Map<string, { page: string; url?: string; store: Endpoint | null }>();
-    link.ep.onClose(() => {
-        for (const g of isoGrants.values()) g.store?.close("the bridge went away");
-        isoGrants.clear();
-    });
-    // the overlay's ops come tagged `s` (or `s\0libId`), isolated code's `ISO_STORE_TAG + s`; patches go back tagged the same
+    // the overlay's ops come tagged `s` (or `s\0libId`); patches go back tagged the same
     serveStoreOps(link.ep, (tag) => {
         if (tag === undefined) return undefined;
-        if (tag.startsWith(ISO_STORE_TAG)) {
-            const s = tag.slice(ISO_STORE_TAG.length);
-            const g = isoGrants.get(s);
-            return g && { s, page: g.page, link: () => (g.store && !g.store.closed ? g.store : (g.store = ownerLink(link.ep, (x) => ISO_STORE_TAG + x))) };
-        }
         const nul = tag.indexOf("\u0000");
         const ovlId = nul < 0 ? tag : tag.slice(0, nul);
         const storeId = nul < 0 ? tag : tag.slice(nul + 1);
@@ -370,36 +332,6 @@ export function serveLink(link: BridgeLink): void {
             link: () => (g.store && !g.store.closed ? g.store : (g.store = ownerLink(link.ep, (x) => (x === ovlId ? ovlId : `${ovlId}\u0000${x}`)))),
         };
     });
-    const grantStores = async (op: string, to: Map<string, { page: string; url?: string; store: Endpoint | null }>, s: string, url: string): Promise<{}> => {
-        const page = await pageOfFrame(link.tabId, link.frameId, link.port);
-        if (link.ep.closed) throw new Error(`${op}: closed`);
-        const old = to.get(s);
-        if (old?.page === page) {
-            old.url = url;
-            return {};
-        }
-        old?.store?.close("the page changed");
-        to.set(s, { page, url, store: null });
-        return {};
-    };
-    link.ep.handle("iso.stores", async ({ url }, s) => {
-        if (__MV3__ || s === undefined || typeof url !== "string" || !sameOrigin(url, link.port.sender?.url)) throw new Error("iso.stores: refused");
-        if (!(await deps.isoScripts?.(url, link.frameId === 0))?.has(s)) throw new Error("iso.stores: this script has no isolated onPage code here");
-        return grantStores("iso.stores", isoGrants, s, url);
-    });
-    link.ep.handle("iso.fetch", async ({ url, request, bypass }, s) => {
-        if (__MV3__ || s === undefined || typeof url !== "string" || !sameOrigin(url, link.port.sender?.url)) throw new Error("iso.fetch: refused");
-        const top = link.frameId === 0;
-        if (!(await deps.isoScripts?.(url, top))?.has(s)) throw new Error("iso.fetch: this script has no isolated onPage code here");
-        if (top && (await deps.isoShadowScripts?.(url, true))?.has(s)) return fetchFor(s, request, !!bypass);
-        return pageFetchFor(s, request, !!bypass);
-    });
-    link.ep.handle("iso.toast", async ({ url, spec }, s) => {
-        if (__MV3__ || s === undefined || typeof url !== "string" || !sameOrigin(url, link.port.sender?.url)) throw new Error("iso.toast: refused");
-        if (!(await deps.isoScripts?.(url, link.frameId === 0))?.has(s)) throw new Error("iso.toast: this script has no isolated onPage code here");
-        return (deps.toast ?? noToast)({ s, tabId: link.tabId }, spec);
-    });
-
     link.ep.handle("overlay.open", async ({ nonce, url }, s) => {
         if (s === undefined || link.frameId !== 0) throw new Error("overlay.open: overlays are top-frame only");
         if (typeof nonce !== "string" || nonce.length < 16 || typeof url !== "string" || !sameOrigin(url, link.port.sender?.url)) throw new Error("overlay.open: refused");
@@ -407,7 +339,7 @@ export function serveLink(link: BridgeLink): void {
         if (!run) throw new Error("overlay.open: this script has no overlay on this page");
         const old = mine.get(s);
         const page = pages.forRequest({ tabId: link.tabId, frameId: 0, documentId: docOf(link.port) }) ?? "";
-        mine.set(s, { url, name: run.name, nonce, seen: false, expires: Date.now() + NONCE_TTL_MS, store: old?.page === page ? old.store : null, page, libs: new Set(shippedLibIds(run.libs)) });
+        mine.set(s, { url, name: run.name, nonce, store: old?.page === page ? old.store : null, page, libs: new Set(shippedLibIds(run.libs)) });
         if (old?.store && old.page !== page) old.store.close("the page changed");
         return {};
     });
@@ -461,7 +393,7 @@ export function serveLink(link: BridgeLink): void {
         const page = await pageOfFrame(link.tabId, 0, link.port);
         const old = panes.get(s);
         if (old && old.page !== page) old.store?.close("the page changed");
-        panes.set(s, { url, name: run.name, nonce, seen: false, expires: Date.now() + NONCE_TTL_MS, store: old?.page === page ? old.store : null, page, libs: new Set(shippedLibIds(run.libs)), panes: (old?.panes ?? 0) + 1 });
+        panes.set(s, { url, name: run.name, nonce, store: old?.page === page ? old.store : null, page, libs: new Set(shippedLibIds(run.libs)), panes: (old?.panes ?? 0) + 1 });
         paneNonces.set(nonce, { tabId: link.tabId, nonce, seen: false, expires: Date.now() + NONCE_TTL_MS });
         setTimeout(() => paneNonces.delete(nonce), NONCE_TTL_MS);
         return {};
@@ -480,26 +412,16 @@ export function serveLink(link: BridgeLink): void {
     link.ep.handle("pane.shadow", async ({ nonce, token }, s) => {
         const n = typeof nonce === "string" ? paneNonces.get(nonce) : undefined;
         if (s === undefined || link.frameId !== 0 || !panes.has(s) || !n || n.tabId !== link.tabId || n.seen || n.expires < Date.now()) throw new Error("pane.shadow: refused");
-        // one use: no frame can confirm it now (confirmNonce)
+        // one use
         n.seen = true;
-        if (__MV3__) {
-            if (typeof token !== "string" || token.length < 16) throw new Error("pane.shadow: refused");
-            const documentId = (link.port.sender as any)?.documentId as string | undefined;
-            inPagePanes.set(nonce, { link, s, documentId, port: null, expires: Date.now() + NONCE_TTL_MS });
-            setTimeout(() => {
-                const p = inPagePanes.get(nonce);
-                if (p && !p.port) inPagePanes.delete(nonce);
-            }, NONCE_TTL_MS);
-            await runPaneWorld({ tabId: link.tabId, frameId: 0, documentId }, s, { nonce, token });
-            return {};
-        }
-        // MV2: once into the bridge's own world (it defines __ttPaneRun)
-        await new Promise<void>((resolve, reject) =>
-            chrome.tabs.executeScript(link.tabId, { file: "pane.js", frameId: 0, runAt: "document_start" }, () => {
-                const e = chrome.runtime.lastError;
-                e ? reject(new Error(e.message)) : resolve();
-            })
-        );
+        if (typeof token !== "string" || token.length < 16) throw new Error("pane.shadow: refused");
+        const documentId = (link.port.sender as any)?.documentId as string | undefined;
+        inPagePanes.set(nonce, { link, s, documentId, port: null, expires: Date.now() + NONCE_TTL_MS });
+        setTimeout(() => {
+            const p = inPagePanes.get(nonce);
+            if (p && !p.port) inPagePanes.delete(nonce);
+        }, NONCE_TTL_MS);
+        await runPaneWorld({ tabId: link.tabId, frameId: 0, documentId }, s, { nonce, token });
         return {};
     });
     link.ep.on("pane.relay", (a) => {
@@ -694,7 +616,7 @@ export const PREVIEW_PORT = "tt-preview";
 
 interface PreviewLink {
     ep: Endpoint;
-    /** the Editor's tab (Firefox: the frame's nonce check) */
+    /** the Editor's tab */
     tabId?: number;
     grant: (Grant & { s: string; pane?: string }) | null;
 }
@@ -703,7 +625,7 @@ const previews = new Set<PreviewLink>();
 /** the Editor page's preview port (runtime.onConnect); false if the port isn't one */
 export function addPreviewPort(port: chrome.runtime.Port): boolean {
     if (port.name !== PREVIEW_PORT) return false;
-    // the Editor page only: content scripts (and Firefox's unsandboxed overlay frames) have other URLs
+    // the Editor page only: content scripts have other URLs
     const page = (port.sender?.url ?? "").split(/[?#]/)[0];
     if (port.sender?.id !== chrome.runtime.id || page !== chrome.runtime.getURL("editor.html")) {
         port.disconnect();
@@ -764,7 +686,7 @@ export function servePreviewLink(ep: Endpoint, tabId?: number): void {
         if (old && old.s !== s) drop("the preview moved to another script");
         // the preview is a page of its own
         const keep = old?.s === s ? old : null;
-        link.grant = { s, url: at, name: run.name, nonce, seen: false, expires: Date.now() + NONCE_TTL_MS, store: keep?.store ?? null, page: keep?.page ?? pages.openVirtual(), libs: new Set(shippedLibIds(run.libs ?? [])), ...(pane !== undefined ? { pane } : {}) };
+        link.grant = { s, url: at, name: run.name, nonce, store: keep?.store ?? null, page: keep?.page ?? pages.openVirtual(), libs: new Set(shippedLibIds(run.libs ?? [])), ...(pane !== undefined ? { pane } : {}) };
         return { url: at, name: run.name, handlers: run.routes.length, matching: run.routes.filter((r) => routeMatches(r, at)).length };
     });
     ep.handle("overlay.init", async (_a, s): Promise<OverlayInit> => {

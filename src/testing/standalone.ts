@@ -186,7 +186,7 @@ export const tweak: any = {
     },
     fetch: (input: any, init?: any) => fetch(input, init),
     log: (...args: unknown[]) => console.log("[TangiTweak] tweak.log:", ...args),
-    ...scriptEnv(true, false),
+    ...scriptEnv(false),
     globalStore: (id: string, initial: object) => {
         checkStoreId(id);
         if (globalIds.has(id)) throw new Error(`tweak.globalStore("${id}"): a store ID is used once per tweak — declare it once, in one module, and import it`);
